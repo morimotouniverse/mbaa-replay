@@ -378,6 +378,8 @@ const call = (s, f, ...a) => s.M.ccall(f, 'number', a.map(() => 'number'), a);
 async function play(rep, name, catchUp = 0, want = null) {
   misses.clear();
   const s = await newSession(rep, name, want);
+  // stage animations on, except for native comparisons (?stageAnim=0, hash runs): the oracle's settings have them off
+  call(s, 'viewer_stage_anim', Q.get('stageAnim') !== null ? +(Q.get('stageAnim') !== '0') : HASH ? 0 : 1);
   if (!call(s, 'viewer_boot') || !call(s, 'viewer_load')) { window.__mbaaStarted = -1; status('start failed (see console)'); return; }
   if (HASH) s.M.ccall('viewer_hash_enable', null, [], []);
   call(s, 'viewer_play', 0);
@@ -454,7 +456,7 @@ async function hashRun(s) {
     const a = document.createElement('a');
     a.href = URL.createObjectURL(new Blob([text], { type: 'text/csv' }));
     a.download = file; a.textContent = file; a.style.marginLeft = '8px';
-    document.querySelector('.bar').appendChild(a);
+    document.getElementById('status').after(a);
   };
   const tag = s.name.replace(/\.rep$/i, '').replace(/^.*\//, '');
   link(h.state.join(''), `${tag}_state.csv`);
