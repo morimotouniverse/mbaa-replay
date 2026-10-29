@@ -353,7 +353,9 @@ async function play(rep, name, catchUp = 0) {
   }
   if (PERF) call(s, 'viewer_perf', 1);
   uiApply(s);
-  if (ui.skipIntro && !catchUp && !PERF && s.tl) await skipIntro(s);
+  const tq = +(Q.get('t') || 0);
+  if (tq > 0 && !catchUp && !PERF && s.tl && window.__mbaaRepUrl) { await requestSeek(tq); }
+  else if (ui.skipIntro && !catchUp && !PERF && s.tl) await skipIntro(s);
   if (s !== session) return;
   call(s, 'viewer_run');
   status(`playing ${name}`);
@@ -740,6 +742,21 @@ async function skipIntro(s) {
   overlayDirty = true;
   status(`${ui.paused ? 'paused' : 'playing'} ${s.name}`);
 }
+// Copy the current moment: a link that opens this replay at this frame when the replay came from a URL (?rep=),
+// otherwise the replay name, time and frame as text.
+async function copyTimestamp() {
+  const s = session;
+  if (!s) return;
+  const f = s.M._viewer_frame();
+  let text;
+  if (window.__mbaaRepUrl) {
+    const u = new URL(location.href);
+    u.searchParams.set('rep', window.__mbaaRepUrl); u.searchParams.set('t', f);
+    text = u.toString();
+  } else text = `${s.name.replace(/^.*\//, '')} @ ${fmtTime(f)} (frame ${f})`;
+  try { await navigator.clipboard.writeText(text); status(`copied: ${text}`); }
+  catch (e) { prompt('copy:', text); }
+}
 function setPaused(p) {
   ui.paused = p;
   document.getElementById('pause').textContent = p ? 'play' : 'pause';
@@ -877,6 +894,7 @@ function controls() {
   seek.addEventListener('input', () => requestSeek(+seek.value));
   const btn = (id, fn) => { document.getElementById(id).onclick = e => { fn(); e.currentTarget.blur(); }; };
   btn('pause', () => setPaused(!ui.paused));
+  btn('copyt', copyTimestamp);
   // a click / tap on the picture during the VS screen skips it, as a button press does in the game
   document.getElementById('overlay').parentElement.addEventListener('pointerdown', () => { if (inIntro(session)) skipIntro(session); });
   const si = document.getElementById('skipintro');
@@ -903,6 +921,7 @@ function controls() {
     else if (k === 'ArrowRight') stepBy(sec, false);
     else if (k === 'Home') requestSeek(1);
     else if (k === 'End' && session && session.tl) requestSeek(tlMax(session.tl));
+    else if (k === 'c' || k === 'C') copyTimestamp();
     else if (k === 'h' || k === 'H') flip('boxes');
     else if (k === 'i' || k === 'I') flip('inputs');
     else return;
@@ -947,12 +966,12 @@ async function main() {
     if (!man.plan) await fetchAll(man, Object.keys(man.files), 'assets');  // a bundle without a plan: everything
   }
   status('ready: drop a .rep file');
-  document.getElementById('rep').onchange = e => { e.target.blur(); if (e.target.files[0]) start(e.target.files[0]); };  // blur: keys go to the viewer
+  document.getElementById('rep').onchange = e => { e.target.blur(); window.__mbaaRepUrl = null; if (e.target.files[0]) start(e.target.files[0]); };  // blur: keys go to the viewer
   document.body.ondragover = e => e.preventDefault();
-  document.body.ondrop = e => { e.preventDefault(); e.dataTransfer.files[0] && start(e.dataTransfer.files[0]); };
+  document.body.ondrop = e => { e.preventDefault(); window.__mbaaRepUrl = null; e.dataTransfer.files[0] && start(e.dataTransfer.files[0]); };
   controls();
   for (const key of ['boxes', 'inputs']) if (Q.get(key) === '1') { const el = document.getElementById(key); el.checked = true; el.onchange(); }
   const autoload = Q.get('rep');
-  if (autoload) start(new File([await (await fetch(autoload)).arrayBuffer()], autoload));
+  if (autoload) { window.__mbaaRepUrl = autoload; start(new File([await (await fetch(autoload)).arrayBuffer()], autoload)); }
 }
 main().catch(e => { console.error(e); status('error: ' + e.message); });
