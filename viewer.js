@@ -100,9 +100,28 @@ function mkdirs(FS, path) {
 }
 
 // ---- audio (WebAudio, shared by sessions) ----
-let actx;
+let actx, master;
+// Browsers keep an AudioContext suspended until the page gets a click or key press; a replay opened from a link has
+// had neither, so the page asks for one (#sound) and starts the BGM the game already requested once audio runs.
+function ensureAudio() {
+  if (actx) return;
+  actx = new AudioContext();
+  master = actx.createGain();
+  const vol = document.getElementById('vol');
+  const setVol = () => { master.gain.value = Math.pow(+vol.value / 100, 2); try { localStorage.setItem('mbaaVol', vol.value); } catch (e) {} };
+  try { const v = localStorage.getItem('mbaaVol'); if (v !== null) vol.value = v; } catch (e) {}
+  vol.oninput = setVol; setVol();
+  master.connect(actx.destination);
+  const btn = document.getElementById('sound');
+  const show = () => { btn.hidden = actx.state === 'running'; };
+  btn.onclick = () => actx.resume();
+  const unlock = () => { if (actx.state !== 'running') actx.resume(); };
+  addEventListener('pointerdown', unlock); addEventListener('keydown', unlock);
+  actx.onstatechange = () => { show(); if (actx.state === 'running' && window.__mbaaBgmResume) window.__mbaaBgmResume(); };
+  show();
+}
 function audioHooks(Module) {
-  actx = actx || new AudioContext();
+  ensureAudio();
   const sePath = new Map(), seBuf = new Map();
   const se = window.mbaaSeStats = { registered: 0, calls: 0, played: 0, decodeFailed: 0, ctx: () => actx.state };
   Module.mbaaSeRegister = (i, path) => { sePath.set(i, path); seBuf.delete(i); se.registered++; };
@@ -117,17 +136,20 @@ function audioHooks(Module) {
       b = actx.decodeAudioData(bytes.slice().buffer);
       seBuf.set(i, b);
     }
-    b.then(buf => { const n = actx.createBufferSource(); n.buffer = buf; n.connect(actx.destination); n.start(); se.played++; },
+    b.then(buf => { const n = actx.createBufferSource(); n.buffer = buf; n.connect(master); n.start(); se.played++; },
            () => { se.decodeFailed++; });
   };
   // BGM: one looping track (loop back to loopPos seconds at the end, as the game's stream does)
   let bgm = null, bgmPath = '';
   const bgmGain = actx.createGain();
   bgmGain.gain.value = 0.7;
-  bgmGain.connect(actx.destination);
-  Module.mbaaBgmStop = () => { if (bgm) { try { bgm.stop(); } catch (e) {} bgm = null; bgmPath = ''; } };
+  bgmGain.connect(master);
+  Module.mbaaBgmStop = () => { pending = null; if (bgm) { try { bgm.stop(); } catch (e) {} bgm = null; bgmPath = ''; } };
+  let pending = null;  // the BGM the game asked for while audio was still suspended
+  window.__mbaaBgmResume = () => { if (pending && session && session.M === Module) { const p = pending; pending = null; Module.mbaaBgmStart(...p); } };
   Module.mbaaBgmStart = (path, loop, loopPos) => {
-    if (HASH || actx.state !== 'running' || path === bgmPath) return;
+    if (!HASH && actx.state !== 'running') { pending = [path, loop, loopPos]; return; }
+    if (HASH || path === bgmPath) return;
     Module.mbaaBgmStop();
     const dec = bgmDecode(path.replace(/^\/game\//, ''));
     if (!dec) return;
@@ -257,7 +279,7 @@ window.__mbaaPerf = () => {
 };
 
 async function start(file) {
-  if (actx) actx.resume();
+  ensureAudio(); actx.resume();  // a drop or file pick is a user gesture: audio may start
   const rep = new Uint8Array(await file.arrayBuffer());
   let keys;
   try { keys = repKeys(rep); } catch (e) { status('error: ' + e.message); return; }

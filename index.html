@@ -11,6 +11,7 @@
   canvas { width: min(100%, 960px); aspect-ratio: 4 / 3; image-rendering: pixelated; background: #000; }
   .bar { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; }
   #status { color: var(--muted); }
+  #sound { background: var(--accent); color: #000; }
   button, select, input { background: #20202c; color: var(--fg); border: 1px solid #383848; border-radius: 4px; padding: 4px 8px; }
 </style>
 </head>
@@ -20,6 +21,8 @@
   <input id="rep" type="file" accept=".rep">
   <button id="pause">pause</button>
   <select id="speed"><option value="1">1x</option><option value="2">2x</option><option value="4">4x</option></select>
+  <label>volume <input id="vol" type="range" min="0" max="100" value="50"></label>
+  <button id="sound" hidden>click for sound</button>
   <span id="status">loading…</span>
 </div>
 <script src="mbaa.js"></script>
