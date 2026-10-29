@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>MBAACC Replay Viewer</title>
+<style>
+  :root { --bg: #101018; --fg: #e8e8f0; --muted: #9090a8; --accent: #7aa2ff; }
+  body { margin: 0; background: var(--bg); color: var(--fg); font: 14px/1.4 system-ui, sans-serif; display: flex;
+         flex-direction: column; align-items: center; gap: 10px; padding: 16px; }
+  canvas { width: min(100%, 960px); aspect-ratio: 4 / 3; image-rendering: pixelated; background: #000; }
+  .bar { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; }
+  #status { color: var(--muted); }
+  button, select, input { background: #20202c; color: var(--fg); border: 1px solid #383848; border-radius: 4px; padding: 4px 8px; }
+</style>
+</head>
+<body>
+<canvas id="canvas" width="640" height="480" oncontextmenu="event.preventDefault()"></canvas>
+<div class="bar">
+  <input id="rep" type="file" accept=".rep">
+  <button id="pause">pause</button>
+  <select id="speed"><option value="1">1x</option><option value="2">2x</option><option value="4">4x</option></select>
+  <span id="status">loading…</span>
+</div>
+<script src="mbaa.js"></script>
+<script src="viewer.js"></script>
+</body>
+</html>
