@@ -803,10 +803,28 @@ async function shareId(s) {
   if (!r.ok) throw new Error(j.error || `HTTP ${r.status}`);
   return (s.shareId = j.id);
 }
+// the link preview image: the picture as it is now (640x480 WebP, ~25 KB; JPEG where the browser cannot encode WebP:
+// toBlob then hands back a PNG), uploaded for (replay, frame); the store's
+// Worker puts it in the shared link's preview tags. Best effort: a failed upload only means a preview without a picture.
+async function shareThumb(id, f, shots) {
+  if (!shots) return;
+  const ctl = new AbortController(), to = setTimeout(() => ctl.abort(), 5000);
+  try {
+    let img = await shots.webp;
+    if (!img || img.type !== "image/webp") img = await shots.jpeg;
+    if (img) await fetch(`${REPLAY_STORE}/thumb/${id}/${f}`, { method: 'POST', body: img, signal: ctl.signal,
+                                                               headers: { 'Content-Type': img.type } });
+  }
+  catch (e) { console.warn('preview image upload failed:', e); }
+  finally { clearTimeout(to); }
+}
 async function copyTimestamp() {
   const s = session;
   if (!s) return;
   const f = s.M._viewer_frame();
+  // grab the frame now, before any await lets playback move on (the GL canvas keeps its drawing buffer)
+  const grab = (type, q) => new Promise(res => { try { document.getElementById('canvas').toBlob(res, type, q); } catch (e) { res(null); } });
+  const shots = { webp: grab('image/webp', 0.8), jpeg: grab('image/jpeg', 0.85) };
   const u = new URL(location.origin + location.pathname);
   let text;
   try {
@@ -815,6 +833,7 @@ async function copyTimestamp() {
     else if (window.__mbaaRepUrl) u.searchParams.set('rep', window.__mbaaRepUrl);
     else { status('uploading replay for the link…'); u.searchParams.set('r', await shareId(s)); }
     u.searchParams.set('t', f);
+    if (u.searchParams.get('r')) await shareThumb(u.searchParams.get("r"), f, shots);
     text = u.toString();
   } catch (e) {
     console.warn('share upload failed:', e);
