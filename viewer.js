@@ -171,23 +171,24 @@ function mkdirs(FS, path) {
 }
 
 // ---- audio (WebAudio, shared by sessions) ----
-let actx, master;
+let actx, master, outGain;
 // Browsers keep an AudioContext suspended until the page gets a click or key press; a replay opened from a link has
 // had neither, so the page asks for one (#sound) and starts the BGM the game already requested once audio runs.
 function ensureAudio() {
   if (actx) return;
   actx = new AudioContext();
-  master = actx.createGain();
+  master = actx.createGain();  // the game's mix at CE level; video export records from here
+  outGain = actx.createGain();
   const vol = document.getElementById('vol');
   // 100% = CE's own level (every set already carries the game's DirectSound volume, -16.66 dB at the canonical
   // settings); the slider only attenuates below it. Default 100. Remembered under a new key: the old one stored the
   // 50% default of the full-gain era for everyone who opened the page.
-  const setVol = () => { master.gain.value = Math.pow(+vol.value / 100, 2); try { localStorage.setItem('mbaaVolCe', vol.value); } catch (e) {} };
+  const setVol = () => { outGain.gain.value = Math.pow(+vol.value / 100, 2); try { localStorage.setItem('mbaaVolCe', vol.value); } catch (e) {} };
   vol.value = 100;
   try { const v = localStorage.getItem('mbaaVolCe'); if (v !== null) vol.value = v; } catch (e) {}
   vol.oninput = () => { setVol(); vol.style.setProperty('--p', `${vol.value}%`); document.querySelector('#mute .i').className = `i ${+vol.value ? 'i-sound' : 'i-mute'}`; };
   vol.oninput();
-  master.connect(actx.destination);
+  master.connect(outGain); outGain.connect(actx.destination);
   const btn = document.getElementById('sound');
   const show = () => { btn.hidden = actx.state === 'running'; };
   btn.onclick = () => actx.resume();
@@ -1021,6 +1022,7 @@ function uiLoop() {
   if (s && s.tl) {
     const t = s.tl, f = s.M._viewer_frame(), max = tlMax(t);
     clipTick(s, f);
+    if (rec) recTick(s, f);
     const seek = document.getElementById('seek');
     if (+seek.max !== max) seek.max = max;
     if (!seekDragging) seek.value = t.want !== null ? t.want : f;
@@ -1074,7 +1076,7 @@ function controls() {
     if (best !== null && Math.abs(best - x) / max < 0.04) requestSeek(best); else requestSeek(Math.round(x));
   });
   btn('prevr', () => jumpRound(-1)); btn('nextr', () => jumpRound(1));
-  btn('clipa', () => setClip('a')); btn('clipb', () => setClip('b')); btn('clipx', clearClip); btn('cliploop', toggleLoop);
+  btn('clipa', () => setClip('a')); btn('clipb', () => setClip('b')); btn('clipx', clearClip); btn('cliploop', toggleLoop); btn('clipexp', exportVideo);
   btn('helpb', toggleHelp); btn('mute', toggleMute);
   document.getElementById('help').onclick = toggleHelp;
   btn('plprev', () => startItem(pl.i - 1)); btn('plnext', () => startItem(pl.i + 1)); btn('plshare', copyPlaylist);
@@ -1116,8 +1118,9 @@ function controls() {
     else if (k === ']' || k === 'PageDown') jumpRound(1);
     else if (k === '{') setClip('a');
     else if (k === '}') setClip('b');
-    else if (k === 'Escape') { if (!document.getElementById('help').hidden) toggleHelp(); else clearClip(); }
+    else if (k === 'Escape') { if (rec) stopRecording(false); else if (!document.getElementById('help').hidden) toggleHelp(); else clearClip(); }
     else if (k === 'l' || k === 'L') toggleLoop();
+    else if (k === 'e' || k === 'E') exportVideo();
     else if (k === 'm' || k === 'M') toggleMute();
     else if (k === '?') toggleHelp();
     else if (k === 'n' || k === 'N') startItem(pl.i + 1);
@@ -1249,15 +1252,16 @@ function setClip(which) {
 }
 // loop: playing past the clip's out point jumps back to its in point (with no clip set yet, L loops the current round)
 let loopOn = false;
+function roundClip(s) {
+  const f = curFrame(), m = s.tl.marks, k = m.findIndex(x => x[0] > f);
+  const a = k > 0 ? m[k - 1][0] : k === 0 ? 1 : (m.length ? m[m.length - 1][0] : 1);
+  return { a, b: k >= 0 ? m[k][0] - 1 : tlMax(s.tl), stop: false, round: true };
+}
 function toggleLoop() {
   loopOn = !loopOn;
   document.getElementById('cliploop').classList.toggle('on', loopOn);
   const s = session;
-  if (loopOn && s && s.tl && !s.clip) {  // no clip: the round being watched
-    const f = curFrame(), m = s.tl.marks, k = m.findIndex(x => x[0] > f);
-    const a = k > 0 ? m[k - 1][0] : k === 0 ? 1 : (m.length ? m[m.length - 1][0] : 1);
-    s.clip = { a, b: k >= 0 ? m[k][0] - 1 : tlMax(s.tl), stop: false, round: true }; marksKey = '';
-  }
+  if (loopOn && s && s.tl && !s.clip) { s.clip = roundClip(s); marksKey = ''; }  // no clip: the round being watched
   if (s && s.clip) status(loopOn ? `looping ${fmtTime(s.clip.a)} – ${fmtTime(s.clip.b)}` : 'playing');
 }
 let unmuted = 100;
@@ -1271,7 +1275,7 @@ function clearClip() { if (session && session.clip) { session.clip = null; marks
 // a clip being played stops at its out point; play again from there starts it over
 function clipTick(s, f) {
   const c = s.clip;
-  if (!c || ui.paused || s.seeking || (s.tl && s.tl.running)) return;
+  if (!c || rec || ui.paused || s.seeking || (s.tl && s.tl.running)) return;
   if (c.round && s.tl) {  // a looped round ends where the next one starts, once the pre-scan has found it
     const next = s.tl.marks.find(x => x[0] > c.a), b = next ? next[0] - 1 : tlMax(s.tl);
     if (b !== c.b) { c.b = b; marksKey = ''; }
@@ -1281,6 +1285,73 @@ function clipTick(s, f) {
   if (f >= c.b) { setPaused(true); if (f > c.b) requestSeek(c.b); status(`clip end (${fmtTime(c.a)} – ${fmtTime(c.b)}): Space plays it again`); }
 }
 
+// ---- video export: the clip (or the round being watched) played at 1x and recorded with MediaRecorder. Every game
+// frame is drawn onto a 2x canvas (nearest neighbour, with the hitbox / input overlay) and pushed as one video frame;
+// the sound is the game's mix before the volume slider. MP4 where the browser records it, else WebM.
+let rec = null;
+const REC_TYPES = ['video/mp4;codecs=avc1.640028,mp4a.40.2', 'video/mp4', 'video/webm;codecs=vp9,opus', 'video/webm'];
+async function exportVideo() {
+  const s = session;
+  if (rec) return stopRecording(true);
+  if (!s || !s.tl || !window.MediaRecorder) { status('video export needs a browser with MediaRecorder'); return; }
+  const type = REC_TYPES.find(t => MediaRecorder.isTypeSupported(t));
+  if (!type) { status('this browser cannot record video'); return; }
+  ensureAudio(); await actx.resume();
+  if (inIntro(s)) await skipIntro(s);
+  const c = s.clip ? { ...s.clip } : roundClip(s);
+  setPaused(true);
+  await requestSeek(c.a);
+  const out = document.createElement('canvas'); out.width = 1280; out.height = 960;
+  const g = out.getContext('2d'); g.imageSmoothingEnabled = false;
+  const stream = out.captureStream(0), dest = actx.createMediaStreamDestination();
+  master.connect(dest);
+  stream.addTrack(dest.stream.getAudioTracks()[0]);
+  const mr = new MediaRecorder(stream, { mimeType: type, videoBitsPerSecond: 8e6, audioBitsPerSecond: 192e3 }), chunks = [];
+  mr.ondataavailable = e => { if (e.data.size) chunks.push(e.data); };
+  rec = { s, a: c.a, b: c.b, round: !s.clip, mr, g, out, dest, chunks, type, last: -1, save: true,
+          speed: ui.speed, track: stream.getVideoTracks()[0] };
+  if (ui.speed !== 1) call(s, 'viewer_speed', 1);
+  document.getElementById('clipexp').classList.add('on');
+  recDraw(); mr.start(1000);
+  setPaused(false);
+}
+function recDraw() {
+  const r = rec;
+  r.g.drawImage(document.getElementById('canvas'), 0, 0, 1280, 960);
+  if (ui.boxes || ui.inputs) r.g.drawImage(document.getElementById('overlay'), 0, 0, 1280, 960);
+  r.track.requestFrame();
+}
+function recTick(s, f) {
+  const r = rec;
+  if (r.s !== s) return stopRecording(false);
+  if (s.seeking || (s.tl && s.tl.running)) return;
+  if (r.round) {  // the round's end, once the pre-scan has found it
+    const next = s.tl.marks.find(x => x[0] > r.a); r.b = next ? next[0] - 1 : tlMax(s.tl);
+  }
+  if (f !== r.last) { r.last = f; recDraw(); }
+  status(`recording ${fmtTime(Math.max(0, f - r.a))} / ${fmtTime(r.b - r.a)} (E stops and saves, Esc cancels)`);
+  if (f >= r.b || (s.tl.end !== null && f >= s.tl.end)) stopRecording(true);
+}
+function stopRecording(save) {
+  const r = rec;
+  if (!r) return;
+  rec = null;
+  setPaused(true);
+  if (ui.speed !== 1 && session === r.s) call(r.s, 'viewer_speed', ui.speed);
+  document.getElementById('clipexp').classList.remove('on');
+  r.mr.onstop = () => {
+    master.disconnect(r.dest);
+    if (!save) { status('recording cancelled'); return; }
+    const blob = new Blob(r.chunks, { type: r.type.split(';')[0] }), ext = r.type.startsWith('video/mp4') ? 'mp4' : 'webm';
+    const name = `${document.getElementById('title').textContent.replace(/[\\/:*?"<>|\u00b7]+/g, ' ').replace(/\s+/g, ' ').trim()} ${fmtTime(r.a).replace(/[:.]/g, '-')}.${ext}`;
+    const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = name;
+    document.body.append(a); a.click(); a.remove();
+    setTimeout(() => URL.revokeObjectURL(a.href), 60000);
+    window.__mbaaLastExport = { name, size: blob.size, type: blob.type };
+    status(`saved ${name} (${(blob.size / 1048576).toFixed(1)} MB)`);
+  };
+  r.mr.stop();
+}
 // Integer scaling: the picture is the largest whole multiple of 640x480 in physical pixels that fits the window above
 // the controls (every game pixel the same size); below 1x it fits the width.
 let scaleMode = 'auto';
