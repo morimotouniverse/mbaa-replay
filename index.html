@@ -6,50 +6,97 @@
 <title>MBAACC Replay Viewer</title>
 <link rel="stylesheet" href="icons.css?v=cc463c473d3a">
 <style>
-  :root { --bg: #101018; --panel: #171722; --fg: #e8e8f0; --muted: #9090a8; --accent: #7aa2ff; --line: #2c2c3c; --w: min(100%, 960px); }
-  body { margin: 0; background: var(--bg); color: var(--fg); font: 13px/1.4 system-ui, sans-serif; display: flex;
-         flex-direction: column; align-items: center; padding: 8px 16px; }
+  :root { --bg: #0d0d14; --panel: #15151f; --raise: #1d1d2a; --fg: #ececf4; --muted: #8a8aa2; --faint: #5c5c74;
+          --accent: #e04a5a; --accent2: #ffb84a; --line: #262636; --w: min(100%, 960px); }
+  body { margin: 0; background: radial-gradient(1200px 600px at 50% -10%, #1a1426, var(--bg)); background-color: var(--bg);
+         color: var(--fg); font: 13px/1.4 system-ui, -apple-system, "Segoe UI", sans-serif; display: flex;
+         flex-direction: column; align-items: center; padding: 8px 16px; min-height: 100vh; box-sizing: border-box; }
   .stage { position: relative; width: var(--w); }
-  canvas#canvas { display: block; width: 100%; aspect-ratio: 4 / 3; image-rendering: pixelated; background: #000; cursor: pointer; }
+  canvas#canvas { display: block; width: 100%; aspect-ratio: 4 / 3; image-rendering: pixelated; background: #000; cursor: pointer;
+                  box-shadow: 0 10px 40px rgba(0, 0, 0, .55); }
   .stage:fullscreen { background: #000; display: flex; align-items: center; justify-content: center; width: 100%; }
   .stage:fullscreen canvas#canvas { width: var(--w); }
   .stage:fullscreen #overlay { inset: auto; width: var(--w); height: auto; aspect-ratio: 4 / 3; }
   #overlay { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; }
   /* everything else is one panel: beside the picture when the window is wide (body.side), else below it */
-  .main { display: flex; flex-direction: column; align-items: center; gap: 10px; }
+  .main { display: flex; flex-direction: column; align-items: center; gap: 12px; margin: auto 0; }
   body.side .main { flex-direction: row; align-items: center; }
-  .controls { display: flex; flex-direction: column; gap: 8px; width: var(--w); box-sizing: border-box; background: var(--panel);
-              border: 1px solid var(--line); border-radius: 8px; padding: 10px; position: relative; }
-  body.side .controls { width: 320px; max-height: calc(100vh - 16px); overflow-y: auto; }
-  .sec { display: flex; flex-direction: column; gap: 6px; }
-  .sec + .sec { border-top: 1px solid var(--line); padding-top: 8px; }
-  .row { display: flex; gap: 4px; flex-wrap: wrap; align-items: center; }
+  .controls { display: flex; flex-direction: column; gap: 10px; width: var(--w); box-sizing: border-box; background: var(--panel);
+              border: 1px solid var(--line); border-radius: 12px; padding: 14px; position: relative;
+              box-shadow: 0 10px 40px rgba(0, 0, 0, .4); }
+  body.side .controls { width: 330px; max-height: calc(100vh - 16px); overflow-y: auto; }
+  .sec { display: flex; flex-direction: column; gap: 8px; }
+  .sec + .sec { border-top: 1px solid var(--line); padding-top: 10px; }
+  .row { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
   .row.spread { justify-content: space-between; }
-  .grp { display: inline-flex; gap: 2px; }
-  #marks { width: 100%; height: 14px; display: block; cursor: pointer; }
-  #seek { width: 100%; margin: 0; padding: 0; accent-color: var(--accent); }
-  #fc { font-variant-numeric: tabular-nums; color: var(--fg); font-size: 12px; }
-  #status { color: var(--muted); font-size: 12px; overflow-wrap: anywhere; }
-  button, select, input, .filebtn { background: #20202c; color: var(--fg); border: 1px solid #383848; border-radius: 5px;
-                                    font: inherit; padding: 3px 7px; }
-  button:hover, .filebtn:hover { border-color: #5a5a78; }
-  button.ib { padding: 3px 5px; line-height: 0; }
-  button.on { background: #2f4a8a; border-color: var(--accent); }
-  #pause { padding: 3px 10px; }
-  .filebtn { cursor: pointer; display: inline-flex; gap: 5px; align-items: center; }
-  label { display: inline-flex; gap: 4px; align-items: center; }
-  .toggles { gap: 10px; }
-  #vol { flex: 1; min-width: 60px; accent-color: var(--accent); padding: 0; }
-  #sound { background: var(--accent); color: #000; }
-  .lbl { color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: .04em; }
-  #playlist ol { margin: 0; padding: 0 0 0 2.2em; max-height: 200px; overflow-y: auto; font-size: 12px; }
-  #playlist li { cursor: pointer; padding: 1px 4px; border-radius: 3px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-  #playlist li:hover { background: #2c3350; }  #playlist li.cur { background: #3a4570; color: #fff; }
-  #help { position: absolute; inset: 0; background: rgba(16, 16, 24, 0.97); border-radius: 8px; padding: 12px; overflow-y: auto;
+  .grp { display: inline-flex; gap: 2px; align-items: center; }
+  /* now playing */
+  #title { font-size: 15px; font-weight: 650; letter-spacing: .01em; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  #status { color: var(--muted); font-size: 11.5px; overflow-wrap: anywhere; min-height: 1.4em; }
+  .clock { display: flex; align-items: baseline; gap: 8px; font-variant-numeric: tabular-nums; }
+  #time { font-size: 20px; font-weight: 600; letter-spacing: .02em; }
+  #fc { color: var(--faint); font-size: 11px; margin-left: auto; }
+  /* timeline: round marks above a thin seek track */
+  .timeline { display: flex; flex-direction: column; gap: 2px; }
+  #marks { width: 100%; height: 16px; display: block; cursor: pointer; }
+  input[type=range] { -webkit-appearance: none; appearance: none; background: transparent; width: 100%; height: 18px; margin: 0;
+                      padding: 0; border: 0; cursor: pointer; --p: 0%; }
+  input[type=range]:focus { outline: none; }
+  input[type=range]::-webkit-slider-runnable-track { height: 4px; border-radius: 2px;
+      background: linear-gradient(to right, var(--accent) var(--p), #32324a var(--p)); }
+  input[type=range]::-moz-range-track { height: 4px; border-radius: 2px; background: #32324a; }
+  input[type=range]::-moz-range-progress { height: 4px; border-radius: 2px; background: var(--accent); }
+  input[type=range]::-webkit-slider-thumb { -webkit-appearance: none; width: 14px; height: 14px; border-radius: 50%; margin-top: -5px;
+      background: #fff; border: 0; box-shadow: 0 0 0 4px rgba(224, 74, 90, .25); transition: transform .1s; }
+  input[type=range]::-moz-range-thumb { width: 14px; height: 14px; border-radius: 50%; background: #fff; border: 0;
+      box-shadow: 0 0 0 4px rgba(224, 74, 90, .25); }
+  input[type=range]:hover::-webkit-slider-thumb { transform: scale(1.15); }
+  /* buttons: flat icons, one big play button */
+  button, select { font: inherit; color: var(--fg); }
+  button { background: transparent; border: 0; border-radius: 8px; padding: 6px 7px; cursor: pointer; line-height: 0; }
+  button:hover { background: #ffffff10; }  button:active { background: #ffffff1c; }
+  button.on { color: var(--accent2); background: #ffb84a1a; }
+  button.txt { line-height: 1.2; padding: 5px 9px; font-size: 12px; background: var(--raise); }
+  button.txt:hover { background: #2a2a3c; }
+  #pause { background: var(--accent); width: 42px; height: 42px; border-radius: 50%; padding: 0; margin: 0 6px; display: grid; place-items: center;
+           box-shadow: 0 4px 14px rgba(224, 74, 90, .35); }
+  #pause:hover { background: #ec5a69; }
+  #pause .i { width: 1.4em; height: 1.4em; }
+  .transport { justify-content: center; gap: 0; }
+  select { background: var(--raise); border: 1px solid transparent; border-radius: 8px; padding: 5px 8px; font-size: 12px; cursor: pointer; }
+  select:hover { border-color: #3a3a52; }
+  /* toggles as chips */
+  .chip { display: inline-flex; align-items: center; gap: 6px; padding: 5px 10px; border-radius: 999px; background: var(--raise);
+          font-size: 12px; cursor: pointer; user-select: none; color: var(--muted); }
+  .chip input { display: none; }
+  .chip:has(input:checked) { background: #e04a5a26; color: #ffd6da; box-shadow: inset 0 0 0 1px #e04a5a66; }
+  .chip::before { content: ''; width: 6px; height: 6px; border-radius: 50%; background: currentColor; opacity: .6; }
+  .lbl { color: var(--faint); font-size: 10.5px; text-transform: uppercase; letter-spacing: .08em; font-weight: 600; }
+  #vol { flex: 1; min-width: 60px; }
+  #sound { background: var(--accent); color: #fff; line-height: 1.2; padding: 5px 10px; font-size: 12px; }
+  .filebtn { display: inline-flex; align-items: center; gap: 6px; padding: 6px 12px; border-radius: 8px; cursor: pointer;
+             background: var(--raise); font-size: 12px; }
+  .filebtn:hover { background: #2a2a3c; }
+  .hint { color: var(--faint); font-size: 11px; }
+  /* playlist */
+  #plitems { margin: 0; padding: 0; list-style: none; max-height: 240px; overflow-y: auto; display: flex; flex-direction: column; gap: 2px;
+             counter-reset: q; }
+  #plitems li { display: flex; align-items: center; gap: 8px; padding: 4px 4px 4px 8px; border-radius: 8px; cursor: pointer;
+                counter-increment: q; font-size: 12px; }
+  #plitems li::before { content: counter(q); color: var(--faint); font-size: 10.5px; min-width: 1.4em; font-variant-numeric: tabular-nums; }
+  #plitems li:hover { background: #ffffff0c; }
+  #plitems li.cur { background: #e04a5a22; }  #plitems li.cur::before { content: '\25B6'; color: var(--accent); }
+  #plitems li .nm { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  #plitems li .dt { color: var(--faint); font-size: 10.5px; white-space: nowrap; }
+  #plitems li button { padding: 3px; opacity: 0; color: var(--muted); }
+  #plitems li:hover button { opacity: 1; }
+  #plitems li.drag { opacity: .4; }  #plitems li.over { box-shadow: inset 0 2px 0 var(--accent); }
+  #help { position: absolute; inset: 0; background: rgba(13, 13, 20, .97); border-radius: 12px; padding: 14px; overflow-y: auto;
           font-size: 12px; color: var(--muted); z-index: 2; }
-  #help table { border-collapse: collapse; width: 100%; }  #help td { padding: 2px 4px; vertical-align: top; }  #help td:first-child { white-space: nowrap; }
-  kbd { font: 11px ui-monospace, Consolas, monospace; border: 1px solid #383848; border-radius: 3px; padding: 0 3px; color: var(--fg); }
-  .credit { font-size: 10px; margin-top: 8px; }
+  #help table { border-collapse: collapse; width: 100%; }  #help td { padding: 3px 4px; vertical-align: top; }  #help td:first-child { white-space: nowrap; }
+  kbd { font: 11px ui-monospace, Consolas, monospace; background: var(--raise); border: 1px solid #34344a; border-bottom-width: 2px;
+        border-radius: 4px; padding: 0 4px; color: var(--fg); }
+  .credit { font-size: 10px; margin-top: 10px; color: var(--faint); }
 </style>
 </head>
 <body>
@@ -60,58 +107,62 @@
 </div>
 <div class="controls" id="controls">
   <div class="sec">
+    <div id="title">MBAACC replays</div>
+    <div id="status">loading…</div>
+  </div>
+  <div class="sec">
+    <div class="clock"><span id="time">0:00.0</span><span class="hint" id="dur"></span><span id="fc"></span></div>
     <div class="timeline"><canvas id="marks"></canvas><input id="seek" type="range" min="0" max="1" value="0" step="1" aria-label="seek"></div>
-    <div class="row spread">
-      <span class="grp">
-        <button class="ib" id="back5" title="back 5 s (Shift+Left)"><i class="i i-rewind"></i></button>
-        <button class="ib" id="back1" title="back one frame (,)"><i class="i i-back"></i></button>
-        <button class="ib" id="pause" title="pause / play (Space)"><i class="i i-pause"></i></button>
-        <button class="ib" id="fwd1" title="forward one frame (.)"><i class="i i-play"></i></button>
-        <button class="ib" id="fwd5" title="forward 5 s (Shift+Right)"><i class="i i-ffwd"></i></button>
-      </span>
-      <span id="fc">0 / 0</span>
-    </div>
-    <div class="row spread">
-      <span class="grp"><button class="ib" id="prevr" title="previous round ([)"><i class="i i-prev"></i></button><span class="lbl" style="align-self:center;padding:0 4px">round</span><button class="ib" id="nextr" title="next round (])"><i class="i i-next"></i></button></span>
-      <span class="grp">
-        <button class="ib" id="copyt" title="copy a link to this moment, or to the clip when one is set (C)"><i class="i i-share"></i></button>
-        <button class="ib" id="full" title="fullscreen, integer scaled (F)"><i class="i i-full"></i></button>
-        <button class="ib" id="helpb" title="keyboard shortcuts (?)"><i class="i i-help"></i></button>
-      </span>
+    <div class="row transport">
+      <button id="prevr" title="previous round ([)"><i class="i i-prev"></i></button>
+      <button id="back5" title="back 5 s (Shift+Left)"><i class="i i-rewind"></i></button>
+      <button id="back1" title="back one frame (,)"><i class="i i-back"></i></button>
+      <button id="pause" title="pause / play (Space)"><i class="i i-pause"></i></button>
+      <button id="fwd1" title="forward one frame (.)"><i class="i i-play"></i></button>
+      <button id="fwd5" title="forward 5 s (Shift+Right)"><i class="i i-ffwd"></i></button>
+      <button id="nextr" title="next round (])"><i class="i i-next"></i></button>
     </div>
   </div>
   <div class="sec">
     <div class="row spread">
-      <span class="lbl">clip</span>
+      <span class="grp"><span class="lbl" style="margin-right:6px">clip</span>
+        <button class="txt" id="clipa" title="clip in point ({)">in</button>
+        <button class="txt" id="clipb" title="clip out point (})">out</button>
+        <button id="cliploop" title="loop the clip, or the round when no clip is set (L)"><i class="i i-loop"></i></button>
+        <button id="clipx" title="clear the clip (Esc)"><i class="i i-x"></i></button>
+      </span>
       <span class="grp">
-        <button id="clipa" title="clip in point ({)">in</button>
-        <button id="clipb" title="clip out point (})">out</button>
-        <button class="ib" id="cliploop" title="loop the clip (L)"><i class="i i-loop"></i></button>
-        <button class="ib" id="clipx" title="clear the clip (Esc)"><i class="i i-x"></i></button>
+        <button id="copyt" title="copy a link to this moment, or to the clip when one is set (C)"><i class="i i-share"></i></button>
+        <button id="full" title="fullscreen, integer scaled (F)"><i class="i i-full"></i></button>
+        <button id="helpb" title="keyboard shortcuts (?)"><i class="i i-help"></i></button>
       </span>
     </div>
   </div>
   <div class="sec">
+    <div class="row">
+      <label class="chip" title="skip the VS intro when a replay starts"><input id="skipintro" type="checkbox">skip intro</label>
+      <label class="chip" title="hitbox overlay (H)"><input id="boxes" type="checkbox">hitboxes</label>
+      <label class="chip" title="input display (I)"><input id="inputs" type="checkbox">inputs</label>
+    </div>
     <div class="row">
       <select id="scale" title="picture size: auto = largest whole multiple that fits"><option value="auto">size auto</option><option value="1">size 1x</option><option value="2">size 2x</option><option value="3">size 3x</option><option value="4">size 4x</option><option value="fit">size fit</option></select>
       <select id="speed" title="speed"><option value="1">speed 1x</option><option value="2">speed 2x</option><option value="4">speed 4x</option></select>
+      <button id="mute" title="mute (M)"><i class="i i-sound"></i></button><input id="vol" type="range" min="0" max="100" value="50" aria-label="volume">
     </div>
-    <div class="row toggles">
-      <label title="skip the VS intro when a replay starts"><input id="skipintro" type="checkbox"> skip intro</label>
-      <label title="hitbox overlay (H)"><input id="boxes" type="checkbox"> boxes</label>
-      <label title="input display (I)"><input id="inputs" type="checkbox"> inputs</label>
-    </div>
-    <div class="row"><button class="ib" id="mute" title="mute (M)"><i class="i i-sound"></i></button><input id="vol" type="range" min="0" max="100" value="50" aria-label="volume"><button id="sound" hidden>click for sound</button></div>
+    <button id="sound" hidden>click for sound</button>
   </div>
   <div class="sec">
-    <div class="row">
-      <label class="filebtn" title="open one replay, or several for a playlist"><i class="i i-open"></i> replays<input id="rep" type="file" accept=".rep" multiple hidden></label>
+    <div class="row spread">
+      <span class="lbl">queue <span id="plpos"></span></span>
+      <span class="grp">
+        <button id="plshare" title="copy a link to this playlist" hidden><i class="i i-share"></i></button>
+        <button id="plprev" title="previous replay (P)" hidden><i class="i i-prev"></i></button>
+        <button id="plnext" title="next replay (N)" hidden><i class="i i-next"></i></button>
+        <button id="plclear" title="clear the queue (keeps the replay that is playing)" hidden><i class="i i-x"></i></button>
+      </span>
     </div>
-    <div id="status">loading…</div>
-    <div id="playlist" hidden>
-      <div class="row spread"><span class="lbl">playlist <span id="plpos"></span></span><span class="grp"><button class="ib" id="plshare" title="copy a link to this playlist"><i class="i i-share"></i></button><button class="ib" id="plprev" title="previous replay (P)"><i class="i i-prev"></i></button><button class="ib" id="plnext" title="next replay (N)"><i class="i i-next"></i></button></span></div>
-      <ol id="plitems"></ol>
-    </div>
+    <ol id="plitems"></ol>
+    <div class="row"><label class="filebtn" title="add one or more replays to the queue (or drop them on the page)"><i class="i i-open"></i>add replays<input id="rep" type="file" accept=".rep" multiple hidden></label><span class="hint">or drop .rep files</span></div>
   </div>
   <div id="help" hidden>
     <table>
@@ -120,19 +171,19 @@
       <tr><td><kbd>&larr;</kbd> <kbd>&rarr;</kbd></td><td>1 s back / forward (<kbd>Shift</kbd> 5 s)</td></tr>
       <tr><td><kbd>Home</kbd> <kbd>End</kbd></td><td>start / end</td></tr>
       <tr><td><kbd>[</kbd> <kbd>]</kbd></td><td>previous / next round</td></tr>
-      <tr><td><kbd>{</kbd> <kbd>}</kbd></td><td>clip in / out point, <kbd>L</kbd> loop it, <kbd>Esc</kbd> clear</td></tr>
+      <tr><td><kbd>{</kbd> <kbd>}</kbd></td><td>clip in / out point, <kbd>L</kbd> loop, <kbd>Esc</kbd> clear</td></tr>
       <tr><td><kbd>C</kbd></td><td>copy a link to this moment (to the clip when one is set)</td></tr>
-      <tr><td><kbd>N</kbd> <kbd>P</kbd></td><td>next / previous replay in a playlist</td></tr>
+      <tr><td><kbd>N</kbd> <kbd>P</kbd></td><td>next / previous replay in the queue</td></tr>
       <tr><td><kbd>F</kbd></td><td>fullscreen</td></tr>
       <tr><td><kbd>H</kbd> <kbd>I</kbd> <kbd>M</kbd></td><td>hitboxes, inputs, mute</td></tr>
-      <tr><td>boxes</td><td><span style="color:#30e030">hurt</span> <span style="color:#ff2828">attack</span> <span style="color:#ffe020">clash</span> <span style="color:#40a0ff">shield</span> <span style="color:#d8d8d8">collision</span> <span style="color:#c878e6">special</span></td></tr>
-      <tr><td>open</td><td>pick or drop one or more .rep files (several play as a playlist)</td></tr>
+      <tr><td>hitboxes</td><td><span style="color:#30e030">hurt</span> <span style="color:#ff2828">attack</span> <span style="color:#ffe020">clash</span> <span style="color:#40a0ff">shield</span> <span style="color:#d8d8d8">collision</span> <span style="color:#c878e6">special</span></td></tr>
+      <tr><td>queue</td><td>picked or dropped replays are added; drag to reorder</td></tr>
     </table>
     <div class="credit">Icons: Kenney (kenney.nl, CC0)</div>
   </div>
 </div>
 </div>
 <script src="mbaa.js?v=20ff9c8cd2e8"></script>
-<script src="viewer.js?v=043a515d7288"></script>
+<script src="viewer.js?v=dce2ac2830e2"></script>
 </body>
 </html>

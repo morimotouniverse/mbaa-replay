@@ -63,6 +63,27 @@ async function fetchObject(h) {
   return openObject(buf);
 }
 function status(t) { document.getElementById('status').textContent = t; }
+// chara id -> display name (charaselect.txt CharaNo_<id>; replay header side block +4), moon (+8): 0 C, 1 F, 2 H
+const CHARA = { 0: 'Sion', 1: 'Arcueid', 2: 'Ciel', 3: 'Akiha', 4: 'Hisui & Kohaku', 5: 'Hisui', 6: 'Kohaku', 7: 'Shiki',
+  8: 'Miyako', 9: 'Warachia', 10: 'Nrvnqsr', 11: 'V. Sion', 12: 'Red Arcueid', 13: 'V. Akiha', 14: 'Mech-Hisui', 15: 'Nanaya',
+  16: 'G. Akiha', 17: 'Satsuki', 18: 'Len', 19: 'P. Ciel', 20: 'Neco-Arc', 22: 'Aoko', 23: 'White Len', 25: 'Neco-Arc Chaos',
+  27: 'G. Chaos', 28: 'Kouma', 29: 'Seifuku Akiha', 30: 'Riesbyfe', 31: 'Roa', 32: 'Hermes', 33: 'Ryougi',
+  34: 'Neco & Mech', 35: 'Kohaku & Mech', 51: 'Arcueid (Earth)', 53: 'B. Akiha', 58: 'B. Miyako', 59: 'B. Warachia',
+  72: 'B. Aoko', 73: 'B. White Len', 85: 'B. Kohaku & Mech' };
+function matchTitle(rep) {
+  if (rep.length < 0x5C) return 'MBAACC replay';
+  const dv = new DataView(rep.buffer, rep.byteOffset, rep.byteLength);
+  const side = o => (['C-', 'F-', 'H-'][dv.getInt32(o + 8, true)] || '') + (CHARA[dv.getInt32(o + 4, true)] || `#${dv.getInt32(o + 4, true)}`);
+  return `${side(0x3C)} vs ${side(0x4C)}`;
+}
+// a replay file name (CIELxW_LEN_261009184010) -> ['Ciel vs W Len', 'Oct 9 18:40']; other names pass through
+const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+function repLabel(name) {
+  const base = name.replace(/^.*\//, '').replace(/\.rep$/i, ''), m = base.match(/^(.+?)_(\d{2})(\d{2})(\d{2})(\d{2})(\d{2})\d{2}$/);
+  if (!m || !/x/.test(m[1])) return [base, ''];
+  const nice = t => t.split('_').map(w => w.charAt(0) + w.slice(1).toLowerCase()).join(' ');
+  return [m[1].split('x').map(nice).join(' vs '), `${MONTHS[+m[3] - 1] || m[3]} ${+m[4]} ${m[5]}:${m[6]}`];
+}
 
 // ---- asset plan (mirror of tools/web/asset_plan.py plan_files) ----
 function repKeys(rep) {
@@ -164,7 +185,7 @@ function ensureAudio() {
   const setVol = () => { master.gain.value = Math.pow(+vol.value / 100, 2); try { localStorage.setItem('mbaaVolCe', vol.value); } catch (e) {} };
   vol.value = 100;
   try { const v = localStorage.getItem('mbaaVolCe'); if (v !== null) vol.value = v; } catch (e) {}
-  vol.oninput = () => { setVol(); document.querySelector('#mute .i').className = `i ${+vol.value ? 'i-sound' : 'i-mute'}`; };
+  vol.oninput = () => { setVol(); vol.style.setProperty('--p', `${vol.value}%`); document.querySelector('#mute .i').className = `i ${+vol.value ? 'i-sound' : 'i-mute'}`; };
   vol.oninput();
   master.connect(actx.destination);
   const btn = document.getElementById('sound');
@@ -781,7 +802,7 @@ async function seekTo(s, T) {
                   copied: restored ? t.lastCopied : 0, sim: T - f1,
                   simMs: r1(t2 - t1), drawMs: r1(t3 - t2) });
   overlayDirty = true;
-  if (!s.endShown) status(`${ui.paused ? 'paused' : 'playing'} ${s.name}`);
+  if (!s.endShown) status(ui.paused ? 'paused' : 'playing');
 }
 // Skip the VS intro: simulate (not drawn, silent) up to the first battle frame, then draw from there. The intro is
 // still simulated (the match state depends on it); only its picture and sound are skipped.
@@ -807,7 +828,7 @@ async function skipIntro(s) {
   uiApply(s);
   if (!ui.paused) s.bgmSync(M._viewer_frame());
   overlayDirty = true;
-  status(`${ui.paused ? 'paused' : 'playing'} ${s.name}`);
+  status(ui.paused ? 'paused' : 'playing');
 }
 // Copy the current moment: a link that opens this replay at this frame when the replay came from a URL (?rep=),
 // otherwise the replay name, time and frame as text.
@@ -1003,7 +1024,10 @@ function uiLoop() {
     const seek = document.getElementById('seek');
     if (+seek.max !== max) seek.max = max;
     if (!seekDragging) seek.value = t.want !== null ? t.want : f;
-    document.getElementById('fc').textContent = `${f} / ${max}${t.end === null ? '+' : ''}  ${fmtTime(f)}`;
+    document.getElementById('time').textContent = fmtTime(f);
+    document.getElementById('dur').textContent = `/ ${fmtTime(max)}${t.end === null ? '+' : ''}`;
+    document.getElementById('fc').textContent = `frame ${f}`;
+    seek.style.setProperty('--p', `${(100 * seek.value / Math.max(1, max)).toFixed(2)}%`);
     drawMarks(t, max);
     if (f !== lastDrawnFrame || overlayDirty) { lastDrawnFrame = f; overlayDirty = false; drawOverlay(); }
   }
@@ -1054,6 +1078,7 @@ function controls() {
   btn('helpb', toggleHelp); btn('mute', toggleMute);
   document.getElementById('help').onclick = toggleHelp;
   btn('plprev', () => startItem(pl.i - 1)); btn('plnext', () => startItem(pl.i + 1)); btn('plshare', copyPlaylist);
+  btn('plclear', () => { const cur = pl.items[pl.i]; pl.items = cur ? [cur] : []; pl.i = cur ? 0 : -1; renderPlaylist(); });
   // a click / tap on the picture: during the VS screen it skips it (as a button press does in the game), otherwise
   // it pauses / plays
   document.getElementById('overlay').parentElement.addEventListener('pointerdown', e => {
@@ -1128,6 +1153,8 @@ async function start(file) {
     await fetchAll(man, want, 'match assets');
   }
   window.__mbaaKeys = keys;
+  const [, when] = repLabel(file.name);
+  document.getElementById('title').textContent = matchTitle(rep) + (when ? ` \u00b7 ${when}` : '');
   const next = pl.items[pl.i + 1];
   await play(rep, file.name, 0, want);
   if (want && next) prefetch(next, want);
@@ -1156,22 +1183,56 @@ async function startItem(i) {
 function repFiles(files) {
   return [...files].filter(f => /\.rep$/i.test(f.name) || files.length === 1).sort((a, b) => a.name.localeCompare(b.name));
 }
+// picked / dropped replays join the queue; with nothing playing (or the current replay finished) the first one starts
 function loadPlaylist(files) {
   if (!files.length) { status('no .rep files there'); return; }
-  pl.items = files.map(f => ({ name: f.name, file: f })); pl.i = -1;
-  return startItem(0);
+  const s = session;
+  if (!pl.items.length && s) pl.items = [{ name: s.name, file: new File([s.rep], s.name), id: s.shareId }], pl.i = 0;
+  const have = new Set(pl.items.map(it => it.name)), add = files.filter(f => !have.has(f.name));
+  if (!add.length) { status('already in the queue'); return; }
+  const first = pl.items.length;
+  pl.items.push(...add.map(f => ({ name: f.name, file: f })));
+  if (!s || s.endShown) return startItem(first);
+  renderPlaylist();
+  status(`added ${add.length} to the queue`);
+  if (first === pl.i + 1 && s.want) prefetch(pl.items[first], s.want);
+}
+function removeItem(k) {
+  const playing = k === pl.i;
+  pl.items.splice(k, 1);
+  if (k < pl.i) pl.i--;
+  if (playing) {  // the replay being watched keeps playing until the next one is picked
+    pl.i = -1;
+  }
+  renderPlaylist();
+}
+function moveItem(from, to) {
+  if (from === to) return;
+  const cur = pl.items[pl.i], [it] = pl.items.splice(from, 1);
+  pl.items.splice(to, 0, it);
+  pl.i = pl.items.indexOf(cur);
+  renderPlaylist();
 }
 function renderPlaylist() {
-  const box = document.getElementById('playlist');
-  box.hidden = pl.items.length < 2;
-  if (box.hidden) return;
-  document.getElementById('plpos').textContent = `${pl.i + 1} / ${pl.items.length}`;
+  const many = pl.items.length > 1;
+  for (const id of ['plshare', 'plprev', 'plnext', 'plclear']) document.getElementById(id).hidden = !many;
+  document.getElementById('plpos').textContent = pl.items.length ? `${pl.i + 1 || '\u2013'} / ${pl.items.length}` : '';
   const ol = document.getElementById('plitems');
+  let dragFrom = -1;
   ol.replaceChildren(...pl.items.map((it, k) => {
-    const li = document.createElement('li');
-    li.textContent = it.name.replace(/\.rep$/i, '');
-    li.className = k === pl.i ? 'cur' : '';
+    const li = document.createElement('li'), [nm, when] = repLabel(it.name);
+    li.title = it.name; li.className = k === pl.i ? 'cur' : ''; li.draggable = true;
+    const a = document.createElement('span'); a.className = 'nm'; a.textContent = nm;
+    const d = document.createElement('span'); d.className = 'dt'; d.textContent = when;
+    const x = document.createElement('button'); x.title = 'remove from the queue'; x.innerHTML = '<i class="i i-x"></i>';
+    x.onclick = e => { e.stopPropagation(); removeItem(k); };
+    li.append(a, d, x);
     li.onclick = () => startItem(k);
+    li.ondragstart = e => { dragFrom = k; li.classList.add('drag'); e.dataTransfer.effectAllowed = 'move'; e.dataTransfer.setData('text/plain', ''); };
+    li.ondragend = () => li.classList.remove('drag');
+    li.ondragover = e => { if (dragFrom < 0) return; e.preventDefault(); e.stopPropagation(); li.classList.add('over'); };
+    li.ondragleave = () => li.classList.remove('over');
+    li.ondrop = e => { if (dragFrom < 0) return; e.preventDefault(); e.stopPropagation(); moveItem(dragFrom, k); };
     return li;
   }));
   const cur = ol.children[pl.i];
@@ -1197,7 +1258,7 @@ function toggleLoop() {
     const a = k > 0 ? m[k - 1][0] : k === 0 ? 1 : (m.length ? m[m.length - 1][0] : 1);
     s.clip = { a, b: k >= 0 ? m[k][0] - 1 : tlMax(s.tl), stop: false, round: true }; marksKey = '';
   }
-  if (s && s.clip) status(loopOn ? `looping ${fmtTime(s.clip.a)} – ${fmtTime(s.clip.b)}` : `playing ${s.name}`);
+  if (s && s.clip) status(loopOn ? `looping ${fmtTime(s.clip.a)} – ${fmtTime(s.clip.b)}` : 'playing');
 }
 let unmuted = 100;
 function toggleMute() {
@@ -1206,7 +1267,7 @@ function toggleMute() {
   vol.dispatchEvent(new Event('input'));
 }
 function toggleHelp() { const h = document.getElementById('help'); h.hidden = !h.hidden; }
-function clearClip() { if (session && session.clip) { session.clip = null; marksKey = ''; status(`playing ${session.name}`); } }
+function clearClip() { if (session && session.clip) { session.clip = null; marksKey = ''; status('playing'); } }
 // a clip being played stops at its out point; play again from there starts it over
 function clipTick(s, f) {
   const c = s.clip;
