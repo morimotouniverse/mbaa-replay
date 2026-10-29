@@ -33,7 +33,13 @@ const HASH = Q.get('hash') === '1', PERF = Q.get('perf') === '1', CAPTURE = Q.ge
 const KF_EVERY = Math.max(10, +(Q.get('kf') || 300));  // playback keyframe interval (frames)
 const KF_NEAR = 30;  // a seek that re-simulates further than 3x this keyframes about KF_NEAR frames before its target
 const PAGE = Math.min(65536, Math.max(16384, +(Q.get('page') || 16384)));  // keyframe page size (bytes)
-const KF_BUDGET = +(Q.get('kfmb') || 450) * 1e6;  // keyframe memory; above it, every second older keyframe is dropped
+// keyframe memory; above it, every second older keyframe is dropped. Phones get less (a tab there is killed, and the page
+// reloaded, around 1 GB)
+const PHONE = matchMedia('(pointer: coarse)').matches && Math.min(screen.width, screen.height) < 820;
+// low-memory mode (phones; ?lowmem=1 / 0 forces it): no pre-scan, a small keyframe budget, a match's files freed once
+// it has loaded them (freeLoaded) and the next match prefetched to the disk cache only
+const LOWMEM = Q.get('lowmem') !== null ? Q.get('lowmem') === '1' : PHONE;
+const KF_BUDGET = +(Q.get('kfmb') || (LOWMEM ? 40 : 450)) * 1e6;
 
 const hex = h => new Uint8Array(h.match(/../g).map(x => parseInt(x, 16)));
 let cryptoKey;
@@ -169,9 +175,50 @@ function mkdirs(FS, path) {
   let cur = '';
   for (const p of path.split('/').slice(0, -1)) { if (!p) continue; cur += '/' + p; try { FS.mkdir(cur); } catch (e) {} }
 }
+// The game's reads of /game files (FS.open is what the libc open syscall calls): which files this match has opened, and
+// an open of a file freeLoaded dropped (the game asked again: it is refetched and the match replayed to this frame).
+function trackOpens(s) {
+  const M = s.M, FS = M.FS;
+  s.opened = new Set(); s.freed = new Set(); s.freedAt = -1;
+  M.mbaaOpened = p => { if (session === s) s.opened.add(p); };
+  M.mbaaOpenFail = p => { if (session === s && s.freed.has(p)) misses.add(p); };
+  if (!FS.__tracked) wrapOpen(M);
+}
+// (its own function: a closure made in trackOpens would keep that first session, and its keyframes, alive)
+function wrapOpen(M) {
+  const FS = M.FS, open = FS.open;
+  FS.__tracked = true;
+  FS.open = function (path, flags, ...a) {
+    const game = typeof path === 'string' && path.startsWith('/game/') && (flags === 'r' || flags === 0 || (typeof flags === 'number' && (flags & 3) === 0));
+    try {
+      const st = open.call(this, path, flags, ...a);
+      if (game) M.mbaaOpened(path.slice(6));
+      return st;
+    } catch (e) { if (game) M.mbaaOpenFail(path.slice(6)); throw e; }
+  };
+}
+// Low-memory mode, once a match has loaded (round 1 on, no game file open): the files it has read are dropped from
+// MEMFS and the cache (the game keeps what it read in its own memory; only the BGM, played from the cache by the page,
+// and the stage probes stay). Files it has not opened yet (the result screen's) stay.
+function freeLoaded(s) {
+  const probe = new Set((man.plan && man.plan.probe) || []);
+  for (const p of s.opened) {
+    if (s.freed.has(p) || probe.has(p) || /^bgm\//.test(p) || !s.want.has(p)) continue;
+    try { s.M.FS.unlink('/game/' + p); } catch (e) { continue; }
+    cache.delete(p); s.freed.add(p);
+  }
+  s.freedAt = s.M._viewer_frame();
+}
+// a game file into MEMFS sharing the fetched buffer (MEMFS write with canOwn keeps the array instead of copying it; the
+// game root is read-only and nothing writes the cache's arrays)
+function fsPut(FS, path, d) {
+  mkdirs(FS, path);
+  const st = FS.open(path, 'w');
+  try { FS.write(st, d, 0, d.length, 0, true); } finally { FS.close(st); }
+}
 
 // ---- audio (WebAudio, shared by sessions) ----
-let actx, master, outGain;
+let actx, master, outGain, musicGain;
 // Browsers keep an AudioContext suspended until the page gets a click or key press; a replay opened from a link has
 // had neither, so the page asks for one (#sound) and starts the BGM the game already requested once audio runs.
 function ensureAudio() {
@@ -179,6 +226,7 @@ function ensureAudio() {
   actx = new AudioContext();
   master = actx.createGain();  // the game's mix at CE level; video export records from here
   outGain = actx.createGain();
+  musicGain = actx.createGain(); musicGain.gain.value = ui.music ? 1 : 0; musicGain.connect(master);  // the BGM (music toggle)
   const vol = document.getElementById('vol');
   // 100% = CE's own level (every set already carries the game's DirectSound volume, -16.66 dB at the canonical
   // settings); the slider only attenuates below it. Default 100. Remembered under a new key: the old one stored the
@@ -259,7 +307,7 @@ function audioHooks(Module, s) {
   };
   s.stopSes = () => { for (const v of voices.values()) cut(v); };
   // BGM: the stream set, one looping track (back to loopPos seconds at the end, as the game's stream does)
-  const bgmChain = dsVoiceChain(master);
+  const bgmChain = dsVoiceChain(musicGain);
   let bgm = null, bgmPath = '';
   // fade = seconds: the track fades out (pause) instead of cutting (seek, track change). Each track has its own fade
   // gain after the stream's volume/pan chain, so a fade never fights the game's own volume changes.
@@ -349,25 +397,73 @@ function freshCanvas() {
   old.replaceWith(c);
   return c;
 }
+// Boot snapshot: the used memory right after viewer_boot (pages packed like keyframes). The next match of a playlist
+// restores it into the same instance (one wasm instance, one GL context and one copy of the shared files for the whole
+// playlist; a new instance per match ran a phone out of memory). Memory above the boot heap is zeroed as in a fresh
+// instance (the allocator takes fresh sbrk memory as zero); the restore's new GL generation deletes the last match's
+// textures.
+function bootSnapshot(M) {
+  const top = M._viewer_mem_top(), W = PAGE >> 2, H = new Int32Array(M.HEAPU8.buffer), n = Math.ceil(top / PAGE);
+  const pages = new Array(n);
+  let bytes = 0;
+  for (let i = 0; i < n; i++) { pages[i] = packPage(H, i * W, W); bytes += pages[i].bytes; }
+  return { top: n * PAGE, pages, bytes };
+}
+function restoreBoot(s) {
+  const M = s.M, snap = s.boot, W = PAGE >> 2;
+  call(s, 'viewer_restore_begin');
+  for (const st of M.FS.streams) if (st && st.fd > 2) { try { M.FS.close(st); } catch (e) {} }
+  const top = M._viewer_mem_top(), H = new Int32Array(M.HEAPU8.buffer);
+  snap.pages.forEach((q, i) => unpackPage(q, H, i * W, W));
+  if (top > snap.top) M.HEAPU8.fill(0, snap.top, top);
+  call(s, 'viewer_restore_end', ++s.gen);
+}
 async function newSession(rep, name, want) {
-  if (session) { try { session.M.ccall('viewer_stop', null, [], []); } catch (e) {} }
+  const prev = session;
+  if (prev) { try { prev.M.ccall('viewer_stop', null, [], []); } catch (e) {} }
   window.dispatchEvent(new Event('mbaa-session-end'));
+  if (prev && prev.boot && (!HASH && !CAPTURE ? Q.get('reuse') !== '0' : Q.get('reuse') === '1')) return reuseSession(prev, rep, name, want);
   // mbaa.wasm is built with mbaa.js: it takes mbaa.js's cache-busting version (tools/web/deploy_pages.sh)
   const wasmV = ((document.querySelector('script[src^="mbaa.js"]') || {}).src || '').split('?')[1];
   const M = await MBAA({ print: t => console.log(t), printErr: t => console.warn(t), canvas: freshCanvas(),
                          locateFile: p => (wasmV && p.endsWith('.wasm') ? `${p}?${wasmV}` : p) });
   const s = { M, name, rep, live: true, mute: false, gen: 0 };
   session = s;
-  const FS = M.FS;
+  return fillSession(s, want, null);
+}
+function reuseSession(prev, rep, name, want) {
+  const s = { M: prev.M, name, rep, live: true, mute: false, gen: prev.gen, boot: prev.boot, reused: (prev.reused || 0) + 1 };
+  session = s;
+  restoreBoot(s);
+  return fillSession(s, want, new Set([...prev.want].filter(p => !(prev.freed && prev.freed.has(p)))));
+}
+// MEMFS /game: this match's files. A reused instance keeps the files both matches use and drops the ones only the last
+// match used (a stage's file goes back to its boot placeholder)
+function fillSession(s, want, had) {
+  const M = s.M, rep = s.rep, FS = M.FS;
+  s.want = want || new Set(cache.keys());
+  const probe = new Set((man.plan && man.plan.probe) || []);
+  if (had) {
+    for (const p of had) if (!s.want.has(p)) {
+      try { if (probe.has(p)) FS.writeFile('/game/' + p, new Uint8Array(1)); else FS.unlink('/game/' + p); } catch (e) {}
+    }
+    for (const p of s.want) if (!had.has(p)) { const d = cache.get(p); if (d) fsPut(FS, '/game/' + p, d); }
+    FS.writeFile('/game/replay.rep', rep);
+    M.mbaaAssetMiss = p => { if (man.files[p] && !(s.want.has(p) && cache.has(p))) misses.add(p); };
+    trackOpens(s);
+    audioHooks(M, s);
+    if (!HASH) for (const p of s.want) if (/^bgm\/.*\.opus$/.test(p) && cache.has(p)) bgmDecode(p);
+    return s;
+  }
   FS.mkdir('/game');
   // files the game only checks exist (plan.probe: every stage .dat at boot) get a 1-byte placeholder; the real file
   // (the replay's stage, fetched by the plan) is written over it
   for (const p of (man.plan && man.plan.probe) || []) { mkdirs(FS, '/game/' + p); FS.writeFile('/game/' + p, new Uint8Array(1)); }
   // only this match's files (a playlist's cache also holds the next match's)
-  s.want = want || new Set(cache.keys());
-  for (const p of s.want) { const d = cache.get(p); if (d) { mkdirs(FS, '/game/' + p); FS.writeFile('/game/' + p, d); } }
+  for (const p of s.want) { const d = cache.get(p); if (d) fsPut(FS, '/game/' + p, d); }
   FS.writeFile('/game/replay.rep', rep);
   M.mbaaAssetMiss = p => { if (man.files[p] && !(s.want.has(p) && cache.has(p))) misses.add(p); };
+  trackOpens(s);
   audioHooks(M, s);
   if (!HASH) for (const p of s.want) if (/^bgm\/.*\.opus$/.test(p) && cache.has(p)) bgmDecode(p);
   return s;
@@ -380,12 +476,16 @@ async function play(rep, name, catchUp = 0, want = null) {
   const s = await newSession(rep, name, want);
   // stage animations on, except for native comparisons (?stageAnim=0, hash runs): the oracle's settings have them off
   call(s, 'viewer_stage_anim', Q.get('stageAnim') !== null ? +(Q.get('stageAnim') !== '0') : HASH ? 0 : 1);
-  if (!call(s, 'viewer_boot') || !call(s, 'viewer_load')) { window.__mbaaStarted = -1; status('start failed (see console)'); return; }
+  if (!call(s, 'viewer_boot')) { window.__mbaaStarted = -1; status('start failed (see console)'); return; }
+  if (!s.boot && (!HASH && !CAPTURE || Q.get('reuse') === '1') && !s.M._viewer_files_open()) s.boot = bootSnapshot(s.M);
+  if (!call(s, 'viewer_load')) { window.__mbaaStarted = -1; status('start failed (see console)'); return; }
   if (HASH) s.M.ccall('viewer_hash_enable', null, [], []);
   call(s, 'viewer_play', 0);
+  call(s, 'viewer_hud', ui.hud ? 1 : 0);
   window.__mbaa = { Module: s.M, man };
   if (!HASH || CAPTURE) timelineInit(s);
-  if (!HASH && !CAPTURE && !PERF && !catchUp) startScan(s);
+  // the pre-scan is a second copy of the game (~400 MB with its files): not in low-memory mode, where marks come as playback reaches them
+  if (!HASH && !CAPTURE && !PERF && !catchUp && !(LOWMEM && Q.get('scan') !== '1')) startScan(s);
   window.__mbaaStarted = 1;
   if (CAPTURE) { status(`loaded ${name} (capture mode)`); return; }
   if (HASH) return hashRun(s);
@@ -413,7 +513,7 @@ async function play(rep, name, catchUp = 0, want = null) {
 // a planned file was missing: fetch what the game asked for and replay to where this session was
 async function refetchAndReplay(s, frame) {
   call(s, 'viewer_stop');
-  const want = withSiblings(man, misses);
+  const want = withSiblings(man, new Set([...misses, ...(s.freed || [])]));  // every freed file: the replay reads them all
   console.warn(`asset plan missed ${want.size} files at frame ${frame}:`, [...want]);
   window.mbaaPlanMisses = (window.mbaaPlanMisses || []).concat([...want]);
   await fetchAll(man, want, 'fetching missed files');
@@ -423,6 +523,7 @@ function watch(s) {
   const t = setInterval(() => {
     if (s !== session) return clearInterval(t);
     if (misses.size) { clearInterval(t); refetchAndReplay(s, call(s, 'viewer_frame')); return; }
+    if (LOWMEM && s.freedAt < 0 && s.tl && s.tl.marks.length && !s.seeking && !call(s, 'viewer_files_open')) freeLoaded(s);
     if (call(s, 'viewer_ended') && !s.endShown) {
       s.endShown = true;
       status(`finished ${s.name} (${call(s, 'viewer_frame')} frames)`);
@@ -464,13 +565,15 @@ async function hashRun(s) {
   status(`state hash done: ${h.frames} frames in ${(h.ms / 1000).toFixed(1)} s`);
 }
 // ---- timeline: keyframes, seek, frame step ----
-const ui = { paused: false, speed: 1, boxes: false, inputs: false, skipIntro: false };
+const ui = { paused: false, speed: 1, boxes: false, inputs: false, skipIntro: false, hud: true, music: true };
+try { ui.hud = localStorage.getItem('mbaaHud') !== '0'; ui.music = localStorage.getItem('mbaaMusic') !== '0'; } catch (e) {}
 try { ui.skipIntro = localStorage.getItem('mbaaSkipIntro') === '1'; } catch (e) {}
 const tlMax = t => t.end !== null ? t.end : Math.max(t.simMax, t.est, 1);
 function uiApply(s) {
   call(s, 'viewer_pause', ui.paused || s.seeking ? 1 : 0);
   call(s, 'viewer_speed', ui.speed);
   call(s, 'viewer_boxes_enable', ui.boxes ? 1 : 0);
+  call(s, 'viewer_hud', ui.hud ? 1 : 0);
 }
 function timelineInit(s) {
   const M = s.M;
@@ -677,6 +780,9 @@ function incTick(s, f) {
         t.incDropped = (t.incDropped || 0) + 1;
       } else { c.kf.pending = false; c.kf.ms = c.ms; thin(t); }
       t.inc = null;
+      // every raw page has been packed or copied out: a commit buffer grown by a big commit (the one after the match
+      // loads copies ~60 MB) is not kept for the rest of the match
+      if (t.commitBuf && t.commitBuf.length > (4 << 20)) t.commitBuf = null;
     }
   }
   const dt = performance.now() - t0;
@@ -940,8 +1046,8 @@ function stepBy(n, pause = true) {
   return requestSeek(curFrame() + n);
 }
 window.__mbaaSession = () => session;  // tests
-window.mbaaViewer = { seek: requestSeek, step: stepBy, pause: setPaused, frame: () => session.M._viewer_frame(),
-                      tl: () => session.tl, ui, pl, cacheSize: () => cache.size, clip: () => session && session.clip,
+window.mbaaViewer = { startItem: i => startItem(i), seek: requestSeek, step: stepBy, pause: setPaused, frame: () => session.M._viewer_frame(),
+                      tl: () => session.tl, ui, pl, cacheSize: () => cache.size, cacheMap: () => cache, phone: PHONE, lowmem: LOWMEM, bgmMap: () => bgmDecoded, clip: () => session && session.clip,
                       stats: () => { const t = session.tl; return { kfs: t.kfs.length, kfFrames: t.kfs.map(k => k.frame),
                         kfMs: t.kfs.map(k => Math.round(k.ms * 10) / 10), kfFresh: t.kfs.map(k => k.fresh), bytes: t.bytes,
                         memTop: session.M._viewer_mem_top(), heap: session.M.HEAPU8.length, simMax: t.simMax, end: t.end,
@@ -1095,6 +1201,19 @@ function controls() {
   si.onchange = () => { ui.skipIntro = si.checked; try { localStorage.setItem('mbaaSkipIntro', si.checked ? '1' : '0'); } catch (e) {} si.blur(); };
   btn('back5', () => stepBy(-300, false)); btn('back1', () => stepBy(-1)); btn('fwd1', () => stepBy(1)); btn('fwd5', () => stepBy(300, false));
   document.getElementById('speed').onchange = e => { ui.speed = +e.target.value; if (session) call(session, 'viewer_speed', ui.speed); e.target.blur(); };
+  const hudEl = document.getElementById('hud'), musicEl = document.getElementById('music');
+  hudEl.checked = ui.hud; musicEl.checked = ui.music;
+  hudEl.onchange = () => {
+    ui.hud = hudEl.checked; hudEl.blur();
+    try { localStorage.setItem('mbaaHud', ui.hud ? '1' : '0'); } catch (e) {}
+    const s = session;
+    if (s) { call(s, 'viewer_hud', ui.hud ? 1 : 0); if (ui.paused && s.tl) requestSeek(curFrame()); }  // paused: draw the frame again
+  };
+  musicEl.onchange = () => {
+    ui.music = musicEl.checked; musicEl.blur();
+    try { localStorage.setItem('mbaaMusic', ui.music ? '1' : '0'); } catch (e) {}
+    if (musicGain) musicGain.gain.value = ui.music ? 1 : 0;
+  };
   for (const key of ['boxes', 'inputs']) {
     const el = document.getElementById(key);
     el.onchange = () => {
@@ -1124,6 +1243,8 @@ function controls() {
     else if (k === 'l' || k === 'L') toggleLoop();
     else if (k === 'e' || k === 'E') exportVideo();
     else if (k === 'm' || k === 'M') toggleMute();
+    else if (k === 'u' || k === 'U') flip('hud');
+    else if (k === 'b' || k === 'B') flip('music');
     else if (k === '?') toggleHelp();
     else if (k === 'n' || k === 'N') startItem(pl.i + 1);
     else if (k === 'p' || k === 'P') startItem(pl.i - 1);
@@ -1169,8 +1290,27 @@ async function prefetch(it, cur) {
   try {
     const nextWant = wantFor(new Uint8Array(await (await itemFile(it)).arrayBuffer()));
     for (const p of [...cache.keys()]) if (!cur.has(p) && !nextWant.has(p)) cache.delete(p);  // the rest stays in Cache Storage
-    await fetchAll(man, nextWant, 'next match', true);
+    for (const p of [...bgmDecoded.keys()]) if (!cur.has(p) && !nextWant.has(p)) bgmDecoded.delete(p);  // ~70 MB a track decoded
+    if (LOWMEM) await warmDisk(man, nextWant); else await fetchAll(man, nextWant, 'next match', true);
   } catch (e) { console.warn('prefetch failed:', e); }
+}
+// low-memory prefetch: the next match's objects into Cache Storage only (fetchAll reads them from there at the switch)
+async function warmDisk(man, paths) {
+  await objCacheReady;
+  const queue = [...paths].filter(p => !cache.has(p) && man.files[p]);
+  async function worker() {
+    for (let p; (p = queue.shift());) {
+      const f = man.files[p];
+      try {
+        if (f.plain) { await (await fetch(f.plain)).arrayBuffer(); continue; }  // the HTTP cache keeps it
+        const url = `${BUNDLE}o/${f.o.slice(0, 2)}/${f.o}`;
+        if (!objCache || await objCache.match(url)) continue;
+        const r = await fetch(url);
+        if (r.ok) await objCache.put(url, r);
+      } catch (e) {}
+    }
+  }
+  await Promise.all(Array.from({ length: 4 }, worker));
 }
 // a playlist item's replay: a local file, or fetched from the store the first time it is needed
 async function itemFile(it) {
@@ -1180,6 +1320,12 @@ async function itemFile(it) {
 async function startItem(i) {
   if (i < 0 || i >= pl.items.length) return;
   pl.i = i;
+  if (Q.get('l')) {  // a playlist link remembers where it is (a reload, or the browser killing the tab, resumes there)
+    const u = new URL(location.href);
+    if (i) u.searchParams.set('i', i + 1); else u.searchParams.delete('i');
+    for (const k of ['t', 'e', 'loop']) u.searchParams.delete(k);
+    history.replaceState(null, '', u);
+  }
   window.__mbaaRepUrl = pl.items[i].url || null;
   renderPlaylist();
   try { return start(await itemFile(pl.items[i])); } catch (e) { status(`could not load ${pl.items[i].name}: ${e.message}`); }
@@ -1466,6 +1612,7 @@ async function renderExportAudio(s, ev, pre, c) {
     else if (e === 'start') { cur = { path: a[0], loop: a[1], loopPos: a[2], k }; vp = [a[3], a[4]]; }
     else if (e === 'param') vp = [a[0], a[1]];
   }
+  if (!ui.music) cur = null;  // music off: the video has none either
   if (vp) setVp(bgmV, vp[0], vp[1], 0);
   if (cur) await bgmStart(cur.path, cur.loop, cur.loopPos, 0, Math.max(0, pre - cur.k - 1) / 60);
   for (const [k, h, ...a] of ev) {
@@ -1476,7 +1623,7 @@ async function renderExportAudio(s, ev, pre, c) {
       if (buf) { const n = oc.createBufferSource(); n.buffer = buf; n.connect(v.g); n.start(t); v.src = n; }
     } else if (h === 'mbaaVoiceParam') { const [ch, vol, pan] = a; setVp(ch === -1 ? bgmV : voice(ch), vol, pan, t); }
     else if (h === 'mbaaVoiceStop') { if (a[0] !== -1 && voices.has(a[0])) cutAt(voices.get(a[0]), t); }
-    else if (h === 'mbaaBgmStart') { const [path, loop, loopPos, vol, pan] = a; setVp(bgmV, vol, pan, t); await bgmStart(path, loop, loopPos, t, 0); }
+    else if (h === 'mbaaBgmStart') { if (!ui.music) continue; const [path, loop, loopPos, vol, pan] = a; setVp(bgmV, vol, pan, t); await bgmStart(path, loop, loopPos, t, 0); }
     else if (h === 'mbaaBgmStop') cutAt(bgmV, t);
   }
   return oc.startRendering();
@@ -1622,7 +1769,7 @@ async function main() {
       const r = await fetch(`${REPLAY_STORE}/l/${lq}`);
       if (!r.ok) throw new Error(`HTTP ${r.status}`);
       pl.items = (await r.json()).items.map(it => ({ id: it.id, name: it.name, url: `${REPLAY_STORE}/s/${it.id}` }));
-      return startItem(0);
+      return startItem(Math.min(pl.items.length, Math.max(1, +(Q.get('i') || 1))) - 1);
     } catch (e) { status(`could not load the playlist: ${e.message}`); return; }
   }
   if (autoload) { window.__mbaaRepUrl = autoload; start(new File([await (await fetch(autoload)).arrayBuffer()], autoload)); }

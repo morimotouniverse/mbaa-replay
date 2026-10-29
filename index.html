@@ -143,6 +143,8 @@
       <label class="chip" title="skip the VS intro when a replay starts"><input id="skipintro" type="checkbox">skip intro</label>
       <label class="chip" title="hitbox overlay (H)"><input id="boxes" type="checkbox">hitboxes</label>
       <label class="chip" title="input display (I)"><input id="inputs" type="checkbox">inputs</label>
+      <label class="chip" title="the game's HUD: health, meter, timer, combo counters (U)"><input id="hud" type="checkbox" checked>HUD</label>
+      <label class="chip" title="music (B); sound effects stay"><input id="music" type="checkbox" checked>music</label>
     </div>
     <div class="row">
       <select id="scale" title="picture size: auto = largest whole multiple that fits"><option value="auto">size auto</option><option value="1">size 1x</option><option value="2">size 2x</option><option value="3">size 3x</option><option value="4">size 4x</option><option value="fit">size fit</option></select>
@@ -175,7 +177,8 @@
       <tr><td><kbd>C</kbd></td><td>copy a link to this moment (to the clip when one is set)</td></tr>
       <tr><td><kbd>N</kbd> <kbd>P</kbd></td><td>next / previous replay in the queue</td></tr>
       <tr><td><kbd>F</kbd></td><td>fullscreen</td></tr>
-      <tr><td><kbd>H</kbd> <kbd>I</kbd> <kbd>M</kbd></td><td>hitboxes, inputs, mute</td></tr>
+      <tr><td><kbd>H</kbd> <kbd>I</kbd> <kbd>U</kbd></td><td>hitboxes, inputs, HUD</td></tr>
+      <tr><td><kbd>B</kbd> <kbd>M</kbd></td><td>music on / off, mute everything</td></tr>
       <tr><td>hitboxes</td><td><span style="color:#30e030">hurt</span> <span style="color:#ff2828">attack</span> <span style="color:#ffe020">clash</span> <span style="color:#40a0ff">shield</span> <span style="color:#d8d8d8">collision</span> <span style="color:#c878e6">special</span></td></tr>
       <tr><td>queue</td><td>picked or dropped replays are added; drag to reorder</td></tr>
     </table>
@@ -183,7 +186,7 @@
   </div>
 </div>
 </div>
-<script src="mbaa.js?v=972163a63990"></script>
-<script src="viewer.js?v=d1ef304dbc21"></script>
+<script src="mbaa.js?v=0c22e86647b0"></script>
+<script src="viewer.js?v=146cee9e8c45"></script>
 </body>
 </html>
