@@ -1152,20 +1152,9 @@ async function startItem(i) {
   renderPlaylist();
   try { return start(await itemFile(pl.items[i])); } catch (e) { status(`could not load ${pl.items[i].name}: ${e.message}`); }
 }
-// every .rep among dropped / picked files and folders, in name order (replay names carry their date)
-async function repFiles(dt) {
-  const out = [];
-  const walk = async entry => {
-    if (entry.isFile) { if (/\.rep$/i.test(entry.name)) out.push(await new Promise((res, rej) => entry.file(res, rej))); }
-    else if (entry.isDirectory) {
-      const rd = entry.createReader();
-      for (let batch; (batch = await new Promise((res, rej) => rd.readEntries(res, rej))).length;) for (const e of batch) await walk(e);
-    }
-  };
-  const entries = dt && dt.items ? [...dt.items].map(it => it.webkitGetAsEntry && it.webkitGetAsEntry()).filter(Boolean) : [];
-  if (entries.length) for (const e of entries) await walk(e);
-  else for (const f of (dt.files || dt)) if (/\.rep$/i.test(f.name) || (dt.files || dt).length === 1) out.push(f);
-  return out.sort((a, b) => a.name.localeCompare(b.name));
+// the .rep files among dropped / picked files, in name order (replay names carry their date)
+function repFiles(files) {
+  return [...files].filter(f => /\.rep$/i.test(f.name) || files.length === 1).sort((a, b) => a.name.localeCompare(b.name));
 }
 function loadPlaylist(files) {
   if (!files.length) { status('no .rep files there'); return; }
@@ -1286,13 +1275,13 @@ async function main() {
     if (!man.plan) await fetchAll(man, Object.keys(man.files), 'assets');  // a bundle without a plan: everything
   }
   status('ready: drop a .rep file');
-  // one or many replays (a playlist), from the file picker, the folder picker or a drop of files / folders
-  for (const id of ['rep', 'repdir']) document.getElementById(id).onchange = async e => {
+  // one or many replays (a playlist), from the file picker or a drop
+  document.getElementById('rep').onchange = e => {
     e.target.blur();  // keys go to the viewer
-    loadPlaylist(await repFiles([...e.target.files]));
+    loadPlaylist(repFiles(e.target.files));
   };
   document.body.ondragover = e => e.preventDefault();
-  document.body.ondrop = async e => { e.preventDefault(); loadPlaylist(await repFiles(e.dataTransfer)); };
+  document.body.ondrop = e => { e.preventDefault(); loadPlaylist(repFiles(e.dataTransfer.files)); };
   controls();
   for (const key of ['boxes', 'inputs']) if (Q.get(key) === '1') { const el = document.getElementById(key); el.checked = true; el.onchange(); }
   // ?r=<id>: a shared replay in the replay store (tools/web/replay_worker.js); ?rep=<url>: any replay URL
