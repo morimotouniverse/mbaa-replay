@@ -39,6 +39,7 @@ const PHONE = matchMedia('(pointer: coarse)').matches && Math.min(screen.width, 
 // low-memory mode (phones; ?lowmem=1 / 0 forces it): no pre-scan, a small keyframe budget, a match's files freed once
 // it has loaded them (freeLoaded) and the next match prefetched to the disk cache only
 const LOWMEM = Q.get('lowmem') !== null ? Q.get('lowmem') === '1' : PHONE;
+const KZ = Q.get('kz') === '1';  // keyframe pages zlib-compressed: opt-in (?kz=1) until it passes seek_hash; Chrome crashed twice with it on
 const KF_BUDGET = +(Q.get('kfmb') || (LOWMEM ? 40 : 450)) * 1e6;
 
 const hex = h => new Uint8Array(h.match(/../g).map(x => parseInt(x, 16)));
@@ -180,7 +181,7 @@ function mkdirs(FS, path) {
 function trackOpens(s) {
   const M = s.M, FS = M.FS;
   s.opened = new Set(); s.freed = new Set(); s.freedAt = -1;
-  M.mbaaOpened = p => { if (session === s) s.opened.add(p); };
+  M.mbaaOpened = p => { if (session === s) { s.opened.add(p); if (s.freed.has(p)) misses.add(p); } };
   M.mbaaOpenFail = p => { if (session === s && s.freed.has(p)) misses.add(p); };
   if (!FS.__tracked) wrapOpen(M);
 }
@@ -199,12 +200,14 @@ function wrapOpen(M) {
 }
 // Low-memory mode, once a match has loaded (round 1 on, no game file open): the files it has read are dropped from
 // MEMFS and the cache (the game keeps what it read in its own memory; only the BGM, played from the cache by the page,
-// and the stage probes stay). Files it has not opened yet (the result screen's) stay.
+// stays). A stage probe the game has read (the replay's stage .dat, 4-12 MB) goes back to its 1-byte placeholder; an
+// open of it after that counts as a miss, as a failed open of any other freed file does. Files it has not opened yet
+// (the result screen's) stay.
 function freeLoaded(s) {
   const probe = new Set((man.plan && man.plan.probe) || []);
-  for (const p of s.opened) {
-    if (s.freed.has(p) || probe.has(p) || /^bgm\//.test(p) || !s.want.has(p)) continue;
-    try { s.M.FS.unlink('/game/' + p); } catch (e) { continue; }
+  for (const p of new Set([...s.opened, ...(s.M.mbaaBootOpened || [])])) {
+    if (s.freed.has(p) || /^bgm\//.test(p) || !s.want.has(p)) continue;
+    try { if (probe.has(p)) s.M.FS.writeFile('/game/' + p, new Uint8Array(1)); else s.M.FS.unlink('/game/' + p); } catch (e) { continue; }
     cache.delete(p); s.freed.add(p);
   }
   s.freedAt = s.M._viewer_frame();
@@ -419,6 +422,7 @@ function freshCanvas() {
 // instance (the allocator takes fresh sbrk memory as zero); the restore's new GL generation deletes the last match's
 // textures.
 function bootSnapshot(M) {
+  kzM = M;
   const top = M._viewer_mem_top(), W = PAGE >> 2, H = new Int32Array(M.HEAPU8.buffer), n = Math.ceil(top / PAGE);
   const pages = new Array(n);
   let bytes = 0;
@@ -497,7 +501,10 @@ async function play(rep, name, catchUp = 0, want = null) {
   if (!call(s, 'viewer_boot')) { window.__mbaaStarted = -1; status('start failed (see console)'); return; }
   // boot textures to the GPU store first: the snapshot (and every keyframe) then holds no pixels
   if (!s.reused) s.M._viewer_seal_boot();
-  if (!s.boot && (!HASH && !CAPTURE || Q.get('reuse') === '1') && !s.M._viewer_files_open()) s.boot = bootSnapshot(s.M);
+  if (!s.boot && (!HASH && !CAPTURE || Q.get('reuse') === '1') && !s.M._viewer_files_open()) {
+    s.boot = bootSnapshot(s.M);
+    s.M.mbaaBootOpened = new Set(s.opened);  // read before the snapshot: a reused instance's later matches never open them
+  }
   if (!call(s, 'viewer_load')) { window.__mbaaStarted = -1; status('start failed (see console)'); return; }
   if (HASH) s.M.ccall('viewer_hash_enable', null, [], []);
   call(s, 'viewer_play', 0);
@@ -598,6 +605,7 @@ function uiApply(s) {
 }
 function timelineInit(s) {
   const M = s.M;
+  kzM = M;
   const t = s.tl = { kfs: [], simMax: 0, end: null, marks: [], bytes: 0, lastKf: -1, seekMs: [],
                      want: null, running: false, round: -1, scene: -1, est: repEstimate(s.rep) };
   M.mbaaFrame = f => {
@@ -654,9 +662,34 @@ const pageRef = (t, p, d) => {
 };
 // A stored page: zero words packed out (most changed pages are mostly zero): m = bitmask of the nonzero words, v = those
 // words in order; a page with few zeros is kept raw (r).
+// Pages with content are stored zlib-compressed (z) when the module that made them can (viewer_kz_*: ~4x on game
+// memory; zlib works in a scratch area keyframes exclude); kzM is the current instance. A zero page stays {m, v: []} (the keyframe code treats those as free heap).
+let kzM = null;
+function kzPack(H, o) {
+  const M = kzM;
+  if (!M || !M._viewer_kz_pack || PAGE !== 16384) return null;
+  const B = M._viewer_kz_base(), U = M.HEAPU8, direct = H.buffer === U.buffer;
+  if (direct && o * 4 + 16384 > B && o * 4 < B + M._viewer_kz_size()) return null;  // the scratch's own pages (the boot snapshot covers them)
+  if (!direct) new Int32Array(U.buffer, B, 4096).set(H.subarray(o, o + 4096));
+  const n = M._viewer_kz_pack(direct ? o * 4 : B);
+  if (!n) return null;
+  return M.HEAPU8.slice(B + 20480, B + 20480 + n);
+}
+function kzUnpack(z, H, o) {
+  const M = kzM, U = M.HEAPU8, B = M._viewer_kz_base();
+  if (H.buffer !== U.buffer) throw new Error('kz: unpack outside the instance memory');
+  U.set(z, B + 20480);
+  // page 0: zlib takes a null output pointer as an error, so it goes through the scratch
+  const ok = o === 0 ? M._viewer_kz_unpack(B, z.length) && (U.copyWithin(0, B, B + 16384), 1) : M._viewer_kz_unpack(o * 4, z.length);
+  if (!ok) throw new Error(`kz: page at ${o * 4} (${z.length} bytes) did not decompress`);
+}
 function packPage(H, o, W) {
   let nz = 0;
   for (let j = 0; j < W; j++) if (H[o + j] !== 0) nz++;
+  if (nz > 0 && KZ) {
+    const z = kzPack(H, o);
+    if (z && z.length < Math.min(W * 4, (W >> 5) * 4 + nz * 4)) return { z, bytes: z.length };
+  }
   if (nz > W * 0.7) return { r: H.slice(o, o + W), bytes: W * 4 };
   const m = new Int32Array(W >> 5), v = new Int32Array(nz);
   for (let j = 0, k = 0; j < W; j++) { const x = H[o + j]; if (x !== 0) { m[j >> 5] |= 1 << (j & 31); v[k++] = x; } }
@@ -667,12 +700,13 @@ function packBatch(t, list) {
   const W = PAGE >> 2, M32 = W >> 5;
   const packed = list.map(q => packPage(q.r, 0, W));
   let words = 0;
-  for (const pk of packed) if (!pk.r) words += M32 + pk.v.length;
+  for (const pk of packed) if (!pk.r && !pk.z) words += M32 + pk.v.length;
   const buf = new Int32Array(words);
   let o = 0;
   list.forEach((q, k) => {
     const pk = packed[k];
     if (pk.r) { q.r = q.r.slice(); return; }  // kept raw: its own copy (the commit buffer can go)
+    if (pk.z) { q.z = pk.z; t.bytes += pk.bytes - q.bytes; q.bytes = pk.bytes; delete q.r; return; }
     buf.set(pk.m, o); q.m = buf.subarray(o, o + M32); o += M32;
     buf.set(pk.v, o); q.v = buf.subarray(o, o + pk.v.length); o += pk.v.length;
     t.bytes += pk.bytes - q.bytes; q.bytes = pk.bytes; delete q.r;
@@ -680,6 +714,7 @@ function packBatch(t, list) {
 }
 function unpackPage(q, H, o, W) {
   if (q.r) { H.set(q.r, o); return; }
+  if (q.z) { kzUnpack(q.z, H, o); return; }
   const m = q.m, v = q.v;
   let k = 0;
   for (let w = 0; w < m.length; w++) {
@@ -792,7 +827,7 @@ function incTick(s, f) {
       for (const i of part) if (!sameHash(hs, i, c.base.pages[i])) {
         c.bad = true; t.hotAt.set(i, t.kfs.length);
         const q = c.base.pages[i];
-        t.incStat.dropPages.push([i * PAGE, q.r ? 'raw' : q.v.length]);
+        t.incStat.dropPages.push([i * PAGE, q.r ? 'raw' : q.z ? 'z' : q.v.length]);
       }
     }
     c.cur = n;
@@ -1308,6 +1343,7 @@ async function start(file) {
   const next = pl.items[pl.i + 1];
   await play(rep, file.name, 0, want);
   if (want && next) prefetch(next, want);
+  else if (want) for (const p of [...cache.keys()]) if (!want.has(p)) cache.delete(p);  // the last match: the previous one's files go
 }
 // ---- playlist: several replays played back to back (each from round 1); the next one's files load during play ----
 async function prefetch(it, cur) {
