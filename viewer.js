@@ -60,6 +60,31 @@ function repKeys(rep) {
   if (magic !== 'MBAAReplayFile') throw new Error('not an MBAACC replay (.rep)');
   return { stage: i(0x28), p1: [i(0x40), i(0x44), i(0x48)], p2: [i(0x50), i(0x54), i(0x58)] };
 }
+// Match length estimate for the seek bar before the replay has been played to its end: the rounds' recorded input
+// (each round: 4 tracks of (input, frames) runs; a round lasts its longest track) plus the VS intro, round intros/outros
+// and the result screen, which take no input. Freeze frames take none either, so this is low by up to a few thousand
+// frames on some tapes; the bar switches to the exact end once the replay reaches it.
+function repEstimate(rep) {
+  try {
+    const v = new DataView(rep.buffer, rep.byteOffset, rep.byteLength), u = o => v.getUint32(o, true);
+    let o = 0x5C, sum = 0;
+    const n = u(o); o += 4;
+    if (n > 16) return 0;
+    for (let r = 0; r < n; r++) {
+      o += 0x80 + 12;
+      let longest = 0;
+      for (let t = 0; t < 4; t++) {
+        const c = u(o); o += 4;
+        let f = 0;
+        for (let i = 0; i < c; i++) f += rep[o + 6 * i];
+        o += 6 * c; longest = Math.max(longest, f);
+      }
+      o += 4 + 4 * u(o) + 0x90;
+      sum += longest;
+    }
+    return sum + 1200 + 450 * n;
+  } catch (e) { return 0; }
+}
 const fmt = (t, c, m) => t.replace(/\{(\w):02d\}/g, (_, k) => String(k === 'c' ? c : m).padStart(2, '0'))
                           .replace(/\{(\w)\}/g, (_, k) => String(k === 'c' ? c : m));
 function planFiles(man, keys) {
@@ -89,6 +114,7 @@ function withSiblings(man, paths) {
 // ---- files: fetched once per page, written into every session's MEMFS ----
 const cache = new Map();  // game path -> Uint8Array
 async function fetchAll(man, paths, label) {
+  const net0 = net.bytes;  // the counter shows what came over the network (objects are deflated; the game sees ~4x that)
   const queue = [...paths].filter(p => !cache.has(p));
   let done = 0, bytes = 0;
   const n = queue.length;
@@ -102,8 +128,7 @@ async function fetchAll(man, paths, label) {
         data = new Uint8Array(await r.arrayBuffer());
       } else data = await fetchObject(f.o);
       cache.set(p, data);
-      bytes += data.length;
-      if (++done % 10 === 0 || done === n) status(`${label} ${done}/${n} (${(bytes / 1e6).toFixed(1)} MB)`);
+      if (++done % 10 === 0 || done === n) status(`${label} ${done}/${n} (${((net.bytes - net0) / 1e6).toFixed(1)} MB downloaded)`);
     }
   }
   await Promise.all(Array.from({ length: 16 }, worker));
@@ -314,6 +339,8 @@ async function play(rep, name, catchUp = 0) {
   }
   if (PERF) call(s, 'viewer_perf', 1);
   uiApply(s);
+  if (ui.skipIntro && !catchUp && !PERF && s.tl) await skipIntro(s);
+  if (s !== session) return;
   call(s, 'viewer_run');
   status(`playing ${name}`);
   watch(s);
@@ -364,7 +391,9 @@ async function hashRun(s) {
   status(`state hash done: ${h.frames} frames in ${(h.ms / 1000).toFixed(1)} s`);
 }
 // ---- timeline: keyframes, seek, frame step ----
-const ui = { paused: false, speed: 1, boxes: false, inputs: false };
+const ui = { paused: false, speed: 1, boxes: false, inputs: false, skipIntro: false };
+try { ui.skipIntro = localStorage.getItem('mbaaSkipIntro') === '1'; } catch (e) {}
+const tlMax = t => t.end !== null ? t.end : Math.max(t.simMax, t.est, 1);
 function uiApply(s) {
   call(s, 'viewer_pause', ui.paused || s.seeking ? 1 : 0);
   call(s, 'viewer_speed', ui.speed);
@@ -373,7 +402,7 @@ function uiApply(s) {
 function timelineInit(s) {
   const M = s.M;
   const t = s.tl = { kfs: [], simMax: 0, end: null, marks: [], bytes: 0, lastKf: -1, seekMs: [],
-                     want: null, running: false, round: -1, scene: -1 };
+                     want: null, running: false, round: -1, scene: -1, est: repEstimate(s.rep) };
   M.mbaaFrame = f => {
     if (f > t.simMax) {
       t.simMax = f;
@@ -671,6 +700,32 @@ async function seekTo(s, T) {
   overlayDirty = true;
   if (!s.endShown) status(`${ui.paused ? 'paused' : 'playing'} ${s.name}`);
 }
+// Skip the VS intro: simulate (not drawn, silent) up to the first battle frame, then draw from there. The intro is
+// still simulated (the match state depends on it); only its picture and sound are skipped.
+const SCENE_VS = 8;  // the VS screen scene (g_CurrentSceneId 0x54EEE8)
+const inIntro = s => !!(s && s.tl && !s.tl.marks.length && !s.seeking && s.M.HEAP32[0x54EEE8 >> 2] === SCENE_VS);
+async function skipIntro(s) {
+  const t = s.tl, M = s.M;
+  if (!t || t.marks.length || M._viewer_frame() > 2000) return;
+  s.seeking = true; s.mute = true;
+  s.stopSes(); s.bgmHalt();
+  uiApply(s);
+  call(s, 'viewer_suppress', 1);
+  status('skipping intro');
+  let n = 0;
+  while (!t.marks.length && session === s && !call(s, 'viewer_ended') && !misses.size) {
+    call(s, 'viewer_step', 1);
+    if (++n % 240 === 0) await new Promise(r => setTimeout(r, 0));
+  }
+  call(s, 'viewer_suppress', 0);
+  if (session !== s) return;
+  if (!misses.size) call(s, 'viewer_step', 2);  // drawn: render-target feedback effects read the previous frame
+  s.seeking = false; s.mute = ui.paused;
+  uiApply(s);
+  if (!ui.paused) s.bgmSync(M._viewer_frame());
+  overlayDirty = true;
+  status(`${ui.paused ? 'paused' : 'playing'} ${s.name}`);
+}
 function setPaused(p) {
   ui.paused = p;
   document.getElementById('pause').textContent = p ? 'play' : 'pause';
@@ -773,7 +828,7 @@ let seekDragging = false, marksKey = '';
 function uiLoop() {
   const s = session;
   if (s && s.tl) {
-    const t = s.tl, f = s.M._viewer_frame(), max = t.end !== null ? t.end : Math.max(t.simMax, 1);
+    const t = s.tl, f = s.M._viewer_frame(), max = tlMax(t);
     const seek = document.getElementById('seek');
     if (+seek.max !== max) seek.max = max;
     if (!seekDragging) seek.value = t.want !== null ? t.want : f;
@@ -808,6 +863,11 @@ function controls() {
   seek.addEventListener('input', () => requestSeek(+seek.value));
   const btn = (id, fn) => { document.getElementById(id).onclick = e => { fn(); e.currentTarget.blur(); }; };
   btn('pause', () => setPaused(!ui.paused));
+  // a click / tap on the picture during the VS screen skips it, as a button press does in the game
+  document.getElementById('overlay').parentElement.addEventListener('pointerdown', () => { if (inIntro(session)) skipIntro(session); });
+  const si = document.getElementById('skipintro');
+  si.checked = ui.skipIntro;
+  si.onchange = () => { ui.skipIntro = si.checked; try { localStorage.setItem('mbaaSkipIntro', si.checked ? '1' : '0'); } catch (e) {} si.blur(); };
   btn('back5', () => stepBy(-300, false)); btn('back1', () => stepBy(-1)); btn('fwd1', () => stepBy(1)); btn('fwd5', () => stepBy(300, false));
   document.getElementById('speed').onchange = e => { ui.speed = +e.target.value; if (session) call(session, 'viewer_speed', ui.speed); e.target.blur(); };
   for (const key of ['boxes', 'inputs']) {
@@ -823,13 +883,13 @@ function controls() {
     if (e.ctrlKey || e.metaKey || e.altKey) return;
     const k = e.key, sec = e.shiftKey ? 300 : 60;
     const flip = id => { const el = document.getElementById(id); el.checked = !el.checked; el.onchange(); };
-    if (k === ' ') setPaused(!ui.paused);
+    if (k === ' ') { if (inIntro(session)) skipIntro(session); else setPaused(!ui.paused); }
     else if (k === ',' || k === '<') stepBy(-1);
     else if (k === '.' || k === '>') stepBy(1);
     else if (k === 'ArrowLeft') stepBy(-sec, false);
     else if (k === 'ArrowRight') stepBy(sec, false);
     else if (k === 'Home') requestSeek(1);
-    else if (k === 'End' && session && session.tl) requestSeek(session.tl.end !== null ? session.tl.end : session.tl.simMax);
+    else if (k === 'End' && session && session.tl) requestSeek(tlMax(session.tl));
     else if (k === 'h' || k === 'H') flip('boxes');
     else if (k === 'i' || k === 'I') flip('inputs');
     else return;

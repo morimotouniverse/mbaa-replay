@@ -42,6 +42,7 @@
   <button id="fwd5" title="forward 5 s (Shift+Right)">&raquo;</button>
   <span id="fc">0 / 0</span>
   <select id="speed" title="speed"><option value="1">1x</option><option value="2">2x</option><option value="4">4x</option></select>
+  <label title="skip the VS intro when a replay starts"><input id="skipintro" type="checkbox"> auto-skip intro</label>
   <label title="hitbox overlay (H)"><input id="boxes" type="checkbox"> boxes</label>
   <label title="input display (I)"><input id="inputs" type="checkbox"> inputs</label>
   <label>vol <input id="vol" type="range" min="0" max="100" value="50"></label>
@@ -51,7 +52,7 @@
   <input id="rep" type="file" accept=".rep">
   <span id="status">loading…</span>
 </div>
-<div class="help"><kbd>Space</kbd> pause · <kbd>,</kbd> <kbd>.</kbd> frame back / forward · <kbd>&larr;</kbd> <kbd>&rarr;</kbd> 1 s
+<div class="help"><kbd>Space</kbd> / tap skips the VS intro, then pauses · <kbd>,</kbd> <kbd>.</kbd> frame back / forward · <kbd>&larr;</kbd> <kbd>&rarr;</kbd> 1 s
   (<kbd>Shift</kbd> 5 s) · <kbd>Home</kbd> <kbd>End</kbd> · <kbd>H</kbd> boxes · <kbd>I</kbd> inputs ·
   boxes: <span style="color:#30e030">hurt</span> <span style="color:#ff2828">attack</span>
   <span style="color:#ffe020">clash</span> <span style="color:#40a0ff">shield</span> <span style="color:#d8d8d8">collision</span>
