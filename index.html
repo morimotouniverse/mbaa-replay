@@ -12,7 +12,7 @@
   canvas#canvas { display: block; width: 100%; aspect-ratio: 4 / 3; image-rendering: pixelated; background: #000; }
   #overlay { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; }
   .timeline { width: min(100%, 960px); display: flex; flex-direction: column; gap: 0; }
-  #marks { width: 100%; height: 12px; display: block; }
+  #marks { width: 100%; height: 14px; display: block; cursor: pointer; }
   #seek { width: 100%; margin: 0; padding: 0; accent-color: var(--accent); }
   .bar { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; justify-content: center; width: min(100%, 960px); }
   #status { color: var(--muted); }
@@ -41,6 +41,8 @@
   <button id="fwd1" title="forward one frame (.)">&rsaquo;</button>
   <button id="fwd5" title="forward 5 s (Shift+Right)">&raquo;</button>
   <span id="fc">0 / 0</span>
+  <button id="prevr" title="previous round ([)">&#9198; round</button>
+  <button id="nextr" title="next round (])">round &#9197;</button>
   <button id="copyt" title="copy a link / timestamp to this frame (C)">copy time</button>
   <select id="speed" title="speed"><option value="1">1x</option><option value="2">2x</option><option value="4">4x</option></select>
   <label title="skip the VS intro when a replay starts"><input id="skipintro" type="checkbox"> auto-skip intro</label>
@@ -54,11 +56,11 @@
   <span id="status">loading…</span>
 </div>
 <div class="help"><kbd>Space</kbd> / tap skips the VS intro, then pauses · <kbd>,</kbd> <kbd>.</kbd> frame back / forward · <kbd>&larr;</kbd> <kbd>&rarr;</kbd> 1 s
-  (<kbd>Shift</kbd> 5 s) · <kbd>Home</kbd> <kbd>End</kbd> · <kbd>C</kbd> copy timestamp · <kbd>H</kbd> boxes · <kbd>I</kbd> inputs ·
+  (<kbd>Shift</kbd> 5 s) · <kbd>Home</kbd> <kbd>End</kbd> · <kbd>[</kbd> <kbd>]</kbd> previous / next round · <kbd>C</kbd> copy timestamp · <kbd>H</kbd> boxes · <kbd>I</kbd> inputs ·
   boxes: <span style="color:#30e030">hurt</span> <span style="color:#ff2828">attack</span>
   <span style="color:#ffe020">clash</span> <span style="color:#40a0ff">shield</span> <span style="color:#d8d8d8">collision</span>
   <span style="color:#c878e6">special</span></div>
 <script src="mbaa.js?v=20ff9c8cd2e8"></script>
-<script src="viewer.js?v=704d98db71ee"></script>
+<script src="viewer.js?v=8b3f07d47e71"></script>
 </body>
 </html>

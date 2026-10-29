@@ -342,6 +342,7 @@ async function play(rep, name, catchUp = 0) {
   call(s, 'viewer_play', 0);
   window.__mbaa = { Module: s.M, man };
   if (!HASH || CAPTURE) timelineInit(s);
+  if (!HASH && !CAPTURE && !PERF && !catchUp) startScan(s);
   window.__mbaaStarted = 1;
   if (CAPTURE) { status(`loaded ${name} (capture mode)`); return; }
   if (HASH) return hashRun(s);
@@ -423,7 +424,9 @@ function timelineInit(s) {
     if (f > t.simMax) {
       t.simMax = f;
       const scene = M.HEAP32[0x54EEE8 >> 2], round = M.HEAP32[0x77BFA4 >> 2];
-      if (scene === 1 && (t.scene !== 1 || round !== t.round)) t.marks.push([f, round]);
+      if (scene === 1 && (t.scene !== 1 || round !== t.round) && !t.marks.some(m => m[0] === f)) {
+        t.marks.push([f, round]); t.marks.sort((a, b) => a[0] - b[0]);
+      }
       t.scene = scene; t.round = round;
       if (t.end === null && M._viewer_ended()) t.end = f;
     }
@@ -431,6 +434,38 @@ function timelineInit(s) {
     else if (f >= t.lastKf + KF_EVERY && f >= t.simMax && !M._viewer_files_open()) keyframe(s, f);
   };
   if (!M._viewer_files_open()) keyframe(s, M._viewer_frame());
+}
+// Background pre-scan (web/shell/scan_worker.js): a headless copy of the game plays the replay ahead in a worker and
+// reports the round starts and the exact end (same rules as above), so the timeline has them before playback does.
+function startScan(s) {
+  if (typeof Worker === 'undefined') return;
+  const v = ((document.querySelector('script[src^="mbaa.js"]') || {}).src || '').split('?')[1] || '';
+  const w = new Worker('scan_worker.js' + (v ? `?${v}` : ''));
+  s.scan = w;
+  window.addEventListener('mbaa-session-end', () => w.terminate(), { once: true });
+  w.onmessage = e => {
+    const m = e.data, t = s.tl;
+    if (m.error) { console.warn('pre-scan:', m.error); w.terminate(); return; }
+    t.scanFrame = m.frame;
+    for (const mk of m.marks) if (!t.marks.some(x => x[0] === mk[0])) t.marks.push(mk);
+    t.marks.sort((a, b) => a[0] - b[0]);
+    if (m.done) {
+      if (m.end !== null && t.end === null) t.end = m.end;
+      t.scanMs = m.ms;
+      w.terminate();
+    }
+  };
+  w.onerror = e => { console.warn('pre-scan failed:', e.message); w.terminate(); };
+  w.postMessage({ files: [...cache], probe: (man.plan && man.plan.probe) || [], rep: s.rep, v });
+}
+// jump to the previous / next round start (dir -1 / +1)
+function jumpRound(dir) {
+  const s = session;
+  if (!s || !s.tl || !s.tl.marks.length) return;
+  const f = curFrame(), ms = s.tl.marks.map(m => m[0]);
+  const target = dir > 0 ? ms.find(x => x > f + 1) : [...ms].reverse().find(x => x < f - 30);
+  if (target !== undefined) requestSeek(target);
+  else if (dir < 0) requestSeek(ms[0]);
 }
 const pageRef = (t, p, d) => {
   if (!p) return;
@@ -895,6 +930,15 @@ function controls() {
   const btn = (id, fn) => { document.getElementById(id).onclick = e => { fn(); e.currentTarget.blur(); }; };
   btn('pause', () => setPaused(!ui.paused));
   btn('copyt', copyTimestamp);
+  document.getElementById('marks').addEventListener('click', e => {
+    const s = session;
+    if (!s || !s.tl) return;
+    const r = e.currentTarget.getBoundingClientRect(), max = tlMax(s.tl), x = (e.clientX - r.left) / r.width * max;
+    let best = null;
+    for (const [f] of s.tl.marks) if (best === null || Math.abs(f - x) < Math.abs(best - x)) best = f;
+    if (best !== null && Math.abs(best - x) / max < 0.04) requestSeek(best); else requestSeek(Math.round(x));
+  });
+  btn('prevr', () => jumpRound(-1)); btn('nextr', () => jumpRound(1));
   // a click / tap on the picture during the VS screen skips it, as a button press does in the game
   document.getElementById('overlay').parentElement.addEventListener('pointerdown', () => { if (inIntro(session)) skipIntro(session); });
   const si = document.getElementById('skipintro');
@@ -922,6 +966,8 @@ function controls() {
     else if (k === 'Home') requestSeek(1);
     else if (k === 'End' && session && session.tl) requestSeek(tlMax(session.tl));
     else if (k === 'c' || k === 'C') copyTimestamp();
+    else if (k === '[' || k === 'PageUp') jumpRound(-1);
+    else if (k === ']' || k === 'PageDown') jumpRound(1);
     else if (k === 'h' || k === 'H') flip('boxes');
     else if (k === 'i' || k === 'I') flip('inputs');
     else return;
