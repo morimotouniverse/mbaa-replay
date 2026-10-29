@@ -813,12 +813,38 @@ async function skipIntro(s) {
 // otherwise the replay name, time and frame as text.
 const REPLAY_STORE = 'https://replays.meltyblood.org';
 // a local replay is uploaded once (named by its SHA-256, so re-sharing it gives the same link)
-async function shareId(s) {
-  if (s.shareId) return s.shareId;
-  const r = await fetch(`${REPLAY_STORE}/rep`, { method: 'POST', body: s.rep, headers: { 'Content-Type': 'application/octet-stream' } });
+async function uploadRep(bytes) {
+  const r = await fetch(`${REPLAY_STORE}/rep`, { method: 'POST', body: bytes, headers: { 'Content-Type': 'application/octet-stream' } });
   const j = await r.json();
   if (!r.ok) throw new Error(j.error || `HTTP ${r.status}`);
-  return (s.shareId = j.id);
+  return j.id;
+}
+async function shareId(s) {
+  if (s.shareId) return s.shareId;
+  const it = pl.items[pl.i];
+  if (it && it.id && it.name === s.name) return (s.shareId = it.id);
+  return (s.shareId = await uploadRep(s.rep));
+}
+// a playlist link (?l=<id>): every replay uploaded (once; the store names them by content), then the list itself
+async function copyPlaylist() {
+  if (pl.items.length < 2) return;
+  let text;
+  try {
+    const items = [];
+    for (const [k, it] of pl.items.entries()) {
+      status(`uploading playlist ${k + 1}/${pl.items.length}…`);
+      if (!it.id) it.id = await uploadRep(new Uint8Array(await (await itemFile(it)).arrayBuffer()));
+      items.push({ id: it.id, name: it.name.replace(/\.rep$/i, '') });
+    }
+    const r = await fetch(`${REPLAY_STORE}/list`, { method: 'POST', body: JSON.stringify({ items }), headers: { 'Content-Type': 'application/json' } });
+    const j = await r.json();
+    if (!r.ok) throw new Error(j.error || `HTTP ${r.status}`);
+    const u = new URL(location.origin + location.pathname);
+    u.searchParams.set('l', j.id);
+    text = u.toString();
+  } catch (e) { console.warn('playlist upload failed:', e); status(`playlist link failed: ${e.message}`); return; }
+  try { await navigator.clipboard.writeText(text); status(`copied: ${text}`); }
+  catch (e) { prompt('copy:', text); }
 }
 // the link preview image: the picture as it is now (640x480 WebP, ~25 KB; JPEG where the browser cannot encode WebP:
 // toBlob then hands back a PNG), uploaded for (replay, frame); the store's
@@ -1027,7 +1053,7 @@ function controls() {
   btn('clipa', () => setClip('a')); btn('clipb', () => setClip('b')); btn('clipx', clearClip); btn('cliploop', toggleLoop);
   btn('helpb', toggleHelp); btn('mute', toggleMute);
   document.getElementById('help').onclick = toggleHelp;
-  btn('plprev', () => startItem(pl.i - 1)); btn('plnext', () => startItem(pl.i + 1));
+  btn('plprev', () => startItem(pl.i - 1)); btn('plnext', () => startItem(pl.i + 1)); btn('plshare', copyPlaylist);
   // a click / tap on the picture: during the VS screen it skips it (as a button press does in the game), otherwise
   // it pauses / plays
   document.getElementById('overlay').parentElement.addEventListener('pointerdown', e => {
@@ -1109,17 +1135,22 @@ async function start(file) {
 // ---- playlist: several replays played back to back (each from round 1); the next one's files load during play ----
 async function prefetch(it, cur) {
   try {
-    const nextWant = wantFor(new Uint8Array(await it.file.arrayBuffer()));
+    const nextWant = wantFor(new Uint8Array(await (await itemFile(it)).arrayBuffer()));
     for (const p of [...cache.keys()]) if (!cur.has(p) && !nextWant.has(p)) cache.delete(p);  // the rest stays in Cache Storage
     await fetchAll(man, nextWant, 'next match', true);
   } catch (e) { console.warn('prefetch failed:', e); }
 }
-function startItem(i) {
+// a playlist item's replay: a local file, or fetched from the store the first time it is needed
+async function itemFile(it) {
+  if (!it.file) it.file = new File([await (await fetch(it.url)).arrayBuffer()], it.name);
+  return it.file;
+}
+async function startItem(i) {
   if (i < 0 || i >= pl.items.length) return;
   pl.i = i;
   window.__mbaaRepUrl = pl.items[i].url || null;
   renderPlaylist();
-  return start(pl.items[i].file);
+  try { return start(await itemFile(pl.items[i])); } catch (e) { status(`could not load ${pl.items[i].name}: ${e.message}`); }
 }
 // every .rep among dropped / picked files and folders, in name order (replay names carry their date)
 async function repFiles(dt) {
@@ -1268,6 +1299,15 @@ async function main() {
   const rq = Q.get('r') || '';
   const autoload = /^[0-9a-f]{64}$/.test(rq) ? `${REPLAY_STORE}/rep/${rq}.rep`  // links from before short ids
                  : /^[A-Za-z0-9_-]{8,43}$/.test(rq) ? `${REPLAY_STORE}/s/${rq}` : Q.get('rep');
+  const lq = Q.get('l') || '';
+  if (/^[A-Za-z0-9_-]{8,43}$/.test(lq)) {  // a shared playlist
+    try {
+      const r = await fetch(`${REPLAY_STORE}/l/${lq}`);
+      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      pl.items = (await r.json()).items.map(it => ({ id: it.id, name: it.name, url: `${REPLAY_STORE}/s/${it.id}` }));
+      return startItem(0);
+    } catch (e) { status(`could not load the playlist: ${e.message}`); return; }
+  }
   if (autoload) { window.__mbaaRepUrl = autoload; start(new File([await (await fetch(autoload)).arrayBuffer()], autoload)); }
 }
 main().catch(e => { console.error(e); status('error: ' + e.message); });
