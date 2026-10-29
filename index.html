@@ -24,6 +24,10 @@
   .controls .bar { width: 100%; gap: 6px; }
   body.side .controls .bar { justify-content: flex-start; }
   .controls button, .controls select { padding: 2px 6px; }
+  #playlist ol { margin: 0; padding: 0 0 0 2.2em; max-height: 220px; overflow-y: auto; font-size: 12px; }
+  #playlist li { cursor: pointer; padding: 1px 4px; border-radius: 3px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  #playlist li:hover { background: #2c3350; }  #playlist li.cur { background: #3a4570; color: #fff; }
+  .filebtn { cursor: pointer; padding: 2px 8px; border: 1px solid #556; border-radius: 4px; }
   #marks { width: 100%; height: 14px; display: block; cursor: pointer; }
   #seek { width: 100%; margin: 0; padding: 0; accent-color: var(--accent); }
   .bar { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; justify-content: center; width: max(min(100%, 960px), var(--w)); }
@@ -58,6 +62,9 @@
   <button id="prevr" title="previous round ([)">&#9198; round</button>
   <button id="nextr" title="next round (])">round &#9197;</button>
   <button id="full" title="fullscreen, integer scaled (F)">full</button>
+  <button id="clipa" title="clip in point ({)">clip in</button>
+  <button id="clipb" title="clip out point (})">clip out</button>
+  <button id="clipx" title="clear the clip (Esc)">&times;</button>
   <button id="copyt" title="copy a link / timestamp to this frame (C)">copy time</button>
   <select id="scale" title="picture size: auto = largest whole multiple that fits"><option value="auto">size: auto</option><option value="1">size: 1x</option><option value="2">size: 2x</option><option value="3">size: 3x</option><option value="4">size: 4x</option><option value="fit">size: fit</option></select>
   <select id="speed" title="speed"><option value="1">speed 1x</option><option value="2">speed 2x</option><option value="4">speed 4x</option></select>
@@ -67,18 +74,23 @@
   <label>vol <input id="vol" type="range" min="0" max="100" value="50"></label>
   <button id="sound" hidden>click for sound</button>
 </div>
+    <div id="playlist" hidden>
+      <div class="bar"><button id="plprev" title="previous replay (P)">&#9198;</button><span id="plpos"></span><button id="plnext" title="next replay (N)">&#9197;</button></div>
+      <ol id="plitems"></ol>
+    </div>
   </div>
 </div>
 <div class="bar">
-  <input id="rep" type="file" accept=".rep">
+  <input id="rep" type="file" accept=".rep" multiple title="one replay, or several for a playlist">
+  <label class="filebtn" title="every .rep in a folder, as a playlist">folder… <input id="repdir" type="file" webkitdirectory hidden></label>
   <span id="status">loading…</span>
 </div>
 <div class="help"><kbd>Space</kbd> / click: skip the VS intro, then pause · <kbd>,</kbd> <kbd>.</kbd> frame back / forward · <kbd>&larr;</kbd> <kbd>&rarr;</kbd> 1 s
-  (<kbd>Shift</kbd> 5 s) · <kbd>Home</kbd> <kbd>End</kbd> · <kbd>[</kbd> <kbd>]</kbd> previous / next round · <kbd>F</kbd> fullscreen · <kbd>C</kbd> copy timestamp · <kbd>H</kbd> boxes · <kbd>I</kbd> inputs ·
+  (<kbd>Shift</kbd> 5 s) · <kbd>Home</kbd> <kbd>End</kbd> · <kbd>[</kbd> <kbd>]</kbd> previous / next round · <kbd>F</kbd> fullscreen · <kbd>{</kbd> <kbd>}</kbd> clip in / out (<kbd>Esc</kbd> clears) · <kbd>C</kbd> copy link (the clip when set) · <kbd>N</kbd> <kbd>P</kbd> next / previous replay · <kbd>H</kbd> boxes · <kbd>I</kbd> inputs ·
   boxes: <span style="color:#30e030">hurt</span> <span style="color:#ff2828">attack</span>
   <span style="color:#ffe020">clash</span> <span style="color:#40a0ff">shield</span> <span style="color:#d8d8d8">collision</span>
   <span style="color:#c878e6">special</span></div>
 <script src="mbaa.js?v=20ff9c8cd2e8"></script>
-<script src="viewer.js?v=2c4775a62567"></script>
+<script src="viewer.js?v=0262bd3ff673"></script>
 </body>
 </html>

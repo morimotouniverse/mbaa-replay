@@ -124,7 +124,7 @@ function withSiblings(man, paths) {
 
 // ---- files: fetched once per page, written into every session's MEMFS ----
 const cache = new Map();  // game path -> Uint8Array
-async function fetchAll(man, paths, label) {
+async function fetchAll(man, paths, label, quiet = false) {
   const net0 = net.bytes;  // the counter shows what came over the network (objects are deflated; the game sees ~4x that)
   const queue = [...paths].filter(p => !cache.has(p));
   let done = 0, bytes = 0;
@@ -139,7 +139,7 @@ async function fetchAll(man, paths, label) {
         data = new Uint8Array(await r.arrayBuffer());
       } else data = await fetchObject(f.o);
       cache.set(p, data);
-      if (++done % 10 === 0 || done === n) status(`${label} ${done}/${n} (${((net.bytes - net0) / 1e6).toFixed(1)} MB downloaded${net.cached ? `, ${net.cached} files from cache` : ''})`);
+      if ((++done % 10 === 0 || done === n) && !quiet) status(`${label} ${done}/${n} (${((net.bytes - net0) / 1e6).toFixed(1)} MB downloaded${net.cached ? `, ${net.cached} files from cache` : ''})`);
     }
   }
   await Promise.all(Array.from({ length: 16 }, worker));
@@ -317,6 +317,7 @@ function bgmDecode(p) {
 
 // ---- a session: one wasm instance playing one replay ----
 let session = null;
+const pl = { items: [], i: -1 };  // playlist: {name, file, url?} (see startItem)
 let man = null;
 const misses = new Set();  // bundle files the game looked up that the page had not fetched
 function freshCanvas() {
@@ -325,7 +326,7 @@ function freshCanvas() {
   old.replaceWith(c);
   return c;
 }
-async function newSession(rep, name) {
+async function newSession(rep, name, want) {
   if (session) { try { session.M.ccall('viewer_stop', null, [], []); } catch (e) {} }
   window.dispatchEvent(new Event('mbaa-session-end'));
   // mbaa.wasm is built with mbaa.js: it takes mbaa.js's cache-busting version (tools/web/deploy_pages.sh)
@@ -339,19 +340,21 @@ async function newSession(rep, name) {
   // files the game only checks exist (plan.probe: every stage .dat at boot) get a 1-byte placeholder; the real file
   // (the replay's stage, fetched by the plan) is written over it
   for (const p of (man.plan && man.plan.probe) || []) { mkdirs(FS, '/game/' + p); FS.writeFile('/game/' + p, new Uint8Array(1)); }
-  for (const [p, d] of cache) { mkdirs(FS, '/game/' + p); FS.writeFile('/game/' + p, d); }
+  // only this match's files (a playlist's cache also holds the next match's)
+  s.want = want || new Set(cache.keys());
+  for (const p of s.want) { const d = cache.get(p); if (d) { mkdirs(FS, '/game/' + p); FS.writeFile('/game/' + p, d); } }
   FS.writeFile('/game/replay.rep', rep);
-  M.mbaaAssetMiss = p => { if (man.files[p] && !cache.has(p)) misses.add(p); };
+  M.mbaaAssetMiss = p => { if (man.files[p] && !(s.want.has(p) && cache.has(p))) misses.add(p); };
   audioHooks(M, s);
-  if (!HASH) for (const p of cache.keys()) if (/^bgm\/.*\.opus$/.test(p)) bgmDecode(p);
+  if (!HASH) for (const p of s.want) if (/^bgm\/.*\.opus$/.test(p) && cache.has(p)) bgmDecode(p);
   return s;
 }
 const call = (s, f, ...a) => s.M.ccall(f, 'number', a.map(() => 'number'), a);
 
 // play from the start; with catchUp = k, step to frame k first (no pacing) and continue from there
-async function play(rep, name, catchUp = 0) {
+async function play(rep, name, catchUp = 0, want = null) {
   misses.clear();
-  const s = await newSession(rep, name);
+  const s = await newSession(rep, name, want);
   if (!call(s, 'viewer_boot') || !call(s, 'viewer_load')) { window.__mbaaStarted = -1; status('start failed (see console)'); return; }
   if (HASH) s.M.ccall('viewer_hash_enable', null, [], []);
   call(s, 'viewer_play', 0);
@@ -371,7 +374,9 @@ async function play(rep, name, catchUp = 0) {
   uiApply(s);
   const tq = +(Q.get('t') || 0);
   if (tq > 0 && !catchUp && !PERF && s.tl && window.__mbaaRepUrl) { await requestSeek(tq); }
-  else if (ui.skipIntro && !catchUp && !PERF && s.tl) await skipIntro(s);
+  else if ((ui.skipIntro || pl.items.length > 1) && !catchUp && !PERF && s.tl) await skipIntro(s);  // a playlist starts each match at round 1
+  const eq = +(Q.get('e') || 0);
+  if (eq > tq && tq > 0 && !catchUp && window.__mbaaRepUrl && pl.i <= 0) { s.clip = { a: tq, b: eq, stop: true }; marksKey = ''; }
   if (s !== session) return;
   call(s, 'viewer_run');
   status(`playing ${name}`);
@@ -384,13 +389,20 @@ async function refetchAndReplay(s, frame) {
   console.warn(`asset plan missed ${want.size} files at frame ${frame}:`, [...want]);
   window.mbaaPlanMisses = (window.mbaaPlanMisses || []).concat([...want]);
   await fetchAll(man, want, 'fetching missed files');
-  return play(s.rep, s.name, frame);
+  return play(s.rep, s.name, frame, new Set([...s.want, ...want]));
 }
 function watch(s) {
   const t = setInterval(() => {
     if (s !== session) return clearInterval(t);
     if (misses.size) { clearInterval(t); refetchAndReplay(s, call(s, 'viewer_frame')); return; }
-    if (call(s, 'viewer_ended') && !s.endShown) { s.endShown = true; status(`finished ${s.name} (${call(s, 'viewer_frame')} frames)`); }
+    if (call(s, 'viewer_ended') && !s.endShown) {
+      s.endShown = true;
+      status(`finished ${s.name} (${call(s, 'viewer_frame')} frames)`);
+      if (pl.i >= 0 && pl.i + 1 < pl.items.length && !ui.paused) {  // playlist: the next match a moment later
+        status(`finished ${s.name}: next up ${pl.items[pl.i + 1].name}`);
+        setTimeout(() => { if (s === session && !ui.paused) startItem(pl.i + 1); }, 1200);
+      }
+    }
   }, 100);
 }
 async function hashRun(s) {
@@ -402,9 +414,10 @@ async function hashRun(s) {
     h.state.push(s.M.ccall('viewer_hash_take', 'string', [], []));
     h.audio.push(s.M.ccall('viewer_audio_take', 'string', [], []));
     if (misses.size) {  // the hash run restarts from scratch with the file present
-      await fetchAll(man, withSiblings(man, misses), 'fetching missed files');
+      const extra = withSiblings(man, misses);
+      await fetchAll(man, extra, 'fetching missed files');
       window.mbaaPlanMisses = (window.mbaaPlanMisses || []).concat([...misses]);
-      return play(s.rep, s.name);
+      return play(s.rep, s.name, 0, new Set([...s.want, ...extra]));
     }
     status(`state hash ${h.frames} frames`);
     await new Promise(r => setTimeout(r, 0));
@@ -471,7 +484,7 @@ function startScan(s) {
     }
   };
   w.onerror = e => { console.warn('pre-scan failed:', e.message); w.terminate(); };
-  w.postMessage({ files: [...cache], probe: (man.plan && man.plan.probe) || [], rep: s.rep, v });
+  w.postMessage({ files: [...s.want].filter(p => cache.has(p)).map(p => [p, cache.get(p)]), probe: (man.plan && man.plan.probe) || [], rep: s.rep, v });
 }
 // jump to the previous / next round start (dir -1 / +1)
 function jumpRound(dir) {
@@ -832,8 +845,11 @@ async function copyTimestamp() {
     if (m) u.searchParams.set('r', m[1]);
     else if (window.__mbaaRepUrl) u.searchParams.set('rep', window.__mbaaRepUrl);
     else { status('uploading replay for the link…'); u.searchParams.set('r', await shareId(s)); }
-    u.searchParams.set('t', f);
-    if (u.searchParams.get('r')) await shareThumb(u.searchParams.get("r"), f, shots);
+    // a clip: from its in point to its out point; else from this frame
+    const t = s.clip ? s.clip.a : f;
+    u.searchParams.set('t', t);
+    if (s.clip) u.searchParams.set('e', s.clip.b);
+    if (u.searchParams.get('r')) await shareThumb(u.searchParams.get('r'), t, shots);
     text = u.toString();
   } catch (e) {
     console.warn('share upload failed:', e);
@@ -841,6 +857,12 @@ async function copyTimestamp() {
   }
   try { await navigator.clipboard.writeText(text); status(`copied: ${text}`); }
   catch (e) { prompt('copy:', text); }
+}
+function togglePlay() {
+  const s = session;
+  if (inIntro(s)) return skipIntro(s);
+  if (s && s.clip && s.clip.stop && ui.paused && curFrame() >= s.clip.b) { requestSeek(s.clip.a).then(() => setPaused(false)); return; }
+  setPaused(!ui.paused);
 }
 function setPaused(p) {
   ui.paused = p;
@@ -864,7 +886,7 @@ function stepBy(n, pause = true) {
 }
 window.__mbaaSession = () => session;  // tests
 window.mbaaViewer = { seek: requestSeek, step: stepBy, pause: setPaused, frame: () => session.M._viewer_frame(),
-                      tl: () => session.tl, ui,
+                      tl: () => session.tl, ui, pl, cacheSize: () => cache.size, clip: () => session && session.clip,
                       stats: () => { const t = session.tl; return { kfs: t.kfs.length, kfFrames: t.kfs.map(k => k.frame),
                         kfMs: t.kfs.map(k => Math.round(k.ms * 10) / 10), kfFresh: t.kfs.map(k => k.fresh), bytes: t.bytes,
                         memTop: session.M._viewer_mem_top(), heap: session.M.HEAPU8.length, simMax: t.simMax, end: t.end,
@@ -946,6 +968,7 @@ function uiLoop() {
   const s = session;
   if (s && s.tl) {
     const t = s.tl, f = s.M._viewer_frame(), max = tlMax(t);
+    clipTick(s, f);
     const seek = document.getElementById('seek');
     if (+seek.max !== max) seek.max = max;
     if (!seekDragging) seek.value = t.want !== null ? t.want : f;
@@ -957,19 +980,21 @@ function uiLoop() {
 }
 // round starts over the slider; the explored part (seeks inside it restore a keyframe) is shaded
 function drawMarks(t, max) {
-  const key = `${t.marks.length}/${max}/${Math.round(t.simMax / 60)}`;
+  const c = session && session.clip;
+  const key = `${t.marks.length}/${max}/${Math.round(t.simMax / 60)}/${c ? c.a + ':' + c.b : ''}`;
   if (key === marksKey) return;
   marksKey = key;
-  const c = document.getElementById('marks'), dpr = window.devicePixelRatio || 1;
-  c.width = Math.round(c.clientWidth * dpr); c.height = Math.round(c.clientHeight * dpr);
-  const g = c.getContext('2d');
-  g.clearRect(0, 0, c.width, c.height);
+  const cv = document.getElementById('marks'), dpr = window.devicePixelRatio || 1;
+  cv.width = Math.round(cv.clientWidth * dpr); cv.height = Math.round(cv.clientHeight * dpr);
+  const g = cv.getContext('2d');
+  g.clearRect(0, 0, cv.width, cv.height);
   g.fillStyle = '#2c3350';
-  g.fillRect(0, 0, c.width * Math.min(1, t.simMax / max), c.height);
+  g.fillRect(0, 0, cv.width * Math.min(1, t.simMax / max), cv.height);
+  if (c) { g.fillStyle = 'rgba(80, 200, 255, 0.45)'; g.fillRect(cv.width * c.a / max, 0, Math.max(2, cv.width * (c.b - c.a) / max), cv.height); }
   g.fillStyle = '#ffcc40'; g.font = `${Math.round(10 * dpr)}px system-ui, sans-serif`; g.textBaseline = 'top';
   for (const [f, r] of t.marks) {
-    const x = Math.round(c.width * f / max);
-    g.fillRect(x, 0, Math.max(1, dpr), c.height);
+    const x = Math.round(cv.width * f / max);
+    g.fillRect(x, 0, Math.max(1, dpr), cv.height);
     g.fillText(`R${r + 1}`, x + 2 * dpr, 0);
   }
 }
@@ -994,12 +1019,14 @@ function controls() {
     if (best !== null && Math.abs(best - x) / max < 0.04) requestSeek(best); else requestSeek(Math.round(x));
   });
   btn('prevr', () => jumpRound(-1)); btn('nextr', () => jumpRound(1));
+  btn('clipa', () => setClip('a')); btn('clipb', () => setClip('b')); btn('clipx', clearClip);
+  btn('plprev', () => startItem(pl.i - 1)); btn('plnext', () => startItem(pl.i + 1));
   // a click / tap on the picture: during the VS screen it skips it (as a button press does in the game), otherwise
   // it pauses / plays
   document.getElementById('overlay').parentElement.addEventListener('pointerdown', e => {
     if (e.button > 0 || !session) return;
     if (actx && actx.state !== 'running') return;  // this click only turns sound on (the page-wide unlock handles it)
-    if (inIntro(session)) skipIntro(session); else setPaused(!ui.paused);
+    togglePlay();
   });
   const si = document.getElementById('skipintro');
   si.checked = ui.skipIntro;
@@ -1018,7 +1045,7 @@ function controls() {
     if (e.ctrlKey || e.metaKey || e.altKey) return;
     const k = e.key, sec = e.shiftKey ? 300 : 60;
     const flip = id => { const el = document.getElementById(id); el.checked = !el.checked; el.onchange(); };
-    if (k === ' ') { if (inIntro(session)) skipIntro(session); else setPaused(!ui.paused); }
+    if (k === ' ') togglePlay();
     else if (k === ',' || k === '<') stepBy(-1);
     else if (k === '.' || k === '>') stepBy(1);
     else if (k === 'ArrowLeft') stepBy(-sec, false);
@@ -1029,6 +1056,11 @@ function controls() {
     else if (k === 'f' || k === 'F') toggleFullscreen();
     else if (k === '[' || k === 'PageUp') jumpRound(-1);
     else if (k === ']' || k === 'PageDown') jumpRound(1);
+    else if (k === '{') setClip('a');
+    else if (k === '}') setClip('b');
+    else if (k === 'Escape') clearClip();
+    else if (k === 'n' || k === 'N') startItem(pl.i + 1);
+    else if (k === 'p' || k === 'P') startItem(pl.i - 1);
     else if (k === 'h' || k === 'H') flip('boxes');
     else if (k === 'i' || k === 'I') flip('inputs');
     else return;
@@ -1042,20 +1074,94 @@ window.__mbaaPerf = () => {
   return Array.from(M.HEAPF64.subarray(p / 8, p / 8 + n));
 };
 
+// the files a replay needs (the plan), or everything the page has when the bundle has no plan
+function wantFor(rep) {
+  if (!man.plan) return null;
+  let want = planFiles(man, repKeys(rep));
+  // ?planDrop=REGEX (test): leave matching files out of the plan, to exercise the miss -> fetch -> catch-up path
+  if (Q.get('planDrop')) { const re = new RegExp(Q.get('planDrop')); want = new Set([...want].filter(f => !re.test(f))); }
+  return want;
+}
 async function start(file) {
   ensureAudio(); actx.resume();  // a drop or file pick is a user gesture: audio may start
   const rep = new Uint8Array(await file.arrayBuffer());
-  let keys;
-  try { keys = repKeys(rep); } catch (e) { status('error: ' + e.message); return; }
-  if (man.plan) {
+  let keys, want;
+  try { keys = repKeys(rep); want = wantFor(rep); } catch (e) { status('error: ' + e.message); return; }
+  if (want) {
     status(`stage ${keys.stage}, P1 ${keys.p1[0]}:${keys.p1[1]} vs P2 ${keys.p2[0]}:${keys.p2[1]}: fetching`);
-    let want = planFiles(man, keys);
-    // ?planDrop=REGEX (test): leave matching files out of the plan, to exercise the miss -> fetch -> catch-up path
-    if (Q.get('planDrop')) { const re = new RegExp(Q.get('planDrop')); want = new Set([...want].filter(f => !re.test(f))); }
     await fetchAll(man, want, 'match assets');
   }
   window.__mbaaKeys = keys;
-  await play(rep, file.name);
+  const next = pl.items[pl.i + 1];
+  await play(rep, file.name, 0, want);
+  if (want && next) prefetch(next, want);
+}
+// ---- playlist: several replays played back to back (each from round 1); the next one's files load during play ----
+async function prefetch(it, cur) {
+  try {
+    const nextWant = wantFor(new Uint8Array(await it.file.arrayBuffer()));
+    for (const p of [...cache.keys()]) if (!cur.has(p) && !nextWant.has(p)) cache.delete(p);  // the rest stays in Cache Storage
+    await fetchAll(man, nextWant, 'next match', true);
+  } catch (e) { console.warn('prefetch failed:', e); }
+}
+function startItem(i) {
+  if (i < 0 || i >= pl.items.length) return;
+  pl.i = i;
+  window.__mbaaRepUrl = pl.items[i].url || null;
+  renderPlaylist();
+  return start(pl.items[i].file);
+}
+// every .rep among dropped / picked files and folders, in name order (replay names carry their date)
+async function repFiles(dt) {
+  const out = [];
+  const walk = async entry => {
+    if (entry.isFile) { if (/\.rep$/i.test(entry.name)) out.push(await new Promise((res, rej) => entry.file(res, rej))); }
+    else if (entry.isDirectory) {
+      const rd = entry.createReader();
+      for (let batch; (batch = await new Promise((res, rej) => rd.readEntries(res, rej))).length;) for (const e of batch) await walk(e);
+    }
+  };
+  const entries = dt && dt.items ? [...dt.items].map(it => it.webkitGetAsEntry && it.webkitGetAsEntry()).filter(Boolean) : [];
+  if (entries.length) for (const e of entries) await walk(e);
+  else for (const f of (dt.files || dt)) if (/\.rep$/i.test(f.name) || (dt.files || dt).length === 1) out.push(f);
+  return out.sort((a, b) => a.name.localeCompare(b.name));
+}
+function loadPlaylist(files) {
+  if (!files.length) { status('no .rep files there'); return; }
+  pl.items = files.map(f => ({ name: f.name, file: f })); pl.i = -1;
+  return startItem(0);
+}
+function renderPlaylist() {
+  const box = document.getElementById('playlist');
+  box.hidden = pl.items.length < 2;
+  if (box.hidden) return;
+  document.getElementById('plpos').textContent = `${pl.i + 1} / ${pl.items.length}`;
+  const ol = document.getElementById('plitems');
+  ol.replaceChildren(...pl.items.map((it, k) => {
+    const li = document.createElement('li');
+    li.textContent = it.name.replace(/\.rep$/i, '');
+    li.className = k === pl.i ? 'cur' : '';
+    li.onclick = () => startItem(k);
+    return li;
+  }));
+  const cur = ol.children[pl.i];
+  if (cur) cur.scrollIntoView({ block: 'nearest' });
+}
+// ---- clips: an in / out range; a clip link plays just that range and stops ----
+function setClip(which) {
+  const s = session;
+  if (!s || !s.tl) return;
+  const f = curFrame(), c = s.clip || { a: 1, b: tlMax(s.tl), stop: false };
+  if (which === 'a') { c.a = f; if (c.b <= f) c.b = tlMax(s.tl); } else { c.b = f; if (c.a >= f) c.a = 1; }
+  s.clip = c; marksKey = '';
+  status(`clip ${fmtTime(c.a)} – ${fmtTime(c.b)} (${((c.b - c.a) / 60).toFixed(1)} s): C copies a link to it`);
+}
+function clearClip() { if (session && session.clip) { session.clip = null; marksKey = ''; status(`playing ${session.name}`); } }
+// a clip being played stops at its out point; play again from there starts it over
+function clipTick(s, f) {
+  const c = s.clip;
+  if (!c || !c.stop || ui.paused || s.seeking || (s.tl && s.tl.running)) return;
+  if (f >= c.b) { setPaused(true); if (f > c.b) requestSeek(c.b); status(`clip end (${fmtTime(c.a)} – ${fmtTime(c.b)}): Space plays it again`); }
 }
 
 // Integer scaling: the picture is the largest whole multiple of 640x480 in physical pixels that fits the window above
@@ -1113,9 +1219,13 @@ async function main() {
     if (!man.plan) await fetchAll(man, Object.keys(man.files), 'assets');  // a bundle without a plan: everything
   }
   status('ready: drop a .rep file');
-  document.getElementById('rep').onchange = e => { e.target.blur(); window.__mbaaRepUrl = null; if (e.target.files[0]) start(e.target.files[0]); };  // blur: keys go to the viewer
+  // one or many replays (a playlist), from the file picker, the folder picker or a drop of files / folders
+  for (const id of ['rep', 'repdir']) document.getElementById(id).onchange = async e => {
+    e.target.blur();  // keys go to the viewer
+    loadPlaylist(await repFiles([...e.target.files]));
+  };
   document.body.ondragover = e => e.preventDefault();
-  document.body.ondrop = e => { e.preventDefault(); window.__mbaaRepUrl = null; e.dataTransfer.files[0] && start(e.dataTransfer.files[0]); };
+  document.body.ondrop = async e => { e.preventDefault(); loadPlaylist(await repFiles(e.dataTransfer)); };
   controls();
   for (const key of ['boxes', 'inputs']) if (Q.get(key) === '1') { const el = document.getElementById(key); el.checked = true; el.onchange(); }
   // ?r=<id>: a shared replay in the replay store (tools/web/replay_worker.js); ?rep=<url>: any replay URL
