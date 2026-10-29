@@ -39,7 +39,7 @@ const PHONE = matchMedia('(pointer: coarse)').matches && Math.min(screen.width, 
 // low-memory mode (phones; ?lowmem=1 / 0 forces it): no pre-scan, a small keyframe budget, a match's files freed once
 // it has loaded them (freeLoaded) and the next match prefetched to the disk cache only
 const LOWMEM = Q.get('lowmem') !== null ? Q.get('lowmem') === '1' : PHONE;
-const KZ = Q.get('kz') === '1';  // keyframe pages zlib-compressed: opt-in (?kz=1) until it passes seek_hash; Chrome crashed twice with it on
+const KZ = Q.get('kz') !== '0';  // keyframe pages zlib-compressed (?kz=0: zero-word packing only)
 const KF_BUDGET = +(Q.get('kfmb') || (LOWMEM ? 40 : 450)) * 1e6;
 
 const hex = h => new Uint8Array(h.match(/../g).map(x => parseInt(x, 16)));
@@ -668,19 +668,20 @@ let kzM = null;
 function kzPack(H, o) {
   const M = kzM;
   if (!M || !M._viewer_kz_pack || PAGE !== 16384) return null;
-  const B = M._viewer_kz_base(), U = M.HEAPU8, direct = H.buffer === U.buffer;
-  if (direct && o * 4 + 16384 > B && o * 4 < B + M._viewer_kz_size()) return null;  // the scratch's own pages (the boot snapshot covers them)
-  if (!direct) new Int32Array(U.buffer, B, 4096).set(H.subarray(o, o + 4096));
-  const n = M._viewer_kz_pack(direct ? o * 4 : B);
+  const B = M._viewer_kz_base(), U = M.HEAPU8;
+  if (H.buffer === U.buffer && o * 4 + 16384 > B && o * 4 < B + M._viewer_kz_size()) return null;  // the scratch's own pages (the boot snapshot covers them)
+  // always through the scratch: a page of the wasm C stack would change under zlib's own frames while it runs
+  new Int32Array(U.buffer, B, 4096).set(H.subarray(o, o + 4096));
+  const n = M._viewer_kz_pack(B);
   if (!n) return null;
   return M.HEAPU8.slice(B + 20480, B + 20480 + n);
 }
 function kzUnpack(z, H, o) {
   const M = kzM, U = M.HEAPU8, B = M._viewer_kz_base();
-  if (H.buffer !== U.buffer) throw new Error('kz: unpack outside the instance memory');
   U.set(z, B + 20480);
-  // page 0: zlib takes a null output pointer as an error, so it goes through the scratch
-  const ok = o === 0 ? M._viewer_kz_unpack(B, z.length) && (U.copyWithin(0, B, B + 16384), 1) : M._viewer_kz_unpack(o * 4, z.length);
+  // inflated into the scratch, then copied: inflating straight into a page of the wasm C stack overwrote zlib's own
+  // live frame (the restore hung), and page 0 is a null output pointer to zlib
+  const ok = M._viewer_kz_unpack(B, z.length) && (H.buffer === U.buffer ? U.copyWithin(o * 4, B, B + 16384) : H.set(new Int32Array(U.buffer, B, 4096), o), 1);
   if (!ok) throw new Error(`kz: page at ${o * 4} (${z.length} bytes) did not decompress`);
 }
 function packPage(H, o, W) {
@@ -900,6 +901,19 @@ function restore(s, kf) {
     if (!q || (q.h[0] === hs[j] && q.h[1] === hs[j + 1] && q.h[2] === hs[j + 2] && q.h[3] === hs[j + 3])) continue;
     unpackPage(q, H, i * W, W);
     copied++;
+  }
+  // zlib's calls (kzUnpack) use the wasm C stack and its arena counter: the pages holding those were written again by
+  // each later call. Those few are inflated once more into JS copies and written last, with no wasm call after them.
+  if (kf.pages.some(q => q && q.z)) {
+    const h1 = pageHashes(M, kf.pages.length * PAGE), late = [];
+    for (let i = 0; i < kf.pages.length; i++) {
+      const q = kf.pages[i], j = i * 4;
+      if (!q || (q.h[0] === h1[j] && q.h[1] === h1[j + 1] && q.h[2] === h1[j + 2] && q.h[3] === h1[j + 3])) continue;
+      const tmp = new Int32Array(W);
+      unpackPage(q, tmp, 0, W);
+      late.push([i, tmp]);
+    }
+    for (const [i, tmp] of late) H.set(tmp, i * W);
   }
   s.tl.lastCopied = copied;
   call(s, 'viewer_restore_end', ++s.gen);
