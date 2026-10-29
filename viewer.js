@@ -1049,15 +1049,13 @@ async function copyPlaylist() {
   try { await navigator.clipboard.writeText(text); status(`copied: ${text}`); }
   catch (e) { prompt('copy:', text); }
 }
-// the link preview image: the picture as it is now (640x480 WebP, ~25 KB; JPEG where the browser cannot encode WebP:
-// toBlob then hands back a PNG), uploaded for (replay, frame); the store's
+// the link preview image: the picture as it is now (a 960x480 JPEG card, copyTimestamp), uploaded for (replay, frame); the store's
 // Worker puts it in the shared link's preview tags. Best effort: a failed upload only means a preview without a picture.
 async function shareThumb(id, f, shots) {
   if (!shots) return;
   const ctl = new AbortController(), to = setTimeout(() => ctl.abort(), 5000);
   try {
-    let img = await shots.webp;
-    if (!img || img.type !== "image/webp") img = await shots.jpeg;
+    const img = await shots.jpeg;
     if (img) await fetch(`${REPLAY_STORE}/thumb/${id}/${f}`, { method: 'POST', body: img, signal: ctl.signal,
                                                                headers: { 'Content-Type': img.type } });
   }
@@ -1069,8 +1067,17 @@ async function copyTimestamp() {
   if (!s) return;
   const f = s.M._viewer_frame();
   // grab the frame now, before any await lets playback move on (the GL canvas keeps its drawing buffer)
-  const grab = (type, q) => new Promise(res => { try { document.getElementById('canvas').toBlob(res, type, q); } catch (e) { res(null); } });
-  const shots = { webp: grab('image/webp', 0.8), jpeg: grab('image/jpeg', 0.85) };
+  // the 640x480 frame centred on a 960x480 dark card (link cards are ~2:1: X crops a 4:3 image), as JPEG (X does not
+  // reliably take WebP)
+  const grab = (type, q) => new Promise(res => {
+    try {
+      const c = document.createElement('canvas'); c.width = 960; c.height = 480;
+      const g = c.getContext('2d'); g.fillStyle = '#12111c'; g.fillRect(0, 0, 960, 480);
+      g.imageSmoothingEnabled = false; g.drawImage(document.getElementById('canvas'), 160, 0, 640, 480);
+      c.toBlob(res, type, q);
+    } catch (e) { res(null); }
+  });
+  const shots = { jpeg: grab('image/jpeg', 0.88) };
   const u = new URL(location.origin + location.pathname);
   let text;
   try {
