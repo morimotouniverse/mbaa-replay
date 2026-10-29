@@ -1305,7 +1305,11 @@ async function exportVideo() {
   await requestSeek(c.a);
   const out = document.createElement('canvas'); out.width = 1280; out.height = 960;
   const g = out.getContext('2d'); g.imageSmoothingEnabled = false;
-  const stream = out.captureStream(0), dest = actx.createMediaStreamDestination();
+  // a frame per game frame (requestFrame); where the capture track has no requestFrame, the canvas is captured at 60 fps
+  let stream = out.captureStream(0);
+  const manual = typeof stream.getVideoTracks()[0].requestFrame === 'function';
+  if (!manual) { stream.getTracks().forEach(t => t.stop()); stream = out.captureStream(60); }
+  const dest = actx.createMediaStreamDestination();
   master.connect(dest);
   stream.addTrack(dest.stream.getAudioTracks()[0]);
   let mr = null, type = '';
@@ -1328,7 +1332,7 @@ function recDraw() {
   const r = rec;
   r.g.drawImage(document.getElementById('canvas'), 0, 0, 1280, 960);
   if (ui.boxes || ui.inputs) r.g.drawImage(document.getElementById('overlay'), 0, 0, 1280, 960);
-  r.track.requestFrame();
+  if (r.track.requestFrame) r.track.requestFrame();
 }
 function recTick(s, f) {
   const r = rec;
