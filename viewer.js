@@ -955,8 +955,12 @@ function controls() {
     if (best !== null && Math.abs(best - x) / max < 0.04) requestSeek(best); else requestSeek(Math.round(x));
   });
   btn('prevr', () => jumpRound(-1)); btn('nextr', () => jumpRound(1));
-  // a click / tap on the picture during the VS screen skips it, as a button press does in the game
-  document.getElementById('overlay').parentElement.addEventListener('pointerdown', () => { if (inIntro(session)) skipIntro(session); });
+  // a click / tap on the picture: during the VS screen it skips it (as a button press does in the game), otherwise
+  // it pauses / plays
+  document.getElementById('overlay').parentElement.addEventListener('pointerdown', e => {
+    if (e.button > 0 || !session) return;
+    if (inIntro(session)) skipIntro(session); else setPaused(!ui.paused);
+  });
   const si = document.getElementById('skipintro');
   si.checked = ui.skipIntro;
   si.onchange = () => { ui.skipIntro = si.checked; try { localStorage.setItem('mbaaSkipIntro', si.checked ? '1' : '0'); } catch (e) {} si.blur(); };
@@ -1014,6 +1018,9 @@ async function start(file) {
 }
 
 async function main() {
+  // the engine downloads while the match's files do (MBAA() later fetches the same URL: an HTTP cache hit)
+  const wasmV = ((document.querySelector('script[src^="mbaa.js"]') || {}).src || '').split('?')[1];
+  fetch('mbaa.wasm' + (wasmV ? `?${wasmV}` : '')).then(r => r.arrayBuffer()).catch(() => {});
   const plainList = Q.get('files'), plainRoot = Q.get('root') || '';
   if (plainList) {
     man = { files: {} };
