@@ -164,7 +164,8 @@ function ensureAudio() {
   const setVol = () => { master.gain.value = Math.pow(+vol.value / 100, 2); try { localStorage.setItem('mbaaVolCe', vol.value); } catch (e) {} };
   vol.value = 100;
   try { const v = localStorage.getItem('mbaaVolCe'); if (v !== null) vol.value = v; } catch (e) {}
-  vol.oninput = setVol; setVol();
+  vol.oninput = () => { setVol(); document.querySelector('#mute .i').className = `i ${+vol.value ? 'i-sound' : 'i-mute'}`; };
+  vol.oninput();
   master.connect(actx.destination);
   const btn = document.getElementById('sound');
   const show = () => { btn.hidden = actx.state === 'running'; };
@@ -376,7 +377,10 @@ async function play(rep, name, catchUp = 0, want = null) {
   if (tq > 0 && !catchUp && !PERF && s.tl && window.__mbaaRepUrl) { await requestSeek(tq); }
   else if ((ui.skipIntro || pl.items.length > 1) && !catchUp && !PERF && s.tl) await skipIntro(s);  // a playlist starts each match at round 1
   const eq = +(Q.get('e') || 0);
-  if (eq > tq && tq > 0 && !catchUp && window.__mbaaRepUrl && pl.i <= 0) { s.clip = { a: tq, b: eq, stop: true }; marksKey = ''; }
+  if (eq > tq && tq > 0 && !catchUp && window.__mbaaRepUrl && pl.i <= 0) {
+    s.clip = { a: tq, b: eq, stop: true }; marksKey = '';
+    if (Q.get('loop') === '1' && !loopOn) toggleLoop();
+  }
   if (s !== session) return;
   call(s, 'viewer_run');
   status(`playing ${name}`);
@@ -849,6 +853,7 @@ async function copyTimestamp() {
     const t = s.clip ? s.clip.a : f;
     u.searchParams.set('t', t);
     if (s.clip) u.searchParams.set('e', s.clip.b);
+    if (s.clip && loopOn) u.searchParams.set('loop', '1');
     if (u.searchParams.get('r')) await shareThumb(u.searchParams.get('r'), t, shots);
     text = u.toString();
   } catch (e) {
@@ -866,7 +871,7 @@ function togglePlay() {
 }
 function setPaused(p) {
   ui.paused = p;
-  document.getElementById('pause').textContent = p ? 'play' : 'pause';
+  document.querySelector('#pause .i').className = `i ${p ? 'i-play' : 'i-pause'}`;
   const s = session;
   if (!s) return;
   s.mute = p || !!s.seeking;
@@ -1019,7 +1024,9 @@ function controls() {
     if (best !== null && Math.abs(best - x) / max < 0.04) requestSeek(best); else requestSeek(Math.round(x));
   });
   btn('prevr', () => jumpRound(-1)); btn('nextr', () => jumpRound(1));
-  btn('clipa', () => setClip('a')); btn('clipb', () => setClip('b')); btn('clipx', clearClip);
+  btn('clipa', () => setClip('a')); btn('clipb', () => setClip('b')); btn('clipx', clearClip); btn('cliploop', toggleLoop);
+  btn('helpb', toggleHelp); btn('mute', toggleMute);
+  document.getElementById('help').onclick = toggleHelp;
   btn('plprev', () => startItem(pl.i - 1)); btn('plnext', () => startItem(pl.i + 1));
   // a click / tap on the picture: during the VS screen it skips it (as a button press does in the game), otherwise
   // it pauses / plays
@@ -1058,7 +1065,10 @@ function controls() {
     else if (k === ']' || k === 'PageDown') jumpRound(1);
     else if (k === '{') setClip('a');
     else if (k === '}') setClip('b');
-    else if (k === 'Escape') clearClip();
+    else if (k === 'Escape') { if (!document.getElementById('help').hidden) toggleHelp(); else clearClip(); }
+    else if (k === 'l' || k === 'L') toggleLoop();
+    else if (k === 'm' || k === 'M') toggleMute();
+    else if (k === '?') toggleHelp();
     else if (k === 'n' || k === 'N') startItem(pl.i + 1);
     else if (k === 'p' || k === 'P') startItem(pl.i - 1);
     else if (k === 'h' || k === 'H') flip('boxes');
@@ -1156,11 +1166,37 @@ function setClip(which) {
   s.clip = c; marksKey = '';
   status(`clip ${fmtTime(c.a)} – ${fmtTime(c.b)} (${((c.b - c.a) / 60).toFixed(1)} s): C copies a link to it`);
 }
+// loop: playing past the clip's out point jumps back to its in point (with no clip set yet, L loops the current round)
+let loopOn = false;
+function toggleLoop() {
+  loopOn = !loopOn;
+  document.getElementById('cliploop').classList.toggle('on', loopOn);
+  const s = session;
+  if (loopOn && s && s.tl && !s.clip) {  // no clip: the round being watched
+    const f = curFrame(), m = s.tl.marks, k = m.findIndex(x => x[0] > f);
+    const a = k > 0 ? m[k - 1][0] : k === 0 ? 1 : (m.length ? m[m.length - 1][0] : 1);
+    s.clip = { a, b: k >= 0 ? m[k][0] - 1 : tlMax(s.tl), stop: false, round: true }; marksKey = '';
+  }
+  if (s && s.clip) status(loopOn ? `looping ${fmtTime(s.clip.a)} – ${fmtTime(s.clip.b)}` : `playing ${s.name}`);
+}
+let unmuted = 100;
+function toggleMute() {
+  const vol = document.getElementById('vol');
+  if (+vol.value > 0) { unmuted = +vol.value; vol.value = 0; } else vol.value = unmuted || 100;
+  vol.dispatchEvent(new Event('input'));
+}
+function toggleHelp() { const h = document.getElementById('help'); h.hidden = !h.hidden; }
 function clearClip() { if (session && session.clip) { session.clip = null; marksKey = ''; status(`playing ${session.name}`); } }
 // a clip being played stops at its out point; play again from there starts it over
 function clipTick(s, f) {
   const c = s.clip;
-  if (!c || !c.stop || ui.paused || s.seeking || (s.tl && s.tl.running)) return;
+  if (!c || ui.paused || s.seeking || (s.tl && s.tl.running)) return;
+  if (c.round && s.tl) {  // a looped round ends where the next one starts, once the pre-scan has found it
+    const next = s.tl.marks.find(x => x[0] > c.a), b = next ? next[0] - 1 : tlMax(s.tl);
+    if (b !== c.b) { c.b = b; marksKey = ''; }
+  }
+  if (loopOn && f >= c.b) { requestSeek(c.a); return; }
+  if (!c.stop) return;
   if (f >= c.b) { setPaused(true); if (f > c.b) requestSeek(c.b); status(`clip end (${fmtTime(c.a)} – ${fmtTime(c.b)}): Space plays it again`); }
 }
 
