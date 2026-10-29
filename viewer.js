@@ -238,7 +238,21 @@ function audioHooks(Module, s) {
   // BGM: the stream set, one looping track (back to loopPos seconds at the end, as the game's stream does)
   const bgmChain = dsVoiceChain(master);
   let bgm = null, bgmPath = '';
-  const halt = () => { if (bgm) { try { bgm.stop(); } catch (e) {} bgm = null; } bgmPath = ''; };
+  // fade = seconds: the track fades out (pause) instead of cutting (seek, track change). Each track has its own fade
+  // gain after the stream's volume/pan chain, so a fade never fights the game's own volume changes.
+  const halt = (fade = 0) => {
+    const n = bgm;
+    bgm = null; bgmPath = '';
+    if (!n || !n.stop) return;
+    if (fade > 0 && n.fadeGain) {
+      const t = actx.currentTime;
+      n.fadeGain.gain.cancelScheduledValues(t);
+      n.fadeGain.gain.setValueAtTime(n.fadeGain.gain.value, t);
+      n.fadeGain.gain.linearRampToValueAtTime(0, t + fade);
+      try { n.stop(t + fade + 0.02); } catch (e) {}
+    } else { try { n.stop(); } catch (e) {} }
+  };
+  s.bgmPlaying = () => !!(bgm && bgm.stop);
   s.bgmLog = [];
   const log = ev => { const k = Module._viewer_frame(); if (!s.tl || k >= s.tl.simMax) s.bgmLog.push([k, ...ev]); };
   const play = (path, loop, loopPos, offset) => {
@@ -258,7 +272,8 @@ function audioHooks(Module, s) {
         const span = buf.duration - n.loopStart;
         off = span > 0 ? n.loopStart + ((off - n.loopStart) % span) : 0;
       }
-      n.connect(bgmChain.g); n.start(0, Math.max(0, off));
+      n.fadeGain = actx.createGain();
+      n.connect(n.fadeGain); n.fadeGain.connect(bgmChain.g); n.start(0, Math.max(0, off));
       bgm = n;
     }, () => {});
   };
@@ -795,7 +810,7 @@ async function copyTimestamp() {
   const u = new URL(location.origin + location.pathname);
   let text;
   try {
-    const m = (window.__mbaaRepUrl || '').match(/\/rep\/([0-9a-f]{64})\.rep$/);
+    const m = (window.__mbaaRepUrl || '').match(/\/rep\/([0-9a-f]{64})\.rep$/) || (window.__mbaaRepUrl || '').match(/\/s\/([A-Za-z0-9_-]{8,43})$/);
     if (m) u.searchParams.set('r', m[1]);
     else if (window.__mbaaRepUrl) u.searchParams.set('rep', window.__mbaaRepUrl);
     else { status('uploading replay for the link…'); u.searchParams.set('r', await shareId(s)); }
@@ -814,7 +829,7 @@ function setPaused(p) {
   const s = session;
   if (!s) return;
   s.mute = p || !!s.seeking;
-  if (p) { s.stopSes(); s.bgmHalt(); } else if (!s.seeking) s.bgmSync(s.M._viewer_frame());
+  if (p) { s.stopSes(); s.bgmHalt(0.35); } else if (!s.seeking) s.bgmSync(s.M._viewer_frame());  // pause: the music fades out
   if (!s.seeking) uiApply(s);
 }
 const curFrame = () => session ? (session.tl && session.tl.want !== null ? session.tl.want : session.M._viewer_frame()) : 0;
@@ -828,6 +843,7 @@ function stepBy(n, pause = true) {
   }
   return requestSeek(curFrame() + n);
 }
+window.__mbaaSession = () => session;  // tests
 window.mbaaViewer = { seek: requestSeek, step: stepBy, pause: setPaused, frame: () => session.M._viewer_frame(),
                       tl: () => session.tl, ui,
                       stats: () => { const t = session.tl; return { kfs: t.kfs.length, kfFrames: t.kfs.map(k => k.frame),
@@ -1065,7 +1081,9 @@ async function main() {
   controls();
   for (const key of ['boxes', 'inputs']) if (Q.get(key) === '1') { const el = document.getElementById(key); el.checked = true; el.onchange(); }
   // ?r=<id>: a shared replay in the replay store (tools/web/replay_worker.js); ?rep=<url>: any replay URL
-  const autoload = Q.get('r') && /^[0-9a-f]{64}$/.test(Q.get('r')) ? `${REPLAY_STORE}/rep/${Q.get('r')}.rep` : Q.get('rep');
+  const rq = Q.get('r') || '';
+  const autoload = /^[0-9a-f]{64}$/.test(rq) ? `${REPLAY_STORE}/rep/${rq}.rep`  // links from before short ids
+                 : /^[A-Za-z0-9_-]{8,43}$/.test(rq) ? `${REPLAY_STORE}/s/${rq}` : Q.get('rep');
   if (autoload) { window.__mbaaRepUrl = autoload; start(new File([await (await fetch(autoload)).arrayBuffer()], autoload)); }
 }
 main().catch(e => { console.error(e); status('error: ' + e.message); });
