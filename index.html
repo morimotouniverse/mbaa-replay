@@ -7,7 +7,7 @@
 <style>
   :root { --bg: #101018; --fg: #e8e8f0; --muted: #9090a8; --accent: #7aa2ff; }
   body { margin: 0; background: var(--bg); color: var(--fg); font: 14px/1.4 system-ui, sans-serif; display: flex;
-         flex-direction: column; align-items: center; gap: 8px; padding: 16px; }
+         flex-direction: column; align-items: center; gap: 8px; padding: 8px 16px; }
   :root { --w: min(100%, 960px); }
   .stage { position: relative; width: var(--w); }
   canvas#canvas { display: block; width: 100%; aspect-ratio: 4 / 3; image-rendering: pixelated; background: #000; cursor: pointer; }
@@ -15,7 +15,14 @@
   .stage:fullscreen canvas#canvas { width: var(--w); }
   .stage:fullscreen #overlay { inset: auto; width: var(--w); height: auto; aspect-ratio: 4 / 3; }
   #overlay { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; }
-  .timeline { width: max(min(100%, 960px), var(--w)); display: flex; flex-direction: column; gap: 0; }
+  .timeline { width: 100%; display: flex; flex-direction: column; gap: 0; }
+  /* controls overlay the bottom of the picture (video-player style) and fade out while it plays */
+  .controls { position: absolute; left: 0; right: 0; bottom: 0; padding: 28px 8px 6px; display: flex; flex-direction: column;
+              gap: 4px; background: linear-gradient(transparent, rgba(8,8,14,.82) 38%); transition: opacity .25s; }
+  .stage.idle .controls { opacity: 0; }
+  .stage.idle { cursor: none; }
+  .controls .bar { width: 100%; gap: 6px; }
+  .controls button, .controls select { padding: 2px 6px; }
   #marks { width: 100%; height: 14px; display: block; cursor: pointer; }
   #seek { width: 100%; margin: 0; padding: 0; accent-color: var(--accent); }
   .bar { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; justify-content: center; width: max(min(100%, 960px), var(--w)); }
@@ -33,12 +40,12 @@
 <div class="stage">
   <canvas id="canvas" width="640" height="480" oncontextmenu="event.preventDefault()"></canvas>
   <canvas id="overlay"></canvas>
-</div>
+  <div class="controls">
 <div class="timeline">
   <canvas id="marks"></canvas>
   <input id="seek" type="range" min="0" max="1" value="0" step="1" aria-label="seek">
 </div>
-<div class="bar">
+<div class="bar ctl">
   <button id="back5" title="back 5 s (Shift+Left)">&laquo;</button>
   <button id="back1" title="back one frame (,)">&lsaquo;</button>
   <button id="pause" title="pause / play (Space)">pause</button>
@@ -49,23 +56,26 @@
   <button id="nextr" title="next round (])">round &#9197;</button>
   <button id="full" title="fullscreen, integer scaled (F)">full</button>
   <button id="copyt" title="copy a link / timestamp to this frame (C)">copy time</button>
-  <select id="speed" title="speed"><option value="1">1x</option><option value="2">2x</option><option value="4">4x</option></select>
+  <select id="scale" title="picture size: auto = largest whole multiple that fits"><option value="auto">size: auto</option><option value="1">size: 1x</option><option value="2">size: 2x</option><option value="3">size: 3x</option><option value="4">size: 4x</option><option value="fit">size: fit</option></select>
+  <select id="speed" title="speed"><option value="1">speed 1x</option><option value="2">speed 2x</option><option value="4">speed 4x</option></select>
   <label title="skip the VS intro when a replay starts"><input id="skipintro" type="checkbox"> auto-skip intro</label>
   <label title="hitbox overlay (H)"><input id="boxes" type="checkbox"> boxes</label>
   <label title="input display (I)"><input id="inputs" type="checkbox"> inputs</label>
   <label>vol <input id="vol" type="range" min="0" max="100" value="50"></label>
   <button id="sound" hidden>click for sound</button>
 </div>
+  </div>
+</div>
 <div class="bar">
   <input id="rep" type="file" accept=".rep">
   <span id="status">loading…</span>
 </div>
-<div class="help"><kbd>Space</kbd> / tap skips the VS intro, then pauses · <kbd>,</kbd> <kbd>.</kbd> frame back / forward · <kbd>&larr;</kbd> <kbd>&rarr;</kbd> 1 s
+<div class="help"><kbd>Space</kbd> / click: skip the VS intro, then pause · <kbd>,</kbd> <kbd>.</kbd> frame back / forward · <kbd>&larr;</kbd> <kbd>&rarr;</kbd> 1 s
   (<kbd>Shift</kbd> 5 s) · <kbd>Home</kbd> <kbd>End</kbd> · <kbd>[</kbd> <kbd>]</kbd> previous / next round · <kbd>F</kbd> fullscreen · <kbd>C</kbd> copy timestamp · <kbd>H</kbd> boxes · <kbd>I</kbd> inputs ·
   boxes: <span style="color:#30e030">hurt</span> <span style="color:#ff2828">attack</span>
   <span style="color:#ffe020">clash</span> <span style="color:#40a0ff">shield</span> <span style="color:#d8d8d8">collision</span>
   <span style="color:#c878e6">special</span></div>
 <script src="mbaa.js?v=20ff9c8cd2e8"></script>
-<script src="viewer.js?v=9265134940df"></script>
+<script src="viewer.js?v=06b9ae74eafc"></script>
 </body>
 </html>

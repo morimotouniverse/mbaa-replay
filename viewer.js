@@ -962,6 +962,20 @@ function controls() {
   const btn = (id, fn) => { document.getElementById(id).onclick = e => { fn(); e.currentTarget.blur(); }; };
   btn('pause', () => setPaused(!ui.paused));
   btn('copyt', copyTimestamp);
+  const sc = document.getElementById('scale');
+  sc.value = scaleMode;
+  sc.onchange = () => { scaleMode = sc.value; try { localStorage.setItem('mbaaScale', scaleMode); } catch (e) {} fitStage(); sc.blur(); };
+  // the overlaid controls show on mouse movement and while paused, and fade out 2.5 s after the last movement
+  const stageEl = document.querySelector('.stage');
+  let idleT = 0;
+  const wake = () => {
+    stageEl.classList.remove('idle');
+    clearTimeout(idleT);
+    idleT = setTimeout(() => { if (!ui.paused && !seekDragging && !stageEl.matches('.controls:hover, .stage:has(.controls:hover)')) stageEl.classList.add('idle'); else wake(); }, 2500);
+  };
+  stageEl.addEventListener('pointermove', wake);
+  stageEl.addEventListener('pointerdown', wake);
+  wake();
   btn('full', toggleFullscreen);
   document.getElementById('marks').addEventListener('click', e => {
     const s = session;
@@ -975,7 +989,7 @@ function controls() {
   // a click / tap on the picture: during the VS screen it skips it (as a button press does in the game), otherwise
   // it pauses / plays
   document.getElementById('overlay').parentElement.addEventListener('pointerdown', e => {
-    if (e.button > 0 || !session) return;
+    if (e.button > 0 || !session || e.target.closest('.controls')) return;
     if (inIntro(session)) skipIntro(session); else setPaused(!ui.paused);
   });
   const si = document.getElementById('skipintro');
@@ -1037,12 +1051,20 @@ async function start(file) {
 
 // Integer scaling: the picture is the largest whole multiple of 640x480 in physical pixels that fits the window above
 // the controls (every game pixel the same size); below 1x it fits the width.
+let scaleMode = 'auto';
+try { scaleMode = localStorage.getItem('mbaaScale') || 'auto'; } catch (e) {}
 function fitStage() {
   const dpr = window.devicePixelRatio || 1, stage = document.querySelector('.stage');
   const full = document.fullscreenElement === stage;
-  const below = full ? 0 : [...document.querySelectorAll('.timeline, .bar, .help')].reduce((h, e) => h + e.offsetHeight + 8, 0);
+  // the controls overlay the picture, so it can take the whole window height
   const availW = full ? screen.width : document.documentElement.clientWidth - 32;
-  const availH = full ? screen.height : window.innerHeight - below - 40;
+  const availH = full ? screen.height : window.innerHeight - 16;
+  if (scaleMode === 'fit' || /^\d$/.test(scaleMode)) {
+    const w = scaleMode === 'fit' ? Math.min(availW, availH * 4 / 3) : 640 * +scaleMode / dpr;
+    document.documentElement.style.setProperty('--w', `${Math.floor(w)}px`);
+    if (stage) stage.dataset.scale = scaleMode === 'fit' ? 'fit' : `${scaleMode}x`;
+    return;
+  }
   // high-density screens (phones): one game pixel is already 2+ device pixels, uneven rows are invisible there, and a
   // whole multiple would leave a small picture: fit the width instead
   const k = dpr >= 2 && !full ? 0 : Math.floor(Math.min(availW * dpr / 640, Math.max(availH, 240) * dpr / 480));
