@@ -779,16 +779,32 @@ async function skipIntro(s) {
 }
 // Copy the current moment: a link that opens this replay at this frame when the replay came from a URL (?rep=),
 // otherwise the replay name, time and frame as text.
+const REPLAY_STORE = 'https://replays.meltyblood.org';
+// a local replay is uploaded once (named by its SHA-256, so re-sharing it gives the same link)
+async function shareId(s) {
+  if (s.shareId) return s.shareId;
+  const r = await fetch(`${REPLAY_STORE}/rep`, { method: 'POST', body: s.rep, headers: { 'Content-Type': 'application/octet-stream' } });
+  const j = await r.json();
+  if (!r.ok) throw new Error(j.error || `HTTP ${r.status}`);
+  return (s.shareId = j.id);
+}
 async function copyTimestamp() {
   const s = session;
   if (!s) return;
   const f = s.M._viewer_frame();
+  const u = new URL(location.origin + location.pathname);
   let text;
-  if (window.__mbaaRepUrl) {
-    const u = new URL(location.href);
-    u.searchParams.set('rep', window.__mbaaRepUrl); u.searchParams.set('t', f);
+  try {
+    const m = (window.__mbaaRepUrl || '').match(/\/rep\/([0-9a-f]{64})\.rep$/);
+    if (m) u.searchParams.set('r', m[1]);
+    else if (window.__mbaaRepUrl) u.searchParams.set('rep', window.__mbaaRepUrl);
+    else { status('uploading replay for the link…'); u.searchParams.set('r', await shareId(s)); }
+    u.searchParams.set('t', f);
     text = u.toString();
-  } else text = `${s.name.replace(/^.*\//, '')} @ ${fmtTime(f)} (frame ${f})`;
+  } catch (e) {
+    console.warn('share upload failed:', e);
+    text = `${s.name.replace(/^.*\//, '')} @ ${fmtTime(f)} (frame ${f})`;
+  }
   try { await navigator.clipboard.writeText(text); status(`copied: ${text}`); }
   catch (e) { prompt('copy:', text); }
 }
@@ -1017,7 +1033,8 @@ async function main() {
   document.body.ondrop = e => { e.preventDefault(); window.__mbaaRepUrl = null; e.dataTransfer.files[0] && start(e.dataTransfer.files[0]); };
   controls();
   for (const key of ['boxes', 'inputs']) if (Q.get(key) === '1') { const el = document.getElementById(key); el.checked = true; el.onchange(); }
-  const autoload = Q.get('rep');
+  // ?r=<id>: a shared replay in the replay store (tools/web/replay_worker.js); ?rep=<url>: any replay URL
+  const autoload = Q.get('r') && /^[0-9a-f]{64}$/.test(Q.get('r')) ? `${REPLAY_STORE}/rep/${Q.get('r')}.rep` : Q.get('rep');
   if (autoload) { window.__mbaaRepUrl = autoload; start(new File([await (await fetch(autoload)).arrayBuffer()], autoload)); }
 }
 main().catch(e => { console.error(e); status('error: ' + e.message); });
