@@ -328,6 +328,15 @@ function audioHooks(Module, s) {
   const log = ev => { const k = Module._viewer_frame(); if (!s.tl || k >= s.tl.simMax) s.bgmLog.push([k, ...ev]); };
   const play = (path, loop, loopPos, offset) => {
     halt();
+    const o = bgmStreamReady && bgmParsed(path.replace(/^\/game\//, ''));
+    if (o) {  // streamed (bgm_stream.js): a couple of seconds decoded at a time
+      bgmPath = path;
+      const fadeGain = actx.createGain(), lead = 0.05;
+      fadeGain.connect(bgmChain.g);
+      const st = bgmStreamPlay(actx, o, fadeGain, loop, loopPos, offset + lead, actx.currentTime + lead);
+      bgm = { stop: at => st.stop(at), fadeGain };
+      return;
+    }
     const dec = bgmDecode(path.replace(/^\/game\//, ''));
     if (!dec) return;
     bgmPath = path;
@@ -375,8 +384,15 @@ function audioHooks(Module, s) {
   window.addEventListener('mbaa-session-end', () => { s.stopSes(); halt(); }, { once: true });
 }
 
-// BGM tracks decode when the match's files arrive (a few MB of Opus: decoding at BGM start would stall that frame)
-const bgmDecoded = new Map();
+// BGM tracks decode when the match's files arrive (a few MB of Opus: decoding at BGM start would stall that frame);
+// where WebCodecs decodes Opus they are streamed instead (bgm_stream.js; ?bgmStream=0 decodes them whole)
+const bgmDecoded = new Map(), bgmParsedMap = new Map();
+let bgmStreamReady = false;
+bgmStreamSupported().then(ok => { bgmStreamReady = ok && Q.get('bgmStream') !== '0'; });
+function bgmParsed(p) {
+  if (!bgmParsedMap.has(p)) { const d = cache.get(p); if (!d) return null; bgmParsedMap.set(p, oggOpusParse(d)); }
+  return bgmParsedMap.get(p);
+}
 function bgmDecode(p) {
   if (!bgmDecoded.has(p)) {
     const d = cache.get(p);
@@ -417,6 +433,7 @@ function restoreBoot(s) {
   snap.pages.forEach((q, i) => unpackPage(q, H, i * W, W));
   if (top > snap.top) M.HEAPU8.fill(0, snap.top, top);
   call(s, 'viewer_restore_end', ++s.gen);
+  M._viewer_tex_store_reset();  // the last match's sealed textures (the boot ones stay)
 }
 async function newSession(rep, name, want) {
   const prev = session;
@@ -452,7 +469,7 @@ function fillSession(s, want, had) {
     M.mbaaAssetMiss = p => { if (man.files[p] && !(s.want.has(p) && cache.has(p))) misses.add(p); };
     trackOpens(s);
     audioHooks(M, s);
-    if (!HASH) for (const p of s.want) if (/^bgm\/.*\.opus$/.test(p) && cache.has(p)) bgmDecode(p);
+    if (!HASH && !bgmStreamReady) for (const p of s.want) if (/^bgm\/.*\.opus$/.test(p) && cache.has(p)) bgmDecode(p);
     return s;
   }
   FS.mkdir('/game');
@@ -465,7 +482,7 @@ function fillSession(s, want, had) {
   M.mbaaAssetMiss = p => { if (man.files[p] && !(s.want.has(p) && cache.has(p))) misses.add(p); };
   trackOpens(s);
   audioHooks(M, s);
-  if (!HASH) for (const p of s.want) if (/^bgm\/.*\.opus$/.test(p) && cache.has(p)) bgmDecode(p);
+  if (!HASH && !bgmStreamReady) for (const p of s.want) if (/^bgm\/.*\.opus$/.test(p) && cache.has(p)) bgmDecode(p);
   return s;
 }
 const call = (s, f, ...a) => s.M.ccall(f, 'number', a.map(() => 'number'), a);
@@ -476,7 +493,10 @@ async function play(rep, name, catchUp = 0, want = null) {
   const s = await newSession(rep, name, want);
   // stage animations on, except for native comparisons (?stageAnim=0, hash runs): the oracle's settings have them off
   call(s, 'viewer_stage_anim', Q.get('stageAnim') !== null ? +(Q.get('stageAnim') !== '0') : HASH ? 0 : 1);
+  if (Q.get('seal') === '0') call(s, 'viewer_seal_off', 1);
   if (!call(s, 'viewer_boot')) { window.__mbaaStarted = -1; status('start failed (see console)'); return; }
+  // boot textures to the GPU store first: the snapshot (and every keyframe) then holds no pixels
+  if (!s.reused) s.M._viewer_seal_boot();
   if (!s.boot && (!HASH && !CAPTURE || Q.get('reuse') === '1') && !s.M._viewer_files_open()) s.boot = bootSnapshot(s.M);
   if (!call(s, 'viewer_load')) { window.__mbaaStarted = -1; status('start failed (see console)'); return; }
   if (HASH) s.M.ccall('viewer_hash_enable', null, [], []);
@@ -520,6 +540,7 @@ async function refetchAndReplay(s, frame) {
   return play(s.rep, s.name, frame, new Set([...s.want, ...want]));
 }
 function watch(s) {
+  s.watching = true;
   const t = setInterval(() => {
     if (s !== session) return clearInterval(t);
     if (misses.size) { clearInterval(t); refetchAndReplay(s, call(s, 'viewer_frame')); return; }
@@ -738,6 +759,9 @@ function incTick(s, f) {
   if (!c) {
     const base = t.kfs[t.kfs.length - 1];
     if (!base || base.pending || f < base.frame + KF_EVERY - KF_PHASE || f < t.simMax) return;
+    // phones: none before round 1. The intro's frames hold the match's files as the game reads them (a keyframe there
+    // kept ~95 MB of them); a seek into the intro simulates from frame 0
+    if (LOWMEM && !t.marks.length) return;
     const hot = t.hotAt || (t.hotAt = new Map());
     const cold = [];
     for (let i = 0; i < base.pages.length; i++) {
@@ -1047,7 +1071,7 @@ function stepBy(n, pause = true) {
 }
 window.__mbaaSession = () => session;  // tests
 window.mbaaViewer = { startItem: i => startItem(i), seek: requestSeek, step: stepBy, pause: setPaused, frame: () => session.M._viewer_frame(),
-                      tl: () => session.tl, ui, pl, cacheSize: () => cache.size, cacheMap: () => cache, phone: PHONE, lowmem: LOWMEM, bgmMap: () => bgmDecoded, clip: () => session && session.clip,
+                      tl: () => session.tl, ui, pl, cacheSize: () => cache.size, cacheMap: () => cache, phone: PHONE, lowmem: LOWMEM, bgmStream: () => bgmStreamReady, audioState: () => [actx && actx.state, session && session.mute, session && session.bgmLog && session.bgmLog.length, ui.paused], bgmMap: () => bgmDecoded, clip: () => session && session.clip,
                       stats: () => { const t = session.tl; return { kfs: t.kfs.length, kfFrames: t.kfs.map(k => k.frame),
                         kfMs: t.kfs.map(k => Math.round(k.ms * 10) / 10), kfFresh: t.kfs.map(k => k.fresh), bytes: t.bytes,
                         memTop: session.M._viewer_mem_top(), heap: session.M.HEAPU8.length, simMax: t.simMax, end: t.end,
@@ -1291,6 +1315,7 @@ async function prefetch(it, cur) {
     const nextWant = wantFor(new Uint8Array(await (await itemFile(it)).arrayBuffer()));
     for (const p of [...cache.keys()]) if (!cur.has(p) && !nextWant.has(p)) cache.delete(p);  // the rest stays in Cache Storage
     for (const p of [...bgmDecoded.keys()]) if (!cur.has(p) && !nextWant.has(p)) bgmDecoded.delete(p);  // ~70 MB a track decoded
+    for (const p of [...bgmParsedMap.keys()]) if (!cur.has(p) && !nextWant.has(p)) bgmParsedMap.delete(p);
     if (LOWMEM) await warmDisk(man, nextWant); else await fetchAll(man, nextWant, 'next match', true);
   } catch (e) { console.warn('prefetch failed:', e); }
 }
@@ -1587,11 +1612,13 @@ async function renderExportAudio(s, ev, pre, c) {
     decoded.set(path, bytes ? oc.decodeAudioData(bytes.slice().buffer).catch(() => null) : Promise.resolve(null));
   }
   const bufs = new Map(await Promise.all([...decoded].map(async ([p, d]) => [p, await d])));
-  const voices = new Map(), bgmV = chainOf();
+  const voices = new Map(), bgmV = chainOf(), exportBgm = new Map();
   const voice = ch => { let v = voices.get(ch); if (!v) voices.set(ch, v = chainOf()); return v; };
   const bgmStart = async (path, loop, loopPos, t, offset) => {
     cutAt(bgmV, t);
-    const dec = bgmDecode(path.replace(/^\/game\//, ''));
+    const p = path.replace(/^\/game\//, '');
+    if (!exportBgm.has(p)) exportBgm.set(p, bgmDecoded.get(p) || (cache.get(p) ? actx.decodeAudioData(cache.get(p).slice().buffer) : null));
+    const dec = exportBgm.get(p);  // this export's own decode (dropped with it) unless the track is already decoded
     const buf = dec && await dec.catch(() => null);
     if (!buf) return;
     const n = oc.createBufferSource();
