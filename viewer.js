@@ -965,17 +965,6 @@ function controls() {
   const sc = document.getElementById('scale');
   sc.value = scaleMode;
   sc.onchange = () => { scaleMode = sc.value; try { localStorage.setItem('mbaaScale', scaleMode); } catch (e) {} fitStage(); sc.blur(); };
-  // the overlaid controls show on mouse movement and while paused, and fade out 2.5 s after the last movement
-  const stageEl = document.querySelector('.stage');
-  let idleT = 0;
-  const wake = () => {
-    stageEl.classList.remove('idle');
-    clearTimeout(idleT);
-    idleT = setTimeout(() => { if (!ui.paused && !seekDragging && !stageEl.matches('.controls:hover, .stage:has(.controls:hover)')) stageEl.classList.add('idle'); else wake(); }, 2500);
-  };
-  stageEl.addEventListener('pointermove', wake);
-  stageEl.addEventListener('pointerdown', wake);
-  wake();
   btn('full', toggleFullscreen);
   document.getElementById('marks').addEventListener('click', e => {
     const s = session;
@@ -989,7 +978,8 @@ function controls() {
   // a click / tap on the picture: during the VS screen it skips it (as a button press does in the game), otherwise
   // it pauses / plays
   document.getElementById('overlay').parentElement.addEventListener('pointerdown', e => {
-    if (e.button > 0 || !session || e.target.closest('.controls')) return;
+    if (e.button > 0 || !session) return;
+    if (actx && actx.state !== 'running') return;  // this click only turns sound on (the page-wide unlock handles it)
     if (inIntro(session)) skipIntro(session); else setPaused(!ui.paused);
   });
   const si = document.getElementById('skipintro');
@@ -1053,23 +1043,30 @@ async function start(file) {
 // the controls (every game pixel the same size); below 1x it fits the width.
 let scaleMode = 'auto';
 try { scaleMode = localStorage.getItem('mbaaScale') || 'auto'; } catch (e) {}
+const SIDE_W = 320 + 16;  // the controls panel beside the picture, with its gap
 function fitStage() {
-  const dpr = window.devicePixelRatio || 1, stage = document.querySelector('.stage');
+  const dpr = window.devicePixelRatio || 1, stage = document.querySelector('.stage'), ctl = document.getElementById('controls');
   const full = document.fullscreenElement === stage;
-  // the controls overlay the picture, so it can take the whole window height
-  const availW = full ? screen.width : document.documentElement.clientWidth - 32;
-  const availH = full ? screen.height : window.innerHeight - 16;
-  if (scaleMode === 'fit' || /^\d$/.test(scaleMode)) {
-    const w = scaleMode === 'fit' ? Math.min(availW, availH * 4 / 3) : 640 * +scaleMode / dpr;
-    document.documentElement.style.setProperty('--w', `${Math.floor(w)}px`);
-    if (stage) stage.dataset.scale = scaleMode === 'fit' ? 'fit' : `${scaleMode}x`;
-    return;
+  const W = full ? screen.width : document.documentElement.clientWidth - 32;
+  const H = full ? screen.height : window.innerHeight - 16;
+  // controls below the picture take their stacked height; beside it, SIDE_W of width. Pick the layout with the larger picture.
+  document.body.classList.remove('side');
+  const below = full ? 0 : (ctl ? ctl.offsetHeight + 8 : 0);
+  const kSide = Math.floor(Math.min((W - SIDE_W) * dpr / 640, H * dpr / 480));
+  const kBelow = Math.floor(Math.min(W * dpr / 640, (H - below) * dpr / 480));
+  const side = !full && kSide >= kBelow && W - SIDE_W >= 320;
+  document.body.classList.toggle('side', side);
+  let w, label;
+  if (scaleMode === 'fit') { w = side ? Math.min(W - SIDE_W, H * 4 / 3) : Math.min(W, (H - below) * 4 / 3); label = 'fit'; }
+  else if (/^\d$/.test(scaleMode)) { w = 640 * +scaleMode / dpr; label = `${scaleMode}x`; }
+  else {
+    // high-density screens (phones): a game pixel is already 2+ device pixels, uneven rows are invisible there, and a
+    // whole multiple would leave a small picture: fit the width instead
+    const k = dpr >= 2 && !full ? 0 : side ? kSide : kBelow;
+    w = k >= 1 ? 640 * k / dpr : Math.min(W, 960); label = k >= 1 ? `${k}x` : 'fit';
   }
-  // high-density screens (phones): one game pixel is already 2+ device pixels, uneven rows are invisible there, and a
-  // whole multiple would leave a small picture: fit the width instead
-  const k = dpr >= 2 && !full ? 0 : Math.floor(Math.min(availW * dpr / 640, Math.max(availH, 240) * dpr / 480));
-  document.documentElement.style.setProperty('--w', k >= 1 ? `${640 * k / dpr}px` : 'min(100%, 960px)');
-  if (stage) stage.dataset.scale = k >= 1 ? `${k}x` : 'fit';
+  document.documentElement.style.setProperty('--w', `${Math.floor(w * 1000) / 1000}px`);
+  if (stage) stage.dataset.scale = label;
 }
 addEventListener('resize', fitStage);
 document.addEventListener('fullscreenchange', fitStage);
