@@ -1022,7 +1022,7 @@ function uiLoop() {
   if (s && s.tl) {
     const t = s.tl, f = s.M._viewer_frame(), max = tlMax(t);
     clipTick(s, f);
-    if (rec) recTick(s, f);
+    if (rec) { try { recTick(s, f); } catch (e) { recFail(e); } }
     const seek = document.getElementById('seek');
     if (+seek.max !== max) seek.max = max;
     if (!seekDragging) seek.value = t.want !== null ? t.want : f;
@@ -1245,15 +1245,18 @@ function renderPlaylist() {
 function setClip(which) {
   const s = session;
   if (!s || !s.tl) return;
-  const f = curFrame(), c = s.clip || { a: 1, b: tlMax(s.tl), stop: false };
-  if (which === 'a') { c.a = f; if (c.b <= f) c.b = tlMax(s.tl); } else { c.b = f; if (c.a >= f) c.a = 1; }
+  const f = curFrame(), c = s.clip || { a: 1, b: tlMax(s.tl), stop: false, round: true };
+  // an in point alone ends the clip with its round (the out point, once set, is kept)
+  if (which === 'a') { c.a = f; if (c.round || c.b <= f) Object.assign(c, roundClip(s, f), { a: f }); }
+  else { c.b = f; c.round = false; if (c.a >= f) c.a = 1; }
   s.clip = c; marksKey = '';
-  status(`clip ${fmtTime(c.a)} – ${fmtTime(c.b)} (${((c.b - c.a) / 60).toFixed(1)} s): C copies a link to it`);
+  status(c.round ? `clip from ${fmtTime(c.a)} to the end of the round: } sets an out point, E saves it as a video`
+                 : `clip ${fmtTime(c.a)} – ${fmtTime(c.b)} (${((c.b - c.a) / 60).toFixed(1)} s): C copies a link, E saves a video`);
 }
 // loop: playing past the clip's out point jumps back to its in point (with no clip set yet, L loops the current round)
 let loopOn = false;
-function roundClip(s) {
-  const f = curFrame(), m = s.tl.marks, k = m.findIndex(x => x[0] > f);
+function roundClip(s, f = curFrame()) {
+  const m = s.tl.marks, k = m.findIndex(x => x[0] > f);
   const a = k > 0 ? m[k - 1][0] : k === 0 ? 1 : (m.length ? m[m.length - 1][0] : 1);
   return { a, b: k >= 0 ? m[k][0] - 1 : tlMax(s.tl), stop: false, round: true };
 }
@@ -1294,8 +1297,7 @@ async function exportVideo() {
   const s = session;
   if (rec) return stopRecording(true);
   if (!s || !s.tl || !window.MediaRecorder) { status('video export needs a browser with MediaRecorder'); return; }
-  const type = REC_TYPES.find(t => MediaRecorder.isTypeSupported(t));
-  if (!type) { status('this browser cannot record video'); return; }
+  if (!REC_TYPES.some(t => MediaRecorder.isTypeSupported(t))) { status('this browser cannot record video'); return; }
   ensureAudio(); await actx.resume();
   if (inIntro(s)) await skipIntro(s);
   const c = s.clip ? { ...s.clip } : roundClip(s);
@@ -1306,13 +1308,20 @@ async function exportVideo() {
   const stream = out.captureStream(0), dest = actx.createMediaStreamDestination();
   master.connect(dest);
   stream.addTrack(dest.stream.getAudioTracks()[0]);
-  const mr = new MediaRecorder(stream, { mimeType: type, videoBitsPerSecond: 8e6, audioBitsPerSecond: 192e3 }), chunks = [];
+  let mr = null, type = '';
+  for (const t of REC_TYPES.filter(t => MediaRecorder.isTypeSupported(t))) {  // the first format whose recorder starts
+    try { mr = new MediaRecorder(stream, { mimeType: t, videoBitsPerSecond: 8e6, audioBitsPerSecond: 192e3 }); mr.start(1000); type = t; break; }
+    catch (e) { console.warn(`recorder ${t} failed:`, e); mr = null; }
+  }
+  if (!mr) { master.disconnect(dest); status('video export failed: no recorder format would start'); return; }
+  const chunks = [];
   mr.ondataavailable = e => { if (e.data.size) chunks.push(e.data); };
-  rec = { s, a: c.a, b: c.b, round: !s.clip, mr, g, out, dest, chunks, type, last: -1, save: true,
+  mr.onerror = e => recFail(e.error || e);
+  rec = { s, a: c.a, b: c.b, round: !!c.round, mr, g, out, dest, chunks, type, last: -1, save: true,
           speed: ui.speed, track: stream.getVideoTracks()[0] };
   if (ui.speed !== 1) call(s, 'viewer_speed', 1);
   document.getElementById('clipexp').classList.add('on');
-  recDraw(); mr.start(1000);
+  recDraw();
   setPaused(false);
 }
 function recDraw() {
@@ -1332,6 +1341,11 @@ function recTick(s, f) {
   status(`recording ${fmtTime(Math.max(0, f - r.a))} / ${fmtTime(r.b - r.a)} (E stops and saves, Esc cancels)`);
   if (f >= r.b || (s.tl.end !== null && f >= s.tl.end)) stopRecording(true);
 }
+function recFail(e) {
+  console.error('video export failed:', e);
+  stopRecording(false);
+  status(`video export failed: ${(e && e.message) || e}`);
+}
 function stopRecording(save) {
   const r = rec;
   if (!r) return;
@@ -1341,7 +1355,7 @@ function stopRecording(save) {
   document.getElementById('clipexp').classList.remove('on');
   r.mr.onstop = () => {
     master.disconnect(r.dest);
-    if (!save) { status('recording cancelled'); return; }
+    if (!save) { if (!/failed/.test(document.getElementById('status').textContent)) status('recording cancelled'); return; }
     const blob = new Blob(r.chunks, { type: r.type.split(';')[0] }), ext = r.type.startsWith('video/mp4') ? 'mp4' : 'webm';
     const name = `${document.getElementById('title').textContent.replace(/[\\/:*?"<>|\u00b7]+/g, ' ').replace(/\s+/g, ' ').trim()} ${fmtTime(r.a).replace(/[:.]/g, '-')}.${ext}`;
     const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = name;
@@ -1350,7 +1364,7 @@ function stopRecording(save) {
     window.__mbaaLastExport = { name, size: blob.size, type: blob.type };
     status(`saved ${name} (${(blob.size / 1048576).toFixed(1)} MB)`);
   };
-  r.mr.stop();
+  if (r.mr.state === 'inactive') r.mr.onstop(); else r.mr.stop();
 }
 // Integer scaling: the picture is the largest whole multiple of 640x480 in physical pixels that fits the window above
 // the controls (every game pixel the same size); below 1x it fits the width.
