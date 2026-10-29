@@ -1120,7 +1120,7 @@ function controls() {
     else if (k === ']' || k === 'PageDown') jumpRound(1);
     else if (k === '{') setClip('a');
     else if (k === '}') setClip('b');
-    else if (k === 'Escape') { if (rec) stopRecording(false); else if (!document.getElementById('help').hidden) toggleHelp(); else clearClip(); }
+    else if (k === 'Escape') { if (fx) fx.cancel = true; else if (rec) stopRecording(false); else if (!document.getElementById('help').hidden) toggleHelp(); else clearClip(); }
     else if (k === 'l' || k === 'L') toggleLoop();
     else if (k === 'e' || k === 'E') exportVideo();
     else if (k === 'm' || k === 'M') toggleMute();
@@ -1280,7 +1280,7 @@ function clearClip() { if (session && session.clip) { session.clip = null; marks
 // a clip being played stops at its out point; play again from there starts it over
 function clipTick(s, f) {
   const c = s.clip;
-  if (!c || rec || ui.paused || s.seeking || (s.tl && s.tl.running)) return;
+  if (!c || rec || fx || ui.paused || s.seeking || (s.tl && s.tl.running)) return;
   if (c.round && s.tl) {  // a looped round ends where the next one starts, once the pre-scan has found it
     const next = s.tl.marks.find(x => x[0] > c.a), b = next ? next[0] - 1 : tlMax(s.tl);
     if (b !== c.b) { c.b = b; marksKey = ''; }
@@ -1290,19 +1290,199 @@ function clipTick(s, f) {
   if (f >= c.b) { setPaused(true); if (f > c.b) requestSeek(c.b); status(`clip end (${fmtTime(c.a)} – ${fmtTime(c.b)}): Space plays it again`); }
 }
 
-// ---- video export: the clip (or the round being watched) played at 1x and recorded with MediaRecorder. Every game
-// frame is drawn onto a 2x canvas (nearest neighbour, with the hitbox / input overlay) and pushed as one video frame;
-// the sound is the game's mix before the volume slider. MP4 where the browser records it, else WebM.
-let rec = null;
+// ---- video export: the clip, or the round being watched, as a 1280x960 60 fps video (every game frame drawn 2x,
+// nearest neighbour, with the hitbox / input overlay) with the game's sound at its own level (before the volume slider).
+// Fast path (WebCodecs): the game is stepped as fast as it runs and each frame encoded (H.264, VP9 where there is no
+// H.264 encoder), the sound events of those frames are logged and rendered in an OfflineAudioContext, and both go into an
+// MP4 (vendor/mp4-muxer). Without WebCodecs the range is played at 1x and recorded with MediaRecorder.
+let rec = null, fx = null;
 const REC_TYPES = ['video/mp4;codecs=avc1.640028,mp4a.40.2', 'video/mp4', 'video/webm;codecs=vp9,opus', 'video/webm'];
+const EXPORT_W = 1280, EXPORT_H = 960, EXPORT_SR = 48000, EXPORT_PREROLL = 180;  // pre-roll: sounds already playing at the in point
 async function exportVideo() {
   const s = session;
+  if (fx) { fx.cancel = true; return; }
   if (rec) return stopRecording(true);
-  if (!s || !s.tl || !window.MediaRecorder) { status('video export needs a browser with MediaRecorder'); return; }
-  if (!REC_TYPES.some(t => MediaRecorder.isTypeSupported(t))) { status('this browser cannot record video'); return; }
+  if (!s || !s.tl) return;
   ensureAudio(); await actx.resume();
   if (inIntro(s)) await skipIntro(s);
   const c = s.clip ? { ...s.clip } : roundClip(s);
+  if (window.VideoEncoder && window.VideoFrame && Q.get('exportMode') !== 'realtime') {
+    try { if (await fastExport(s, c)) return; }
+    catch (e) { console.error('video export failed:', e); status(`video export failed: ${e.message || e}`); return; }
+  }
+  return exportRealtime(s, c);
+}
+function loadScript(src) {
+  return new Promise((res, rej) => { const e = document.createElement('script'); e.src = src; e.onload = res;
+    e.onerror = () => rej(new Error(`could not load ${src}`)); document.head.append(e); });
+}
+async function exportCodecs() {
+  let video = null, audio = null;
+  // H.264 Constrained Baseline (level 4.2): no B-frames, which the muxer needs (Firefox's High profile encoder emits
+  // them, out of decode order); VP9 where there is no H.264 encoder
+  for (const codec of ['avc1.42E02A', 'vp09.00.40.08']) {
+    const cfg = { codec, width: EXPORT_W, height: EXPORT_H, bitrate: 12e6, framerate: 60, latencyMode: 'quality' };
+    if (codec.startsWith('avc1')) cfg.avc = { format: 'avc' };
+    try { if ((await VideoEncoder.isConfigSupported(cfg)).supported) { video = cfg; break; } } catch (e) {}
+  }
+  if (window.AudioEncoder) for (const codec of ['mp4a.40.2', 'opus']) {
+    const cfg = { codec, sampleRate: EXPORT_SR, numberOfChannels: 2, bitrate: 192000 };
+    try { if ((await AudioEncoder.isConfigSupported(cfg)).supported) { audio = cfg; break; } } catch (e) {}
+  }
+  return { video, audio };
+}
+function exportName(c, ext) {
+  return `${document.getElementById('title').textContent.replace(/[\\/:*?"<>|\u00b7]+/g, ' ').replace(/\s+/g, ' ').trim()} ${fmtTime(c.a).replace(/[:.]/g, '-')}.${ext}`;
+}
+function saveBlob(blob, name) {
+  const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = name;
+  document.body.append(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(a.href), 60000);
+  window.__mbaaLastExport = { name, size: blob.size, type: blob.type };
+}
+async function fastExport(s, c) {
+  const codecs = await exportCodecs();
+  if (!codecs.video) return false;
+  if (!window.Mp4Muxer) await loadScript('vendor/mp4-muxer.min.js');
+  const M = s.M, t0 = performance.now(), pre = Math.max(1, c.a - EXPORT_PREROLL);
+  fx = { cancel: false };
+  document.getElementById('clipexp').classList.add('on');
+  setPaused(true);
+  const hooks = ['mbaaVoicePlay', 'mbaaVoiceParam', 'mbaaVoiceStop', 'mbaaBgmStart', 'mbaaBgmStop'], orig = {};
+  try {
+    await requestSeek(pre);
+    const muxer = new Mp4Muxer.Muxer({ target: new Mp4Muxer.ArrayBufferTarget(), fastStart: 'in-memory',
+      video: { codec: codecs.video.codec.startsWith('avc1') ? 'avc' : 'vp9', width: EXPORT_W, height: EXPORT_H, frameRate: 60 },
+      ...(codecs.audio ? { audio: { codec: codecs.audio.codec === 'opus' ? 'opus' : 'aac', sampleRate: EXPORT_SR, numberOfChannels: 2 } } : {}) });
+    let encErr = null;
+    const venc = new VideoEncoder({ output: (ch, meta) => muxer.addVideoChunk(ch, meta), error: e => { encErr = e; } });
+    venc.configure(codecs.video);
+    // the sound events of every stepped frame, with the frame they happen in
+    const ev = [];
+    for (const h of hooks) { orig[h] = M[h]; M[h] = (...a) => { ev.push([M._viewer_frame(), h, ...a]); return orig[h](...a); }; }
+    const out = document.createElement('canvas'); out.width = EXPORT_W; out.height = EXPORT_H;
+    const g = out.getContext('2d'); g.imageSmoothingEnabled = false;
+    const cv = document.getElementById('canvas'), ov = document.getElementById('overlay');
+    let lastUi = 0;
+    for (let k = pre; k < c.b; k++) {
+      if (fx.cancel || session !== s) throw new Error('cancelled');
+      if (encErr) throw encErr;
+      call(s, 'viewer_step', 1);
+      if (k < c.a) continue;
+      g.drawImage(cv, 0, 0, EXPORT_W, EXPORT_H);
+      if (ui.boxes || ui.inputs) { drawOverlay(); g.drawImage(ov, 0, 0, EXPORT_W, EXPORT_H); }
+      const vf = new VideoFrame(out, { timestamp: Math.round((k - c.a) * 1e6 / 60), duration: Math.round(1e6 / 60) });
+      venc.encode(vf, { keyFrame: (k - c.a) % 120 === 0 }); vf.close();
+      while (venc.encodeQueueSize > 6) await new Promise(r => setTimeout(r, 1));
+      if (performance.now() - lastUi > 150) {  // let the page breathe and show progress
+        lastUi = performance.now();
+        const done = (k - c.a + 1) / (c.b - c.a), speed = (k - c.a + 1) / 60 / ((lastUi - t0) / 1000);
+        status(`exporting ${Math.round(100 * done)}% (${speed.toFixed(1)}x real time; E or Esc cancels)`);
+        overlayDirty = true;
+        await new Promise(r => setTimeout(r, 0));
+      }
+    }
+    for (const h of hooks) M[h] = orig[h];
+    await venc.flush(); venc.close();
+    if (encErr) throw encErr;
+    if (codecs.audio) {
+      status('exporting: sound');
+      const pcm = await renderExportAudio(s, ev, pre, c);
+      let aerr = null;
+      const aenc = new AudioEncoder({ output: (ch, meta) => muxer.addAudioChunk(ch, meta), error: e => { aerr = e; } });
+      aenc.configure(codecs.audio);
+      const skip = Math.round((c.a - pre) / 60 * EXPORT_SR), L = pcm.getChannelData(0), R = pcm.getChannelData(1), step = 4800;
+      for (let i = skip; i < pcm.length; i += step) {
+        const n = Math.min(step, pcm.length - i), data = new Float32Array(2 * n);
+        data.set(L.subarray(i, i + n), 0); data.set(R.subarray(i, i + n), n);
+        const ad = new AudioData({ format: 'f32-planar', sampleRate: EXPORT_SR, numberOfFrames: n, numberOfChannels: 2,
+                                   timestamp: Math.round((i - skip) * 1e6 / EXPORT_SR), data });
+        aenc.encode(ad); ad.close();
+      }
+      await aenc.flush(); aenc.close();
+      if (aerr) throw aerr;
+    }
+    muxer.finalize();
+    const blob = new Blob([muxer.target.buffer], { type: 'video/mp4' }), name = exportName(c, 'mp4');
+    saveBlob(blob, name);
+    const secs = (performance.now() - t0) / 1000;
+    status(`saved ${name} (${(blob.size / 1048576).toFixed(1)} MB, ${((c.b - c.a) / 60).toFixed(1)} s of video in ${secs.toFixed(1)} s)`);
+    window.__mbaaLastExport.ms = Math.round(secs * 1000);
+    window.__mbaaLastExport.codecs = [codecs.video.codec, codecs.audio && codecs.audio.codec];
+  } catch (e) {
+    if (e.message !== 'cancelled') throw e;
+    status('export cancelled');
+  } finally {
+    for (const h of hooks) if (orig[h]) M[h] = orig[h];
+    fx = null; overlayDirty = true;
+    document.getElementById('clipexp').classList.remove('on');
+  }
+  return true;
+}
+// The logged sound events rendered offline the way audioHooks plays them live: one voice per sound set (Play restarts
+// it, Stop cuts it, volume / pan in DirectSound units), the BGM stream from where it was at the pre-roll start.
+async function renderExportAudio(s, ev, pre, c) {
+  const M = s.M, oc = new OfflineAudioContext(2, Math.ceil((c.b - pre) / 60 * EXPORT_SR), EXPORT_SR);
+  const at = k => Math.max(0, (k - pre) / 60);
+  const chainOf = () => {
+    const g = oc.createGain(); g.channelCount = 2; g.channelCountMode = 'explicit'; g.channelInterpretation = 'speakers';
+    const sp = oc.createChannelSplitter(2), mg = oc.createChannelMerger(2), l = oc.createGain(), r = oc.createGain();
+    g.connect(sp); sp.connect(l, 0); sp.connect(r, 1); l.connect(mg, 0, 0); r.connect(mg, 0, 1); mg.connect(oc.destination);
+    return { g, l, r, src: null };
+  };
+  const setVp = (v, vol, pan, t) => {
+    v.g.gain.setValueAtTime(dsGain(vol), t);
+    v.l.gain.setValueAtTime(pan > 0 ? dsGain(-pan) : 1, t); v.r.gain.setValueAtTime(pan < 0 ? dsGain(pan) : 1, t);
+  };
+  const cutAt = (v, t) => { if (v.src) { try { v.src.stop(t); } catch (e) {} v.src = null; } };
+  const decoded = new Map();
+  for (const [, h, , path] of ev) if (h === 'mbaaVoicePlay' && !decoded.has(path)) {
+    let bytes = null; try { bytes = M.FS.readFile(path); } catch (e) {}
+    decoded.set(path, bytes ? oc.decodeAudioData(bytes.slice().buffer).catch(() => null) : Promise.resolve(null));
+  }
+  const bufs = new Map(await Promise.all([...decoded].map(async ([p, d]) => [p, await d])));
+  const voices = new Map(), bgmV = chainOf();
+  const voice = ch => { let v = voices.get(ch); if (!v) voices.set(ch, v = chainOf()); return v; };
+  const bgmStart = async (path, loop, loopPos, t, offset) => {
+    cutAt(bgmV, t);
+    const dec = bgmDecode(path.replace(/^\/game\//, ''));
+    const buf = dec && await dec.catch(() => null);
+    if (!buf) return;
+    const n = oc.createBufferSource();
+    n.buffer = buf; n.loop = !!loop; n.loopStart = Math.min(loopPos, buf.duration); n.loopEnd = buf.duration;
+    let off = offset;
+    if (off >= buf.duration) {
+      if (!loop) return;
+      const span = buf.duration - n.loopStart;
+      off = span > 0 ? n.loopStart + ((off - n.loopStart) % span) : 0;
+    }
+    n.connect(bgmV.g); n.start(t, Math.max(0, off)); bgmV.src = n;
+  };
+  // the BGM at the pre-roll start (as s.bgmSync finds it)
+  let cur = null, vp = null;
+  for (const [k, e, ...a] of s.bgmLog) {
+    if (k >= pre) break;
+    if (e === 'stop') cur = null;
+    else if (e === 'start') { cur = { path: a[0], loop: a[1], loopPos: a[2], k }; vp = [a[3], a[4]]; }
+    else if (e === 'param') vp = [a[0], a[1]];
+  }
+  if (vp) setVp(bgmV, vp[0], vp[1], 0);
+  if (cur) await bgmStart(cur.path, cur.loop, cur.loopPos, 0, Math.max(0, pre - cur.k - 1) / 60);
+  for (const [k, h, ...a] of ev) {
+    const t = at(k);
+    if (h === 'mbaaVoicePlay') {
+      const [ch, path, vol, pan] = a, v = voice(ch), buf = bufs.get(path);
+      cutAt(v, t); setVp(v, vol, pan, t);
+      if (buf) { const n = oc.createBufferSource(); n.buffer = buf; n.connect(v.g); n.start(t); v.src = n; }
+    } else if (h === 'mbaaVoiceParam') { const [ch, vol, pan] = a; setVp(ch === -1 ? bgmV : voice(ch), vol, pan, t); }
+    else if (h === 'mbaaVoiceStop') { if (a[0] !== -1 && voices.has(a[0])) cutAt(voices.get(a[0]), t); }
+    else if (h === 'mbaaBgmStart') { const [path, loop, loopPos, vol, pan] = a; setVp(bgmV, vol, pan, t); await bgmStart(path, loop, loopPos, t, 0); }
+    else if (h === 'mbaaBgmStop') cutAt(bgmV, t);
+  }
+  return oc.startRendering();
+}
+async function exportRealtime(s, c) {
+  if (!window.MediaRecorder || !REC_TYPES.some(t => MediaRecorder.isTypeSupported(t))) { status('this browser cannot record video'); return; }
   setPaused(true);
   await requestSeek(c.a);
   const out = document.createElement('canvas'); out.width = 1280; out.height = 960;
@@ -1362,12 +1542,8 @@ function stopRecording(save) {
   r.mr.onstop = () => {
     master.disconnect(r.dest);
     if (!save) { if (!/failed/.test(document.getElementById('status').textContent)) status('recording cancelled'); return; }
-    const blob = new Blob(r.chunks, { type: r.type.split(';')[0] }), ext = r.type.startsWith('video/mp4') ? 'mp4' : 'webm';
-    const name = `${document.getElementById('title').textContent.replace(/[\\/:*?"<>|\u00b7]+/g, ' ').replace(/\s+/g, ' ').trim()} ${fmtTime(r.a).replace(/[:.]/g, '-')}.${ext}`;
-    const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = name;
-    document.body.append(a); a.click(); a.remove();
-    setTimeout(() => URL.revokeObjectURL(a.href), 60000);
-    window.__mbaaLastExport = { name, size: blob.size, type: blob.type };
+    const blob = new Blob(r.chunks, { type: r.type.split(';')[0] }), name = exportName(r, r.type.startsWith('video/mp4') ? 'mp4' : 'webm');
+    saveBlob(blob, name);
     status(`saved ${name} (${(blob.size / 1048576).toFixed(1)} MB)`);
   };
   if (r.mr.state === 'inactive') r.mr.onstop(); else r.mr.stop();
