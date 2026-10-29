@@ -43,12 +43,23 @@ async function openObject(buf) {
   const s = new Blob([z]).stream().pipeThrough(new DecompressionStream('deflate-raw'));
   return new Uint8Array(await new Response(s).arrayBuffer());
 }
-const net = window.mbaaNet = { objects: 0, bytes: 0 };
+const net = window.mbaaNet = { objects: 0, bytes: 0, cached: 0 };
+// Bundle objects are content-addressed (the name is a hash of the content), so a stored copy never goes stale: they
+// are kept in the Cache Storage API, and a character / stage seen before loads with no network at all. (Pages' own
+// HTTP cache keeps them only 10 minutes.)
+let objCache = null;
+const objCacheReady = (async () => { try { objCache = await caches.open('mbaa-objects-v1'); } catch (e) {} })();
 async function fetchObject(h) {
-  const r = await fetch(`${BUNDLE}o/${h.slice(0, 2)}/${h}`);
+  const url = `${BUNDLE}o/${h.slice(0, 2)}/${h}`;
+  await objCacheReady;
+  if (objCache) {
+    try { const hit = await objCache.match(url); if (hit) { net.cached++; return openObject(await hit.arrayBuffer()); } } catch (e) {}
+  }
+  const r = await fetch(url);
   if (!r.ok) throw new Error(`object ${h}: HTTP ${r.status}`);
   const buf = await r.arrayBuffer();
   net.objects++; net.bytes += buf.byteLength;
+  if (objCache) objCache.put(url, new Response(buf.slice(0))).catch(() => {});
   return openObject(buf);
 }
 function status(t) { document.getElementById('status').textContent = t; }
@@ -128,7 +139,7 @@ async function fetchAll(man, paths, label) {
         data = new Uint8Array(await r.arrayBuffer());
       } else data = await fetchObject(f.o);
       cache.set(p, data);
-      if (++done % 10 === 0 || done === n) status(`${label} ${done}/${n} (${((net.bytes - net0) / 1e6).toFixed(1)} MB downloaded)`);
+      if (++done % 10 === 0 || done === n) status(`${label} ${done}/${n} (${((net.bytes - net0) / 1e6).toFixed(1)} MB downloaded${net.cached ? `, ${net.cached} files from cache` : ''})`);
     }
   }
   await Promise.all(Array.from({ length: 16 }, worker));
@@ -302,7 +313,10 @@ function freshCanvas() {
 async function newSession(rep, name) {
   if (session) { try { session.M.ccall('viewer_stop', null, [], []); } catch (e) {} }
   window.dispatchEvent(new Event('mbaa-session-end'));
-  const M = await MBAA({ print: t => console.log(t), printErr: t => console.warn(t), canvas: freshCanvas() });
+  // mbaa.wasm is built with mbaa.js: it takes mbaa.js's cache-busting version (tools/web/deploy_pages.sh)
+  const wasmV = ((document.querySelector('script[src^="mbaa.js"]') || {}).src || '').split('?')[1];
+  const M = await MBAA({ print: t => console.log(t), printErr: t => console.warn(t), canvas: freshCanvas(),
+                         locateFile: p => (wasmV && p.endsWith('.wasm') ? `${p}?${wasmV}` : p) });
   const s = { M, name, rep, live: true, mute: false, gen: 0 };
   session = s;
   const FS = M.FS;
@@ -879,7 +893,6 @@ function controls() {
     };
   }
   addEventListener('keydown', e => {
-    if (e.target.tagName === 'INPUT' && e.target.type === 'file') return;
     if (e.ctrlKey || e.metaKey || e.altKey) return;
     const k = e.key, sec = e.shiftKey ? 300 : 60;
     const flip = id => { const el = document.getElementById(id); el.checked = !el.checked; el.onchange(); };
@@ -934,7 +947,7 @@ async function main() {
     if (!man.plan) await fetchAll(man, Object.keys(man.files), 'assets');  // a bundle without a plan: everything
   }
   status('ready: drop a .rep file');
-  document.getElementById('rep').onchange = e => e.target.files[0] && start(e.target.files[0]);
+  document.getElementById('rep').onchange = e => { e.target.blur(); if (e.target.files[0]) start(e.target.files[0]); };  // blur: keys go to the viewer
   document.body.ondragover = e => e.preventDefault();
   document.body.ondrop = e => { e.preventDefault(); e.dataTransfer.files[0] && start(e.dataTransfer.files[0]); };
   controls();
