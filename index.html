@@ -8,13 +8,17 @@
   :root { --bg: #101018; --fg: #e8e8f0; --muted: #9090a8; --accent: #7aa2ff; }
   body { margin: 0; background: var(--bg); color: var(--fg); font: 14px/1.4 system-ui, sans-serif; display: flex;
          flex-direction: column; align-items: center; gap: 8px; padding: 16px; }
-  .stage { position: relative; width: min(100%, 960px); }
-  canvas#canvas { display: block; width: 100%; aspect-ratio: 4 / 3; image-rendering: pixelated; background: #000; }
+  :root { --w: min(100%, 960px); }
+  .stage { position: relative; width: var(--w); }
+  canvas#canvas { display: block; width: 100%; aspect-ratio: 4 / 3; image-rendering: pixelated; background: #000; cursor: pointer; }
+  .stage:fullscreen { background: #000; display: flex; align-items: center; justify-content: center; width: 100%; }
+  .stage:fullscreen canvas#canvas { width: var(--w); }
+  .stage:fullscreen #overlay { inset: auto; width: var(--w); height: auto; aspect-ratio: 4 / 3; }
   #overlay { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; }
-  .timeline { width: min(100%, 960px); display: flex; flex-direction: column; gap: 0; }
+  .timeline { width: max(min(100%, 960px), var(--w)); display: flex; flex-direction: column; gap: 0; }
   #marks { width: 100%; height: 14px; display: block; cursor: pointer; }
   #seek { width: 100%; margin: 0; padding: 0; accent-color: var(--accent); }
-  .bar { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; justify-content: center; width: min(100%, 960px); }
+  .bar { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; justify-content: center; width: max(min(100%, 960px), var(--w)); }
   #status { color: var(--muted); }
   #fc { font-variant-numeric: tabular-nums; min-width: 15ch; color: var(--fg); }
   .help { color: var(--muted); font-size: 12px; text-align: center; }
@@ -43,6 +47,7 @@
   <span id="fc">0 / 0</span>
   <button id="prevr" title="previous round ([)">&#9198; round</button>
   <button id="nextr" title="next round (])">round &#9197;</button>
+  <button id="full" title="fullscreen, integer scaled (F)">full</button>
   <button id="copyt" title="copy a link / timestamp to this frame (C)">copy time</button>
   <select id="speed" title="speed"><option value="1">1x</option><option value="2">2x</option><option value="4">4x</option></select>
   <label title="skip the VS intro when a replay starts"><input id="skipintro" type="checkbox"> auto-skip intro</label>
@@ -56,11 +61,11 @@
   <span id="status">loading…</span>
 </div>
 <div class="help"><kbd>Space</kbd> / tap skips the VS intro, then pauses · <kbd>,</kbd> <kbd>.</kbd> frame back / forward · <kbd>&larr;</kbd> <kbd>&rarr;</kbd> 1 s
-  (<kbd>Shift</kbd> 5 s) · <kbd>Home</kbd> <kbd>End</kbd> · <kbd>[</kbd> <kbd>]</kbd> previous / next round · <kbd>C</kbd> copy timestamp · <kbd>H</kbd> boxes · <kbd>I</kbd> inputs ·
+  (<kbd>Shift</kbd> 5 s) · <kbd>Home</kbd> <kbd>End</kbd> · <kbd>[</kbd> <kbd>]</kbd> previous / next round · <kbd>F</kbd> fullscreen · <kbd>C</kbd> copy timestamp · <kbd>H</kbd> boxes · <kbd>I</kbd> inputs ·
   boxes: <span style="color:#30e030">hurt</span> <span style="color:#ff2828">attack</span>
   <span style="color:#ffe020">clash</span> <span style="color:#40a0ff">shield</span> <span style="color:#d8d8d8">collision</span>
   <span style="color:#c878e6">special</span></div>
 <script src="mbaa.js?v=20ff9c8cd2e8"></script>
-<script src="viewer.js?v=9b771ba63759"></script>
+<script src="viewer.js?v=78829a96e763"></script>
 </body>
 </html>

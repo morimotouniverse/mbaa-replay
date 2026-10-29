@@ -946,6 +946,7 @@ function controls() {
   const btn = (id, fn) => { document.getElementById(id).onclick = e => { fn(); e.currentTarget.blur(); }; };
   btn('pause', () => setPaused(!ui.paused));
   btn('copyt', copyTimestamp);
+  btn('full', toggleFullscreen);
   document.getElementById('marks').addEventListener('click', e => {
     const s = session;
     if (!s || !s.tl) return;
@@ -986,6 +987,7 @@ function controls() {
     else if (k === 'Home') requestSeek(1);
     else if (k === 'End' && session && session.tl) requestSeek(tlMax(session.tl));
     else if (k === 'c' || k === 'C') copyTimestamp();
+    else if (k === 'f' || k === 'F') toggleFullscreen();
     else if (k === '[' || k === 'PageUp') jumpRound(-1);
     else if (k === ']' || k === 'PageDown') jumpRound(1);
     else if (k === 'h' || k === 'H') flip('boxes');
@@ -1017,7 +1019,29 @@ async function start(file) {
   await play(rep, file.name);
 }
 
+// Integer scaling: the picture is the largest whole multiple of 640x480 in physical pixels that fits the window above
+// the controls (every game pixel the same size); below 1x it fits the width.
+function fitStage() {
+  const dpr = window.devicePixelRatio || 1, stage = document.querySelector('.stage');
+  const full = document.fullscreenElement === stage;
+  const below = full ? 0 : [...document.querySelectorAll('.timeline, .bar, .help')].reduce((h, e) => h + e.offsetHeight + 8, 0);
+  const availW = full ? screen.width : document.documentElement.clientWidth - 32;
+  const availH = full ? screen.height : window.innerHeight - below - 40;
+  // high-density screens (phones): one game pixel is already 2+ device pixels, uneven rows are invisible there, and a
+  // whole multiple would leave a small picture: fit the width instead
+  const k = dpr >= 2 && !full ? 0 : Math.floor(Math.min(availW * dpr / 640, Math.max(availH, 240) * dpr / 480));
+  document.documentElement.style.setProperty('--w', k >= 1 ? `${640 * k / dpr}px` : 'min(100%, 960px)');
+  if (stage) stage.dataset.scale = k >= 1 ? `${k}x` : 'fit';
+}
+addEventListener('resize', fitStage);
+document.addEventListener('fullscreenchange', fitStage);
+function toggleFullscreen() {
+  const stage = document.querySelector('.stage');
+  if (document.fullscreenElement) document.exitFullscreen(); else stage.requestFullscreen().catch(() => {});
+}
+matchMedia && addEventListener('load', fitStage);
 async function main() {
+  fitStage();
   // the engine downloads while the match's files do (MBAA() later fetches the same URL: an HTTP cache hit)
   const wasmV = ((document.querySelector('script[src^="mbaa.js"]') || {}).src || '').split('?')[1];
   fetch('mbaa.wasm' + (wasmV ? `?${wasmV}` : '')).then(r => r.arrayBuffer()).catch(() => {});
