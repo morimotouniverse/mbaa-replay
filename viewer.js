@@ -619,7 +619,7 @@ function timelineInit(s) {
       if (t.end === null && M._viewer_ended()) t.end = f;
     }
     if (!s.seeking) incTick(s, f);
-    else if (f >= t.lastKf + KF_EVERY && f >= t.simMax && !M._viewer_files_open()) keyframe(s, f);
+    else if (f >= t.lastKf + KF_EVERY && f >= t.simMax && !M._viewer_files_open() && !(LOWMEM && !t.marks.length)) keyframe(s, f);  // phones: none in the intro (incTick)
   };
   if (!M._viewer_files_open()) keyframe(s, M._viewer_frame());
 }
