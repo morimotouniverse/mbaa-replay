@@ -64,6 +64,14 @@
   #players .moon { width: 16px; height: 16px; flex: none; }
   #players .vs { font-size: 10px; color: var(--faint); letter-spacing: .12em; padding-left: 72px; }
   body.live .replayonly { display: none !important; }
+  body:not(.live) .liveonly { display: none !important; }
+  /* live: a player's name the game's banner font can't draw (viewer.js liveBanner), where the game's banner text goes */
+  .banner { position: absolute; transform: translateX(-50%); overflow: hidden; white-space: nowrap; pointer-events: none;
+    font: italic 800 calc(var(--bs) * 13px) / 1 Arial, "Noto Sans JP", sans-serif; color: #fff; letter-spacing: .04em;
+    text-shadow: 0 0 2px #000, 1px 1px 0 #000, -1px -1px 0 #000; }
+  .banner span { display: inline-block; }
+  .banner.scroll span { padding-left: 100%; animation: banner 9s linear infinite; }
+  @keyframes banner { to { transform: translateX(-100%); } }
   /* scrollbars in the panel's colours (Firefox: scrollbar-*; Chromium / Safari: ::-webkit-scrollbar) */
   * { scrollbar-width: thin; scrollbar-color: #ffffff2a transparent; }
   ::-webkit-scrollbar { width: 8px; height: 8px; }
@@ -162,6 +170,7 @@
 <div class="stage">
   <canvas id="canvas" width="640" height="480" oncontextmenu="event.preventDefault()"></canvas>
   <canvas id="overlay"></canvas>
+  <div class="banner" id="banner0" hidden><span></span></div><div class="banner" id="banner1" hidden><span></span></div>
   <video id="loadvid" muted loop playsinline preload="none" poster="opening.webp" hidden></video>
 </div>
 <div class="controls" id="controls">
@@ -209,6 +218,7 @@
       <label class="chip" title="hitbox overlay (H)"><input id="boxes" type="checkbox">hitboxes</label>
       <label class="chip" title="input display (I)"><input id="inputs" type="checkbox">inputs</label>
       <label class="chip" title="the game's HUD: health, meter, timer, combo counters (U)"><input id="hud" type="checkbox" checked>HUD</label>
+      <label class="chip liveonly" title="the players' names on the CHALLENGER / WINS banner (N)"><input id="names" type="checkbox" checked>names</label>
       <label class="chip" title="music (B); sound effects stay"><input id="music" type="checkbox" checked>music</label>
     </div>
     <div class="row">
@@ -262,8 +272,8 @@
   </div>
 </div>
 </div>
-<script src="mbaa.js?v=e244f8c2b3a6"></script>
+<script src="mbaa.js?v=f3ed972b24fd"></script>
 <script src="bgm_stream.js?v=407ac29e5c89"></script>
-<script src="viewer.js?v=0ffb3504be8f"></script>
+<script src="viewer.js?v=dd39d2dd45ed"></script>
 </body>
 </html>

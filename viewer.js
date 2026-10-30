@@ -710,6 +710,7 @@ async function hashRun(s) {
 const ui = { paused: false, speed: 1, boxes: false, inputs: false, skipIntro: false, hud: true, music: true };
 try { ui.hud = localStorage.getItem('mbaaHud') !== '0'; ui.music = localStorage.getItem('mbaaMusic') !== '0'; } catch (e) {}
 try { ui.skipIntro = localStorage.getItem('mbaaSkipIntro') === '1'; } catch (e) {}
+try { ui.names = localStorage.getItem('mbaaNames') !== '0'; } catch (e) { ui.names = true; }
 const tlMax = t => t.end !== null ? t.end : Math.max(t.simMax, t.est, 1);
 function uiApply(s) {
   call(s, 'viewer_pause', ui.paused || s.seeking ? 1 : 0);
@@ -732,7 +733,7 @@ function timelineInit(s) {
       t.scene = scene; t.round = round;
       if (t.end === null && M._viewer_ended()) t.end = f;
     }
-    if (s.liveSrc) { liveCssWatch(s); liveRematchHold(s); }
+    if (s.liveSrc) { liveCssWatch(s); liveRematchHold(s); liveBanner(s); liveStreak(s); }
     if (!s.seeking) incTick(s, f);
     else if (f >= t.lastKf + KF_EVERY && f >= t.simMax && !M._viewer_files_open() && !(LOWMEM && !t.marks.length)) keyframe(s, f);  // phones: none in the intro (incTick)
   };
@@ -1445,6 +1446,50 @@ function liveLoaderGate(s) {
     .catch(e => { console.warn('live: game files:', e); status(`live: the game's files did not load (${e.message})`); });
   return false;
 }
+// Live: the players' names on the game's versus banner, instead of CHALLENGER (the streak after them: "NAME  2 WINS"):
+// drawn by the game in its ASCII font (viewer_banner_name: main_browser.cpp banner_text, a marquee when long); a name
+// with other characters, by the page at the banner's place (#banner0 / #banner1)
+const STREAK = [0x76FC14, 0x770EB4];  // g_P1ConsecutiveWinStreak, g_P2ConsecutiveWinStreak (the player records', +0x4A0)
+const asciiName = n => /^[\x20-\x7e]*$/.test(n);
+function liveBanner(s) {
+  const names = ((s.liveSrc.info.names) || []).map(n => (n || '').trim());
+  const key = JSON.stringify([names, ui.names]);
+  if (key !== s.bannerKey) {
+    s.bannerKey = key;
+    call(s, 'viewer_banner_enable', ui.names && names.some(Boolean) ? 1 : 0);
+    for (const p of [0, 1]) s.M.ccall('viewer_banner_name', null, ['number', 'string'], [p, asciiName(names[p] || '') ? names[p] || '' : '']);
+  }
+  const W = document.getElementById('canvas').clientWidth, sc = W / 640;
+  for (const p of [0, 1]) {
+    const el = document.getElementById(`banner${p}`), n = names[p] || '';
+    const y = ui.names && n && !asciiName(n) ? call(s, 'viewer_banner_y', p) : -1000;
+    if (y <= -1000) { el.hidden = true; continue; }
+    const k = call(s, 'viewer_banner_streak', p), text = n + (k === 1 ? '  1 WIN' : k > 1 ? `  ${k} WINS` : '');
+    const span = el.firstChild;
+    if (span.textContent !== text) span.textContent = text;
+    // the game's banner: centred on x 168 / 470, 16 px high from y; at most 12 characters of 12 px (kBannerMax)
+    el.style.setProperty('--bs', sc.toFixed(3));
+    Object.assign(el.style, { left: `${(p ? 470 : 168) * sc}px`, top: `${(y + 2) * sc}px`, width: `${144 * sc}px`, textAlign: 'center' });
+    el.hidden = false;
+    el.classList.toggle('scroll', span.offsetWidth > 144 * sc);
+  }
+}
+// The players' win streaks, as the game's own (the banner's "N WINS"; ResultMenu_UpdatePlayerStats counts them on):
+// the bridge's for this game (a viewer that knew them sent them), else unknown (from 0, as a CCCaster spectator). Put
+// in after viewer_play (CharaSelect_InitReplayMode zeroes them) and before the first frame: the match start copies them
+// for the banner (ResetBattleMode: Netplay_GetWinCounts).
+function liveSeedStreak(s) {
+  if (liveSrc.info.streak) liveSrc.info.streak.forEach((w, p) => { s.M.HEAP32[STREAK[p] >> 2] = w; });
+}
+// Each game's first battle frame: the streaks it started with, to the bridge (later viewers start from them)
+function liveStreak(s) {
+  if (!s.streakKnown || s.M.HEAP32[0x54EEE8 >> 2] !== 1) return;
+  const g = call(s, 'viewer_spectate_game'), game = g >= 0 ? g : s.liveSrc.info.game;
+  if (game === s.streakSent) return;
+  s.streakSent = game;
+  const w = STREAK.map(a => s.M.HEAP32[a >> 2]);
+  fetch(`${LIVE}/live/${s.liveSrc.id}/streak?game=${game}`, { method: 'POST', body: w.join(',') }).catch(() => {});
+}
 // in MEMFS for the game: in the session's files and not dropped by freeLoaded (low-memory mode; the next game of the
 // stream, a rematch above all, reads the same files again)
 const liveHas = (s, p) => s.want.has(p) && !s.freed.has(p);
@@ -1537,6 +1582,9 @@ function liveBegin(s) {  // play(): after viewer_play
   const L = liveSrc;
   s.liveSrc = L;
   s.M.mbaaLoaderGate = () => liveLoaderGate(s);
+  s.streakKnown = !!L.info.streak;
+  liveSeedStreak(s);
+  s.streakSent = -1; s.bannerKey = null;
   L.since = L.info.game;
   L.recs = new Map();
   L.next = false;
@@ -1897,6 +1945,12 @@ function controls() {
     try { localStorage.setItem('mbaaMusic', ui.music ? '1' : '0'); } catch (e) {}
     if (musicGain) musicGain.gain.value = ui.music ? 1 : 0;
   };
+  const namesEl = document.getElementById('names');
+  namesEl.checked = ui.names;
+  namesEl.onchange = () => {
+    ui.names = namesEl.checked; namesEl.blur();
+    try { localStorage.setItem('mbaaNames', ui.names ? '1' : '0'); } catch (e) {}
+  };
   for (const key of ['boxes', 'inputs']) {
     const el = document.getElementById(key);
     el.onchange = () => {
@@ -1927,6 +1981,7 @@ function controls() {
     else if (k === 'e' || k === 'E') exportVideo();
     else if (k === 'm' || k === 'M') toggleMute();
     else if (k === 'u' || k === 'U') flip('hud');
+    else if ((k === 'n' || k === 'N') && session && session.liveSrc) flip('names');
     else if (k === 'b' || k === 'B') flip('music');
     else if (k === '?') toggleHelp();
     else if (k === 'n' || k === 'N') startItem(pl.i + 1);
