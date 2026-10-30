@@ -1101,7 +1101,8 @@ async function liveListShow() {
   sec.hidden = !l.length;
   ol.replaceChildren(...l.map(m => {
     const li = document.createElement('li'), a = document.createElement('a');
-    a.href = `${location.pathname}?live=${m.id}` +  // (the page's <base> is the site root on the live path) (Q.get('liveUrl') ? `&liveUrl=${encodeURIComponent(Q.get('liveUrl'))}` : '');
+    // (the page's <base> is the site root on the live path: a bare ?live= would leave it)
+    a.href = `${location.pathname}?live=${m.id}` + (Q.get('liveUrl') ? `&liveUrl=${encodeURIComponent(Q.get('liveUrl'))}` : '');
     a.textContent = m.matchup || m.names.map(n => n.trim()).join(' vs ');
     if (liveSrc && liveSrc.id === m.id) li.className = 'cur';
     li.append(a);
