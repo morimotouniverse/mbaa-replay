@@ -1397,7 +1397,8 @@ function liveCssWatch(s) {
     // Random (99): the battle slot's copy, once the select is finished (its moon is copied a frame after the chara)
     return done && known(g(BATTLE_SLOT + p * 0x2C + 8)) ? [g(BATTLE_SLOT + p * 0x2C + 8), Math.max(0, g(BATTLE_SLOT + p * 0x2C + 0x14))] : null;
   });
-  const stage = done ? g(STAGE_ID) : null, key = JSON.stringify([stage, sides]);
+  // (0: a random stage, rolled as the game loads: liveLoaderGate fetches it)
+  const stage = done && g(STAGE_ID) > 0 ? g(STAGE_ID) : null, key = JSON.stringify([stage, sides]);
   if (key !== s.cssKey) {
     s.cssKey = key;
     const want = new Set();
@@ -1427,6 +1428,23 @@ function liveCssWatch(s) {
   const ready = s.cssNeed.every(p => liveHas(s, p));
   if (done && !ready !== !!s.cssHeld) liveCssHold(s, !ready);
 }
+// The game's load starting (web/host/seams_web.cpp g_loaderGate, from VersusIntro): the stage is rolled now (a random
+// one is picked only here: the select screen leaves its id 0) and the battle slots are final. Any of the game's files
+// not in MEMFS: fetched, the load waits and the game is held until they are (false). The select screen's picks
+// (liveCssWatch) usually have them in already.
+function liveLoaderGate(s) {
+  const H = s.M.HEAP32, g = a => H[a >> 2];
+  const side = p => [g(BATTLE_SLOT + p * 0x2C + 8), Math.max(0, g(BATTLE_SLOT + p * 0x2C + 0x14))];
+  const want = planFiles(man, { stage: g(STAGE_ID), p1: side(0), p2: side(1) });
+  const need = [...want].filter(p => !liveHas(s, p));
+  if (!need.length) return true;
+  console.log(`live: the game's load waits for ${need.length} files (stage ${g(STAGE_ID)})`);
+  s.loadNeed = need; s.loadHeld = true; liveHoldApply(s);
+  fetchAll(man, need, 'next game', true)
+    .then(() => { if (session === s) liveInstall(s, need); })
+    .catch(e => { console.warn('live: game files:', e); status(`live: the game's files did not load (${e.message})`); });
+  return false;
+}
 // in MEMFS for the game: in the session's files and not dropped by freeLoaded (low-memory mode; the next game of the
 // stream, a rematch above all, reads the same files again)
 const liveHas = (s, p) => s.want.has(p) && !s.freed.has(p);
@@ -1436,7 +1454,7 @@ function liveCssHold(s, on) {
 }
 // the game held (no frame steps) while a next game's files are not in: picked at the select screen, or a rematch's
 const liveHoldApply = s => {
-  const on = !!(s.cssHeld || s.rematchHeld);
+  const on = !!(s.cssHeld || s.rematchHeld || s.loadHeld);
   call(s, 'viewer_live_hold', on ? 1 : 0);
   if (on) status('live: loading the next game');
 };
@@ -1472,6 +1490,7 @@ function liveInstall(s, paths) {
   // loaded (its first round start after now)
   if (back && LOWMEM) { s.freedAt = -1; s.freeArm = s.M._viewer_frame(); }
   if (s.cssHeld && s.cssNeed.every(p => liveHas(s, p))) liveCssHold(s, false);
+  if (s.loadHeld && s.loadNeed.every(p => liveHas(s, p))) { s.loadHeld = false; liveHoldApply(s); }
 }
 // (each frame, with liveCssWatch) a rematch's files still on the way when the game reaches the retry menu: it waits there
 function liveRematchHold(s) {
@@ -1517,6 +1536,7 @@ async function liveGoLive() {
 function liveBegin(s) {  // play(): after viewer_play
   const L = liveSrc;
   s.liveSrc = L;
+  s.M.mbaaLoaderGate = () => liveLoaderGate(s);
   L.since = L.info.game;
   L.recs = new Map();
   L.next = false;
@@ -1567,7 +1587,9 @@ function liveBegin(s) {  // play(): after viewer_play
         s.liveThumbAt = performance.now();
         grabCard().jpeg.then(b => b && fetch(`${LIVE}/live/${L.id}/thumb`, { method: 'POST', body: b }).catch(() => {}));
       }
-      const hold = ahead < 15 || (s.liveHeld && ahead < 120);
+      // (not at the retry menu: it has no stream frames to count, the players' choice comes when they make it, and
+      // CCCaster's spectator never waits there: the game shows the win quote meanwhile)
+      const hold = !call(s, 'viewer_spectate_in_retry') && (ahead < 15 || (s.liveHeld && ahead < 120));
       s.liveHeld = hold;
       call(s, 'viewer_pause', hold || ui.paused || s.seeking ? 1 : 0);
       // CCCaster's spectateFastFwd: more than 60 frames (2 x NUM_INPUTS) behind, every other frame is not drawn
