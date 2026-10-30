@@ -46,9 +46,9 @@ const KF_BUDGET = +(Q.get('kfmb') || (LOWMEM ? 40 : 450)) * 1e6;
 const hex = h => new Uint8Array(h.match(/../g).map(x => parseInt(x, 16)));
 let cryptoKey;
 // z = 'xz' (manifest entry; tools/web/bundle_xz.py): the large files, a third smaller than deflate, decoded by a pool
-// of web/shell/xz_worker.js (one xzwasm each: parallel, and off this thread); everything else deflate, which the browser
+// of web/shell/xz_worker.js (one xz-decompress each: parallel, and off this thread); everything else deflate, which the browser
 // decodes natively. The pool starts on the first xz object; its URL carries viewer.js's version (deploy_pages.sh hashes
-// the worker and xzwasm into it).
+// the worker and xz-decompress into it).
 let xzPool = null;
 function xzDecode(buf) {
   if (!xzPool) {
@@ -1212,7 +1212,7 @@ async function stagePanelLoad() {
   const grid = document.getElementById('radiogrid'), tog = document.getElementById('radiotog');
   const art = {};  // track -> the first stage that plays it (its select-screen preview is the track's tile)
   for (const [id, st] of Object.entries(stagePanel.stages)) if (st.track && !art[st.track] && st.art.includes('view')) art[st.track] = id;
-  const t = Object.entries(stagePanel.tracks).filter(([f]) => /^bgmme\d+$/.test(f));  // (not the endings' long cuts)
+  const t = Object.entries(stagePanel.tracks).filter(([, x]) => x.loop);  // (a radio of looping tracks: no jingles, endings)
   const tile = (f, title) => {
     const b = document.createElement('button'), img = document.createElement('div'), cap = document.createElement('span');
     b.className = 'tile'; b.dataset.f = f; b.title = title;
@@ -1229,7 +1229,7 @@ async function stagePanelLoad() {
   tog.onclick = () => { grid.hidden = !grid.hidden; if (!grid.hidden) radioArt(); };
   document.getElementById('radiosec').hidden = false;
   let saved = ''; try { saved = localStorage.getItem('mbaa-radio') || ''; } catch (e) {}
-  radioSet(saved && stagePanel.tracks[saved] ? saved : '');
+  radioSet(saved && stagePanel.tracks[saved] && stagePanel.tracks[saved].loop ? saved : '');
 }
 // the tiles' stage previews, fetched when the picker first opens
 let radioArtDone = false;

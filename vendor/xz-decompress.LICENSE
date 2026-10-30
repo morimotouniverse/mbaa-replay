@@ -1,0 +1,7 @@
+xz-decompress 0.2.3 (https://github.com/httptoolkit/xz-decompress, npm xz-decompress), dist/package/xz-decompress.min.js
+unmodified. License: MIT.
+Based on xzwasm (c) Steve Sanderson, MIT (https://github.com/SteveSanderson/xzwasm).
+Contains xz-embedded by Lasse Collin and Igor Pavlov, public domain (https://tukaani.org/xz/embedded.html),
+and walloc (c) 2020 Igalia, S.L., MIT (https://github.com/wingo/walloc).
+Replaces xzwasm here: xzwasm hands out output chunks that are views of its wasm memory, which the next chunk
+overwrites; Firefox read them after that (right length, wrong bytes). xz-decompress copies each chunk.
