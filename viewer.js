@@ -588,6 +588,7 @@ function fillSession(s, want, had) {
   for (const p of s.want) { const d = cache.get(p); if (d) fsPut(FS, '/game/' + p, d); }
   FS.writeFile('/game/replay.rep', rep);
   M.mbaaAssetMiss = p => { if (man.files[p] && !(s.want.has(p) && cache.has(p))) misses.add(p); };
+  if (movieBytes) M.mbaaMovie = movieBytes;
   trackOpens(s);
   audioHooks(M, s);
   if (!HASH && !bgmStreamReady) for (const p of s.want) if (/^bgm\/.*\.opus$/.test(p) && cache.has(p)) bgmDecode(p);
@@ -640,6 +641,7 @@ async function play(rep, name, catchUp = 0, want = null) {
   if (s !== session) return;
   call(s, 'viewer_run');
   loading(false);
+  if (!HASH && !LOWMEM) movieLoad();
   status(`playing ${name}`);
   watch(s);
 }
@@ -1892,6 +1894,21 @@ function wantFor(rep) {
   if (Q.get('planDrop')) { const re = new RegExp(Q.get('planDrop')); want = new Set([...want].filter(f => !re.test(f))); }
   return want;
 }
+// ---- the VS movie (web/host/vsmovie_frames.cpp): its frames file (the canonical DirectShow decode, lossless, 32 MB)
+// stays out of the game's memory, which keyframes and the boot snapshot hold: the page keeps it (Module.mbaaMovie) and
+// the game reads a record at a time. Fetched once a match plays, never ahead of one (until it is here the panel stays
+// dark: the picture only); a capture run has it before it starts (its pictures are compared with the game's).
+const MOVIE = 'dat/dat_m_vs.vsmv';
+let movieBytes = null, movieLoading = null;
+function movieLoad() {
+  if (!movieLoading) movieLoading = (async () => {
+    const f = man.files[MOVIE];
+    if (!f) return;
+    movieBytes = f.plain ? new Uint8Array(await (await fetch(f.plain)).arrayBuffer()) : await fetchObject(f.o, f.z);
+    if (session) session.M.mbaaMovie = movieBytes;
+  })().catch(e => { movieLoading = null; console.warn('VS movie:', e); });
+  return movieLoading;
+}
 // the loading picture: the game's opening movie (web/shell/opening.webm, from Movie/Original MBAA_OP.mpeg: 480x360, no
 // sound), fetched the first time a match loads; shown from the first fetch until the game draws
 function loading(on) {
@@ -1917,6 +1934,7 @@ async function start(file) {
   const [, when] = repLabel(file.name);
   document.getElementById('title').textContent = matchTitle(rep) + (when ? ` \u00b7 ${when}` : '');
   const next = pl.items[pl.i + 1];
+  if (CAPTURE) await movieLoad();
   await play(rep, file.name, 0, want);
   if (want && next) prefetch(next, want);
   else if (want) for (const p of [...cache.keys()]) if (!want.has(p)) cache.delete(p);  // the last match: the previous one's files go
@@ -2400,6 +2418,7 @@ async function main() {
     man = { files: {} };
     for (const p of await (await fetch(plainList)).json()) man.files[p.toLowerCase()] = { plain: plainRoot + p };
     await fetchAll(man, Object.keys(man.files), 'assets');
+    man.files[MOVIE] = { plain: plainRoot + MOVIE };  // (the page keeps it: movieLoad)
   } else {
     cryptoKey = await crypto.subtle.importKey('raw', hex(KEY_HEX), 'AES-CTR', false, ['decrypt']);
     status('loading manifest…');
