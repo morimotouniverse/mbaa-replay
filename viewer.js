@@ -376,7 +376,7 @@ function audioHooks(Module, s) {
   };
   Module.mbaaVoiceParam = (ch, vol, pan) => {
     se.params++;
-    if (ch === -1) { log(['param', vol, pan]); if (graph()) apply(bgmChain, vol, pan); return; }
+    if (ch === -1) { log(['param', vol, pan]); radioLevel(vol); if (graph()) apply(bgmChain, vol, pan); return; }
     if (actx) apply(chain(ch), vol, pan);
   };
   Module.mbaaVoiceStop = ch => {
@@ -387,10 +387,16 @@ function audioHooks(Module, s) {
   };
   s.stopSes = () => { for (const v of voices.values()) cut(v); };
   // BGM: the stream set, one looping track (back to loopPos seconds at the end, as the game's stream does)
-  // (made with the context: s.bgmSync then sets the stream's level from the log, the radio's from the last start)
-  let bgmChain = null, radioChain = null, startVol = 0;  // (the radio's: each start's level)
+  // (made with the context: s.bgmSync then sets the stream's level from the log)
+  // The radio plays at the music's own level: the highest the game has set its stream to (it starts each track silent,
+  // -10000, and raises it; fades go below it); before the game's first music, CE's level at the canonical settings
+  let bgmChain = null, radioChain = null, radioVol = null;
+  const radioLevel = vol => {
+    if (vol > -10000 && (radioVol === null || vol > radioVol)) radioVol = vol;
+    if (radioChain) apply(radioChain, radioVol === null ? -1666 : radioVol, 0);
+  };
   const graph = () => {
-    if (!bgmChain && actx) { bgmChain = dsVoiceChain(musicGain); radioChain = dsVoiceChain(musicGain); apply(radioChain, startVol, 0); }
+    if (!bgmChain && actx) { bgmChain = dsVoiceChain(musicGain); radioChain = dsVoiceChain(musicGain); radioLevel(-10000); }
     return !!bgmChain;
   };
   window.__mbaaAudioMade = () => { if (session === s) graph(); };
@@ -414,7 +420,7 @@ function audioHooks(Module, s) {
   s.bgmLog = [];
   const log = ev => { const k = Module._viewer_frame(); if (!s.tl || k >= s.tl.simMax) s.bgmLog.push([k, ...ev]); };
   // Melty radio (radio, set from the panel): its track replaces the match's music, straight through the game's track
-  // changes, stops and seeks, at a steady volume (the level the game starts its tracks at, without its fades)
+  // changes, stops and seeks, at a steady volume (radioLevel: the music's own level, without its fades)
   const radioOn = () => radio && !HASH;
   const play = (path, loop, loopPos, offset) => {
     if (radioOn()) {
@@ -458,8 +464,8 @@ function audioHooks(Module, s) {
   Module.mbaaBgmStart = (path, loop, loopPos, vol, pan) => {
     log(['start', path, loop, loopPos, vol, pan]);
     s.bgmNow = path;
-    startVol = vol;
-    if (graph()) { apply(bgmChain, vol, pan); apply(radioChain, vol, 0); }
+    radioLevel(vol);
+    if (graph()) apply(bgmChain, vol, pan);
     if (!live()) { if (!radioOn()) halt(); return; }
     play(path, loop, loopPos, 0);
   };
