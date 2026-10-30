@@ -419,8 +419,8 @@ function audioHooks(Module, s) {
   s.bgmTrack = () => bgmPath;  // (the track playing or decoding: the radio's when it is on)
   s.bgmLog = [];
   const log = ev => { const k = Module._viewer_frame(); if (!s.tl || k >= s.tl.simMax) s.bgmLog.push([k, ...ev]); };
-  // Melty radio (radio, set from the panel): its track replaces the match's music, straight through the game's track
-  // changes, stops and seeks, at a steady volume (radioLevel: the music's own level, without its fades)
+  // Melty radio (radio, set from the panel): its track replaces the match's music (until the next match: start), straight
+  // through the game's track changes, stops and seeks, at a steady volume (radioLevel: the music's own level, without its fades)
   const radioOn = () => radio && !HASH;
   const play = (path, loop, loopPos, offset) => {
     if (radioOn()) {
@@ -1286,8 +1286,7 @@ async function stagePanelLoad() {
   grid.replaceChildren(tile('', 'Match music'), ...t.map(([f, x]) => tile(f, x.title)));
   tog.onclick = () => { grid.hidden = !grid.hidden; if (!grid.hidden) radioArt(); };
   document.getElementById('radiosec').hidden = false;
-  let saved = ''; try { saved = localStorage.getItem('mbaa-radio') || ''; } catch (e) {}
-  radioSet(saved && stagePanel.tracks[saved] && stagePanel.tracks[saved].loop ? saved : '');
+  radioSet('');
 }
 // the tiles' stage previews, fetched when the picker first opens
 let radioArtDone = false;
@@ -1304,7 +1303,6 @@ async function radioArt() {
 let radioPick = '';
 async function radioSet(f) {
   radioPick = f;
-  try { f ? localStorage.setItem('mbaa-radio', f) : localStorage.removeItem('mbaa-radio'); } catch (e) {}
   const t = f && stagePanel.tracks[f];
   for (const b of document.querySelectorAll('#radiogrid .tile')) b.classList.toggle('on', b.dataset.f === f);
   document.getElementById('radiotog').textContent = `\u266A ${t ? t.title : 'match music'}`;
@@ -2006,6 +2004,8 @@ function loading(on) {
 }
 async function start(file) {
   loading(true);
+  // a pick on the radio lasts for its match: the next one (a switch, a playlist's next, a live game) has its own music
+  if (radioPick) radioSet('');
   if (ensureAudio()) actx.resume();  // (after a drop or file pick: the page has had its gesture)
   const rep = new Uint8Array(await file.arrayBuffer());
   let keys, want;
