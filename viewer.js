@@ -1031,6 +1031,7 @@ async function shareId(s) {
 // a playlist link (?l=<id>): every replay uploaded (once; the store names them by content), then the list itself
 async function copyPlaylist() {
   if (pl.items.length < 2) return;
+  const shots = session ? grabCard() : null;  // the playlist's link card: what is on screen now
   let text;
   try {
     const items = [];
@@ -1044,6 +1045,7 @@ async function copyPlaylist() {
     if (!r.ok) throw new Error(j.error || `HTTP ${r.status}`);
     const u = new URL(location.origin + location.pathname);
     u.searchParams.set('l', j.id);
+    await shareThumb(j.id, 0, shots);
     text = u.toString();
   } catch (e) { console.warn('playlist upload failed:', e); status(`playlist link failed: ${e.message}`); return; }
   try { await navigator.clipboard.writeText(text); status(`copied: ${text}`); }
@@ -1062,22 +1064,25 @@ async function shareThumb(id, f, shots) {
   catch (e) { console.warn('preview image upload failed:', e); }
   finally { clearTimeout(to); }
 }
-async function copyTimestamp() {
-  const s = session;
-  if (!s) return;
-  const f = s.M._viewer_frame();
-  // grab the frame now, before any await lets playback move on (the GL canvas keeps its drawing buffer)
-  // the 640x480 frame centred on a 960x480 dark card (link cards are ~2:1: X crops a 4:3 image), as JPEG (X does not
-  // reliably take WebP)
-  const grab = (type, q) => new Promise(res => {
+// the picture on screen now: the 640x480 frame centred on a 960x480 dark card (link cards are ~2:1: X crops a 4:3
+// image), as JPEG (X does not reliably take WebP). Call it before any await lets playback move on (the GL canvas keeps
+// its drawing buffer)
+function grabCard() {
+  const jpeg = new Promise(res => {
     try {
       const c = document.createElement('canvas'); c.width = 960; c.height = 480;
       const g = c.getContext('2d'); g.fillStyle = '#12111c'; g.fillRect(0, 0, 960, 480);
       g.imageSmoothingEnabled = false; g.drawImage(document.getElementById('canvas'), 160, 0, 640, 480);
-      c.toBlob(res, type, q);
+      c.toBlob(res, 'image/jpeg', 0.88);
     } catch (e) { res(null); }
   });
-  const shots = { jpeg: grab('image/jpeg', 0.88) };
+  return { jpeg };
+}
+async function copyTimestamp() {
+  const s = session;
+  if (!s) return;
+  const f = s.M._viewer_frame();
+  const shots = grabCard();
   const u = new URL(location.origin + location.pathname);
   let text;
   try {
