@@ -371,6 +371,7 @@ function audioHooks(Module, s) {
     } else { try { n.stop(); } catch (e) {} }
   };
   s.bgmPlaying = () => !!(bgm && bgm.stop);
+  s.bgmTrack = () => bgmPath;  // (the track playing or decoding: the radio's when it is on)
   s.bgmLog = [];
   const log = ev => { const k = Module._viewer_frame(); if (!s.tl || k >= s.tl.simMax) s.bgmLog.push([k, ...ev]); };
   // Melty radio (radio, set from the panel): its track replaces the match's music, straight through the game's track
@@ -1149,27 +1150,34 @@ const ICON_CELL = 0x5519F8, BSLOT = 0x74D838, MOON_X = [112, 0, 224], MOON_NAME 
 let plArt = null, plKey = '', plCells = [-1, -1];
 async function playersArt() {
   if (plArt) return plArt;
+  const art = ['grp/c_sel_aa/csel_icon00.png', 'grp/c_sel_aa/csel_cursor00.png'];
+  if (!man || !art.every(p => man.files[p])) return null;
+  await fetchAll(man, art, '', true);  // (a replay's plan has no select screen)
   const img = async p => { const d = cache.get(p); return d ? createImageBitmap(new Blob([d], { type: 'image/png' })) : null; };
   const [icons, cursor] = await Promise.all([img('grp/c_sel_aa/csel_icon00.png'), img('grp/c_sel_aa/csel_cursor00.png')]);
   return icons && cursor ? (plArt = { icons, cursor }) : null;
 }
 function playersShow(s) {
   const box = document.getElementById('players');
-  if (!s || !s.liveSrc || !s.M) { box.hidden = true; return; }
+  if (!s || !s.M) { box.hidden = true; return; }
   const H = s.M.HEAP32, rows = box.querySelectorAll('.pl');
-  const names = (s.liveSrc.info.names || []).map(n => (n || '').trim());
+  const names = ((s.liveSrc && s.liveSrc.info.names) || []).map(n => (n || '').trim());  // (a replay has none)
   const sides = [0, 1].map(p => [H[(BSLOT + p * 0x2C + 8) >> 2], H[(BSLOT + p * 0x2C + 0x14) >> 2]]);
   const key = JSON.stringify([sides, names]);
   if (key !== plKey && plArt) {
     plKey = key;
     sides.forEach(([c, m], p) => {
       const row = rows[p];
-      plCells[p] = c >= 0 && c <= 100 ? H[(ICON_CELL + 4 * c) >> 2] : -1;
+      // the boss versions have no select-screen cell: their base character's icon (B. Aoko -> Aoko)
+      const base = CHARA[c] && CHARA[c].startsWith('B. ') ? +Object.keys(CHARA).find(k => CHARA[k] === CHARA[c].slice(3)) : c;
+      const cellOf = id => id >= 0 && id <= 100 ? H[(ICON_CELL + 4 * id) >> 2] : -1;
+      plCells[p] = cellOf(c) >= 0 ? cellOf(c) : cellOf(base);
       const mo = row.querySelector('.moon').getContext('2d');
       mo.clearRect(0, 0, 56, 56);
       if (m >= 0 && m <= 2) mo.drawImage(plArt.cursor, MOON_X[m], 288, 56, 56, 0, 0, 56, 56);
-      row.querySelector('.nm').textContent = names[p] || `Player ${p + 1}`;
-      row.querySelector('.ch span').textContent = `${m >= 0 && m <= 2 ? MOON_NAME[m] + ' ' : ''}${CHARA[c] || ''}`;
+      const moon = m >= 0 && m <= 2 ? MOON_NAME[m] : m === 9 ? 'Eclipse' : '';  // (9: the bosses' moon)
+      row.querySelector('.nm').textContent = names[p] || CHARA[c] || `Player ${p + 1}`;
+      row.querySelector('.ch span').textContent = names[p] ? `${moon} ${CHARA[c] || ''}`.trim() : moon;
     });
     box.hidden = false;
     document.getElementById('title').hidden = true;
@@ -1201,19 +1209,47 @@ async function stagePanelLoad() {
   if (!man.files['web/stage/panel.json']) return;
   await fetchAll(man, ['web/stage/panel.json'], '', true);
   stagePanel = JSON.parse(new TextDecoder().decode(cache.get('web/stage/panel.json')));
-  const sel = document.getElementById('radio');
+  const grid = document.getElementById('radiogrid'), tog = document.getElementById('radiotog');
+  const art = {};  // track -> the first stage that plays it (its select-screen preview is the track's tile)
+  for (const [id, st] of Object.entries(stagePanel.stages)) if (st.track && !art[st.track] && st.art.includes('view')) art[st.track] = id;
   const t = Object.entries(stagePanel.tracks).filter(([f]) => /^bgmme\d+$/.test(f));  // (not the endings' long cuts)
-  sel.append(...t.map(([f, x]) => new Option(`\u266A ${x.title}`, f)));
-  sel.hidden = false;
-  sel.onchange = () => radioSet(sel.value);
+  const tile = (f, title) => {
+    const b = document.createElement('button'), img = document.createElement('div'), cap = document.createElement('span');
+    b.className = 'tile'; b.dataset.f = f; b.title = title;
+    img.className = 'art'; if (f) img.dataset.stage = art[f] ?? ''; else img.textContent = '\u266A';
+    cap.textContent = title;
+    b.append(img, cap);
+    b.onclick = () => radioSet(f);
+    return b;
+  };
+  grid.replaceChildren(tile('', 'Match music'), ...t.map(([f, x]) => tile(f, x.title)));
+  tog.onclick = () => { grid.hidden = !grid.hidden; if (!grid.hidden) radioArt(); };
+  document.getElementById('radiosec').hidden = false;
   let saved = ''; try { saved = localStorage.getItem('mbaa-radio') || ''; } catch (e) {}
-  if (saved && stagePanel.tracks[saved]) { sel.value = saved; radioSet(saved); }
+  radioSet(saved && stagePanel.tracks[saved] ? saved : '');
 }
+// the tiles' stage previews, fetched when the picker first opens
+let radioArtDone = false;
+async function radioArt() {
+  if (radioArtDone) return;
+  radioArtDone = true;
+  const tiles = [...document.querySelectorAll('#radiogrid .art[data-stage]')].filter(e => e.dataset.stage !== '');
+  const path = e => `web/stage/view_${String(e.dataset.stage).padStart(2, '0')}.png`;
+  await fetchAll(man, tiles.map(path), '', true);
+  for (const e of tiles) {
+    const d = cache.get(path(e));
+    if (d) e.style.backgroundImage = `url(${URL.createObjectURL(new Blob([d], { type: 'image/png' }))})`;
+  }
+}
+let radioPick = '';
 async function radioSet(f) {
+  radioPick = f;
   try { f ? localStorage.setItem('mbaa-radio', f) : localStorage.removeItem('mbaa-radio'); } catch (e) {}
   const t = f && stagePanel.tracks[f];
+  for (const b of document.querySelectorAll('#radiogrid .tile')) b.classList.toggle('on', b.dataset.f === f);
+  document.getElementById('radiotog').textContent = `\u266A ${t ? t.title : 'match music'}`;
   if (t) await fetchAll(man, withSiblings(man, [`bgm/${f}.ogg`]), '', true);
-  if (document.getElementById('radio').value !== (f || '')) return;  // (picked again meanwhile)
+  if (radioPick !== f) return;  // (picked again meanwhile)
   radio = t ? { path: `/game/bgm/${f}.opus`, loopPos: t.loopPos, file: f } : null;
   if (session && session.radioChanged) session.radioChanged();
   stageKey = '';
@@ -1240,7 +1276,7 @@ async function stageShow(s) {
 }
 setInterval(() => {
   stageShow(session).catch(() => {});
-  if (session && session.liveSrc) playersArt().then(() => playersShow(session)).catch(() => {});
+  playersArt().then(() => playersShow(session)).catch(() => {});
 }, 500);
 // the panel's "live now" list (refreshed every 15 s; hidden while nothing is live or the feed is unreachable)
 async function liveListShow() {

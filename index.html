@@ -52,20 +52,26 @@
   #status { color: var(--muted); font-size: 11.5px; overflow-wrap: anywhere; min-height: 1.4em; }
   #players { display: flex; flex-direction: column; gap: 4px; margin-bottom: 4px; }
   #players .pl { display: flex; align-items: center; gap: 8px; min-width: 0; }
-  #players .ico { width: 48px; height: 48px; flex: none; image-rendering: auto; }
+  #players .ico { width: 64px; height: 64px; flex: none; }
   #players .who { min-width: 0; display: flex; flex-direction: column; line-height: 1.25; }
   #players .nm { font-size: 14px; font-weight: 650; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   #players .ch { font-size: 11.5px; color: var(--muted); display: flex; align-items: center; gap: 4px; }
   #players .moon { width: 16px; height: 16px; flex: none; }
-  #players .vs { font-size: 10px; color: var(--faint); letter-spacing: .12em; padding-left: 56px; }
+  #players .vs { font-size: 10px; color: var(--faint); letter-spacing: .12em; padding-left: 72px; }
   body.live .replayonly { display: none !important; }
-  #players[hidden], #stageblk[hidden], #radio[hidden] { display: none; }
+  #players[hidden], #stageblk[hidden], #radiosec[hidden], #radiogrid[hidden] { display: none; }
   #stageblk { display: flex; flex-direction: column; gap: 3px; margin-top: 6px; }
   #stageblk .view { width: 100%; max-width: 256px; aspect-ratio: 256 / 96; object-fit: cover; border-radius: 6px; }
   #stageblk .name { width: 100%; max-width: 256px; aspect-ratio: 8 / 1; }
   #stageblk .trk { font-size: 12px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   #stageblk .trk::before { content: '\266A'; margin-right: 5px; color: var(--accent); }
-  #radio { max-width: 100%; }
+  #radiotog { max-width: 70%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  #radiogrid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px; max-height: 330px; overflow-y: auto; margin-top: 6px; padding-right: 2px; }
+  #radiogrid .tile { display: flex; flex-direction: column; gap: 3px; padding: 4px; border-radius: 8px; background: #ffffff08; border: 1px solid transparent; color: inherit; text-align: left; cursor: pointer; min-width: 0; }
+  #radiogrid .tile:hover { background: #ffffff12; }
+  #radiogrid .tile.on { border-color: var(--accent); background: #e04a5a22; }
+  #radiogrid .art { aspect-ratio: 256 / 96; border-radius: 5px; background: #ffffff0a center / cover no-repeat; display: grid; place-items: center; font-size: 20px; color: var(--accent); }
+  #radiogrid .tile span { font-size: 11px; line-height: 1.25; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .clock { display: flex; align-items: baseline; gap: 8px; font-variant-numeric: tabular-nums; }
   #time { font-size: 20px; font-weight: 600; letter-spacing: .02em; }
   #fc { color: var(--faint); font-size: 11px; margin-left: auto; }
@@ -195,10 +201,13 @@
     <div class="row">
       <select id="scale" title="picture size: auto = largest whole multiple that fits"><option value="auto">size auto</option><option value="1">size 1x</option><option value="2">size 2x</option><option value="3">size 3x</option><option value="4">size 4x</option><option value="fit">size fit</option></select>
       <select id="speed" title="speed"><option value="1">speed 1x</option><option value="2">speed 2x</option><option value="4">speed 4x</option></select>
-      <select id="radio" title="Melty radio: play any track instead of the match's music (stays until set back)" hidden><option value="">match music</option></select>
       <button id="mute" title="mute (M)"><i class="i i-sound"></i></button><input id="vol" type="range" min="0" max="100" value="50" aria-label="volume">
     </div>
     <button id="sound" hidden>click for sound</button>
+  </div>
+  <div class="sec" id="radiosec" hidden>
+    <div class="row spread"><span class="lbl">melty radio</span><button class="txt" id="radiotog" title="Melty radio: play any track instead of the match's music (stays until set back to match music)"></button></div>
+    <div id="radiogrid" hidden></div>
   </div>
   <div class="sec" id="livesec" hidden>
     <div class="row spread"><span class="lbl">live now (CCCaster)</span>
@@ -241,6 +250,6 @@
 </div>
 <script src="mbaa.js?v=33212e6fe11e"></script>
 <script src="bgm_stream.js?v=407ac29e5c89"></script>
-<script src="viewer.js?v=efe4f5b3779a"></script>
+<script src="viewer.js?v=fb54f5248189"></script>
 </body>
 </html>
