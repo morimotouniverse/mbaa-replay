@@ -575,7 +575,7 @@ function fillSession(s, want, had) {
     }
     for (const p of s.want) if (!had.has(p)) { const d = cache.get(p); if (d) fsPut(FS, '/game/' + p, d); }
     FS.writeFile('/game/replay.rep', rep);
-    M.mbaaAssetMiss = p => { if (man.files[p] && !(s.want.has(p) && cache.has(p))) misses.add(p); };
+    M.mbaaAssetMiss = p => { if (man.files[p] && p !== MOVIE && !(s.want.has(p) && cache.has(p))) misses.add(p); };  // (the movie: movieLoad)
     trackOpens(s);
     audioHooks(M, s);
     if (!HASH && !bgmStreamReady) for (const p of s.want) if (/^bgm\/.*\.opus$/.test(p) && cache.has(p)) bgmDecode(p);
@@ -588,7 +588,7 @@ function fillSession(s, want, had) {
   // only this match's files (a playlist's cache also holds the next match's)
   for (const p of s.want) { const d = cache.get(p); if (d) fsPut(FS, '/game/' + p, d); }
   FS.writeFile('/game/replay.rep', rep);
-  M.mbaaAssetMiss = p => { if (man.files[p] && !(s.want.has(p) && cache.has(p))) misses.add(p); };
+  M.mbaaAssetMiss = p => { if (man.files[p] && p !== MOVIE && !(s.want.has(p) && cache.has(p))) misses.add(p); };  // (the movie: movieLoad)
   if (movieBytes) M.mbaaMovie = movieBytes;
   trackOpens(s);
   audioHooks(M, s);
@@ -1374,11 +1374,12 @@ function liveFeed(s, b) {
 }
 // A live session goes on through the retry menu and the character select (scene 20): their files load with the first
 // game (the select screen's parts, portraits and palettes for any character a player hovers, the stage list, the moon
-// check's data/<chara>_<moon>.txt (it only stats them, but a missing one changes which moons are offered), its BGM)
+// check's data/<chara>_<moon>.txt (it only stats them, but a missing one changes which moons are offered), its BGM and
+// the retry menu's (bgmme98))
 function liveCssFiles(man) {
   const out = new Set();
   for (const p of Object.keys(man.files))
-    if (/^(grp\/c_sel_aa|grp\/bgselect|data\/_csel)\//.test(p) || /^data\/[^/]+_\d\.txt$/.test(p) || /^bgm\/bgmme99\./.test(p)) out.add(p);
+    if (/^(grp\/c_sel_aa|grp\/bgselect|data\/_csel)\//.test(p) || /^data\/[^/]+_\d\.txt$/.test(p) || /^bgm\/bgmme9[89]\./.test(p)) out.add(p);
   return withSiblings(man, out);
 }
 // The next game's files, from the select screen's state (read after every frame while it runs): a seat's character once
