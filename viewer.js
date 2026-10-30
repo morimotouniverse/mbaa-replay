@@ -253,11 +253,11 @@ function wrapOpen(M) {
 // MEMFS and the cache (the game keeps what it read in its own memory; only the BGM, played from the cache by the page,
 // stays). A stage probe the game has read (the replay's stage .dat, 4-12 MB) goes back to its 1-byte placeholder; an
 // open of it after that counts as a miss, as a failed open of any other freed file does. Files it has not opened yet
-// (the result screen's) stay.
-function freeLoaded(s) {
+// (the result screen's) stay. keep: files that stay as well (live: the select screen's, and the next game's).
+function freeLoaded(s, keep = null) {
   const probe = new Set((man.plan && man.plan.probe) || []);
   for (const p of new Set([...s.opened, ...(s.M.mbaaBootOpened || [])])) {
-    if (s.freed.has(p) || /^bgm\//.test(p) || !s.want.has(p)) continue;
+    if (s.freed.has(p) || /^bgm\//.test(p) || !s.want.has(p) || (keep && keep.has(p))) continue;
     try { if (probe.has(p)) s.M.FS.writeFile('/game/' + p, new Uint8Array(1)); else s.M.FS.unlink('/game/' + p); } catch (e) { continue; }
     cache.delete(p); s.freed.add(p);
   }
@@ -661,7 +661,7 @@ function watch(s) {
     if (s !== session) return clearInterval(t);
     if (misses.size && s.liveSrc) { liveMissed(s); }
     else if (misses.size) { clearInterval(t); refetchAndReplay(s, call(s, 'viewer_frame')); return; }
-    if (LOWMEM && s.freedAt < 0 && s.tl && s.tl.marks.length && !s.seeking && !call(s, 'viewer_files_open')) freeLoaded(s);
+    if (LOWMEM && s.freedAt < 0 && s.tl && s.tl.marks.some(m => m[0] > (s.freeArm ?? -1)) && !s.seeking && !call(s, 'viewer_files_open')) freeLoaded(s);
     // a playlist skips the win screen (scene 5: the winner's quote, which runs to the replay's end): the next match
     // starts as the battle ends
     const winScreen = pl.i >= 0 && pl.i + 1 < pl.items.length && !s.seeking && s.M.HEAP32[0x54EEE8 >> 2] === SCENE_WIN;
@@ -731,7 +731,7 @@ function timelineInit(s) {
       t.scene = scene; t.round = round;
       if (t.end === null && M._viewer_ended()) t.end = f;
     }
-    if (s.liveSrc) liveCssWatch(s);
+    if (s.liveSrc) { liveCssWatch(s); liveRematchHold(s); }
     if (!s.seeking) incTick(s, f);
     else if (f >= t.lastKf + KF_EVERY && f >= t.simMax && !M._viewer_files_open() && !(LOWMEM && !t.marks.length)) keyframe(s, f);  // phones: none in the intro (incTick)
   };
@@ -1409,7 +1409,7 @@ function liveCssWatch(s) {
       else for (const f of planFiles(man, k)) want.add(f);
     }
     if (stage !== null) for (const f of planFiles(man, { stage, p1: null, p2: null })) want.add(f);
-    s.cssNeed = [...withSiblings(man, want)].filter(p => !s.want.has(p));
+    s.cssNeed = [...withSiblings(man, want)].filter(p => !liveHas(s, p));
     console.log(`live: next game P1 ${sides[0]} P2 ${sides[1]} stage ${stage}: ${s.cssNeed.length} files to load`);
     const fetching = s.cssFetching || (s.cssFetching = new Set());
     const need = s.cssNeed.filter(p => !fetching.has(p));  // (an earlier pick's download may have them on the way)
@@ -1424,25 +1424,59 @@ function liveCssWatch(s) {
         .catch(e => { console.warn('live: next game files:', e); status(`live: the next game's files did not load (${e.message})`); });
     }
   }
-  const ready = s.cssNeed.every(p => s.want.has(p));
+  const ready = s.cssNeed.every(p => liveHas(s, p));
   if (done && !ready !== !!s.cssHeld) liveCssHold(s, !ready);
 }
+// in MEMFS for the game: in the session's files and not dropped by freeLoaded (low-memory mode; the next game of the
+// stream, a rematch above all, reads the same files again)
+const liveHas = (s, p) => s.want.has(p) && !s.freed.has(p);
 function liveCssHold(s, on) {
   s.cssHeld = on;
+  liveHoldApply(s);
+}
+// the game held (no frame steps) while a next game's files are not in: picked at the select screen, or a rematch's
+const liveHoldApply = s => {
+  const on = !!(s.cssHeld || s.rematchHeld);
   call(s, 'viewer_live_hold', on ? 1 : 0);
   if (on) status('live: loading the next game');
+};
+// Low-memory mode: a game's files are freed once it has loaded (freeLoaded); a rematch (the retry menu's choice 0, in
+// the stream seconds before the game plays it; the select screen is skipped) reads them all again. They are put back
+// as the choice arrives (from the browser's disk cache: warmDisk kept them there), the game held at the retry menu
+// until they are in.
+function liveRematch(s, b) {
+  if (!LOWMEM || !s.freed.size || s.rematchFetch) return;
+  const dv = new DataView(b.buffer, b.byteOffset, b.byteLength);
+  let rematch = false;
+  for (let o = 0; o + 244 <= b.length; o += 244 + 4 * dv.getUint32(o + 240, true))
+    if ((dv.getUint32(o + 4, true) >> 8) === 1) rematch = true;  // kind >> 8: the menu choice + 1 (0 = rematch)
+  if (!rematch) return;
+  const back = [...s.freed];
+  s.rematchFetch = fetchAll(man, back, 'rematch', true)
+    .then(() => { if (session === s) liveInstall(s, back); })
+    .catch(e => { console.warn('live: rematch files:', e); status(`live: the rematch's files did not load (${e.message})`); })
+    .finally(() => { s.rematchFetch = null; if (s.rematchHeld) { s.rematchHeld = false; liveHoldApply(s); } });
 }
-// fetched files into MEMFS (a stage .dat over its placeholder) and the want list (no miss for them)
+// fetched files into MEMFS (a stage .dat over its placeholder) and the want list (no miss for them; a freed one is back)
 function liveInstall(s, paths) {
-  let n = 0;
+  let n = 0, back = 0;
   for (const p of paths) {
     const d = cache.get(p);
-    if (!d || s.want.has(p)) continue;
+    if (!d || liveHas(s, p)) continue;
+    if (s.freed.delete(p)) back++;
     fsPut(s.M.FS, '/game/' + p, d); s.want.add(p); n++;
     if (!HASH && !bgmStreamReady && /^bgm\/.*\.opus$/.test(p)) bgmDecode(p);
   }
   if (n) s.M._viewer_resolve_reset();  // (directory listings cached without them)
-  if (s.cssHeld && s.cssNeed.every(p => s.want.has(p))) liveCssHold(s, false);
+  // low-memory mode: freed files back (a rematch or a later pick): freed again once the game that reads them has
+  // loaded (its first round start after now)
+  if (back && LOWMEM) { s.freedAt = -1; s.freeArm = s.M._viewer_frame(); }
+  if (s.cssHeld && s.cssNeed.every(p => liveHas(s, p))) liveCssHold(s, false);
+}
+// (each frame, with liveCssWatch) a rematch's files still on the way when the game reaches the retry menu: it waits there
+function liveRematchHold(s) {
+  const on = !!s.rematchFetch && !!call(s, 'viewer_spectate_in_retry');
+  if (on !== !!s.rematchHeld) { s.rematchHeld = on; liveHoldApply(s); }
 }
 // A file the game looked up that the page did not load: a live session cannot replay from the start (the miss path of
 // a replay); it is reported (the plan above must cover it), never retried silently
@@ -1497,6 +1531,7 @@ function liveBegin(s) {  // play(): after viewer_play
         if (b.length && session === s) {
           liveKeep(L, b);
           liveFeed(s, b);
+          liveRematch(s, b);
           L.since = liveLastIndex(b);
         }
       }
