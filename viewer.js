@@ -1217,7 +1217,7 @@ async function stagePanelLoad() {
     const b = document.createElement('button'), img = document.createElement('div'), cap = document.createElement('span');
     b.className = 'tile'; b.dataset.f = f; b.title = title;
     img.className = 'art';
-    if (!f) img.textContent = '\u266A';
+    if (!f || (art[f] === undefined && !stagePanel.tracks[f].art)) img.textContent = '\u266A';
     else if (art[f] !== undefined) img.dataset.src = `web/stage/view_${String(art[f]).padStart(2, '0')}.png`;
     else if (stagePanel.tracks[f].art) img.dataset.src = `web/stage/track_${f}.png`;  // (a screen's track: its art)
     cap.textContent = title;
