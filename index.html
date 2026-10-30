@@ -17,7 +17,7 @@
 <meta name="twitter:title" content="MBAACC Replay Viewer">
 <meta name="twitter:description" content="Watch Melty Blood Actress Again Current Code replays in your browser, frame-exact.">
 <meta name="twitter:image" content="https://web.meltyblood.org/preview.png">
-<meta name="mbaa-manifest" content="cb822faaba61">
+<meta name="mbaa-manifest" content="ebdfa981100d">
 <link rel="manifest" href="site.webmanifest">
 <link rel="icon" href="icon-192.png">
 <link rel="apple-touch-icon" href="icon-192.png">
@@ -36,6 +36,10 @@
   .stage:fullscreen canvas#canvas { width: var(--w); }
   .stage:fullscreen #overlay { inset: auto; width: var(--w); height: auto; aspect-ratio: 4 / 3; }
   #overlay { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; }
+  /* while a match loads: the game's opening movie (muted) over the black picture */
+  #loadvid { position: absolute; left: 0; top: 0; width: 100%; aspect-ratio: 4 / 3; object-fit: cover; background: #000; pointer-events: none; }
+  #loadvid[hidden] { display: none; }
+  .stage:fullscreen #loadvid { inset: auto; left: auto; top: auto; width: var(--w); }
   /* everything else is one panel: beside the picture when the window is wide (body.side), else below it */
   .main { display: flex; flex-direction: column; align-items: center; gap: 12px; margin: auto 0; }
   body.side .main { flex-direction: row; align-items: center; }
@@ -158,6 +162,7 @@
 <div class="stage">
   <canvas id="canvas" width="640" height="480" oncontextmenu="event.preventDefault()"></canvas>
   <canvas id="overlay"></canvas>
+  <video id="loadvid" muted loop playsinline preload="none" poster="opening.webp" hidden></video>
 </div>
 <div class="controls" id="controls">
   <div class="sec">
@@ -228,6 +233,7 @@
       <span class="lbl">queue <span id="plpos"></span></span>
       <span class="grp">
         <button id="plshare" title="copy a link to this playlist" hidden><i class="i i-share"></i></button>
+        <button class="txt" id="plsort" title="sort by the date each replay was recorded (oldest first)" hidden>by date</button>
         <button id="plprev" title="previous replay (P)" hidden><i class="i i-prev"></i></button>
         <button id="plnext" title="next replay (N)" hidden><i class="i i-next"></i></button>
         <button id="plclear" title="clear the queue (keeps the replay that is playing)" hidden><i class="i i-x"></i></button>
@@ -256,8 +262,8 @@
   </div>
 </div>
 </div>
-<script src="mbaa.js?v=33212e6fe11e"></script>
+<script src="mbaa.js?v=0e2e8abb3fcf"></script>
 <script src="bgm_stream.js?v=407ac29e5c89"></script>
-<script src="viewer.js?v=e0e2680fd994"></script>
+<script src="viewer.js?v=4d5a550bf6d2"></script>
 </body>
 </html>

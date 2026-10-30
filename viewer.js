@@ -97,18 +97,21 @@ const objCacheReady = (async () => {
 if (navigator.storage && navigator.storage.persist) navigator.storage.persisted().then(p => p || navigator.storage.persist()).catch(() => {});
 if ('serviceWorker' in navigator && /^web\.meltyblood\.org$/.test(location.hostname))
   navigator.serviceWorker.register('/sw.js').catch(e => console.warn('service worker:', e));
-async function fetchObject(h, z = null) {
+async function fetchObject(h, z = null) { return openObject(await fetchRaw(h), z); }
+// an object or a pack (tools/web/bundle_pack.py: a group's small objects back to back) as stored, from this device's
+// store or the network
+async function fetchRaw(h) {
   const url = `${BUNDLE}o/${h.slice(0, 2)}/${h}`;
   await objCacheReady;
   if (objCache) {
-    try { const hit = await objCache.match(url); if (hit) { net.cached++; return openObject(await hit.arrayBuffer(), z); } } catch (e) {}
+    try { const hit = await objCache.match(url); if (hit) { net.cached++; return hit.arrayBuffer(); } } catch (e) {}
   }
   const r = await fetch(url);
   if (!r.ok) throw new Error(`object ${h}: HTTP ${r.status}`);
   const buf = await r.arrayBuffer();
   net.objects++; net.bytes += buf.byteLength;
   if (objCache) objCache.put(url, new Response(buf.slice(0))).catch(() => {});
-  return openObject(buf, z);
+  return buf;
 }
 function status(t) { document.getElementById('status').textContent = t; }
 // chara id -> display name (charaselect.txt CharaNo_<id>; replay header side block +4), moon (+8): 0 C, 1 F, 2 H
@@ -200,7 +203,7 @@ async function fetchAll(man, paths, label, quiet = false) {
   const net0 = net.bytes;  // the counter shows what came over the network (objects are deflated; the game sees ~4x that)
   const queue = [...paths].filter(p => !cache.has(p));
   let done = 0, bytes = 0;
-  const n = queue.length;
+  const n = queue.length, packs = new Map();  // pack -> its bytes (one fetch for all of its files in this call)
   async function worker() {
     for (let p; (p = queue.shift());) {
       const f = man.files[p];
@@ -209,6 +212,10 @@ async function fetchAll(man, paths, label, quiet = false) {
         const r = await fetch(f.plain);
         if (!r.ok) { console.warn(`${p}: HTTP ${r.status}`); continue; }
         data = new Uint8Array(await r.arrayBuffer());
+      } else if (f.pk) {
+        const [h, off, len] = f.pk;
+        if (!packs.has(h)) packs.set(h, fetchRaw(h));
+        data = await openObject((await packs.get(h)).slice(off, off + len), f.z);
       } else data = await fetchObject(f.o, f.z);
       cache.set(p, data);
       if ((++done % 10 === 0 || done === n) && !quiet) status(`${label} ${done}/${n} (${((net.bytes - net0) / 1e6).toFixed(1)} MB downloaded${net.cached ? `, ${net.cached} files from cache` : ''})`);
@@ -266,23 +273,19 @@ function fsPut(FS, path, d) {
 
 // ---- audio (WebAudio, shared by sessions) ----
 let actx, master, outGain, musicGain;
-// Browsers keep an AudioContext suspended until the page gets a click or key press; a replay opened from a link has
-// had neither, so the page asks for one (#sound) and starts the BGM the game already requested once audio runs.
-function ensureAudio() {
-  if (actx) return;
+// Browsers start an AudioContext only after the page got a click or key press (one made earlier stays suspended, with a
+// console warning); a replay opened from a link has had neither. So the context is made on the first gesture: until then
+// the page shows #sound, the sessions keep the game's BGM requests (s.bgmLog) and play nothing, and once audio runs the
+// BGM the game requested starts from where the match is (__mbaaBgmResume).
+// Returns whether audio exists; inGesture: called from a click / key / drop handler.
+const activated = () => !!(navigator.userActivation && navigator.userActivation.hasBeenActive);
+function ensureAudio(inGesture = false) {
+  if (actx) return true;
+  if (!inGesture && !activated()) { audioArm(); return false; }
   actx = new AudioContext();
   master = actx.createGain();  // the game's mix at CE level; video export records from here
-  outGain = actx.createGain();
+  outGain = actx.createGain(); outGain.gain.value = volGain();
   musicGain = actx.createGain(); musicGain.gain.value = ui.music ? 1 : 0; musicGain.connect(master);  // the BGM (music toggle)
-  const vol = document.getElementById('vol');
-  // 100% = CE's own level (every set already carries the game's DirectSound volume, -16.66 dB at the canonical
-  // settings); the slider only attenuates below it. Default 100. Remembered under a new key: the old one stored the
-  // 50% default of the full-gain era for everyone who opened the page.
-  const setVol = () => { outGain.gain.value = Math.pow(+vol.value / 100, 2); try { localStorage.setItem('mbaaVolCe', vol.value); } catch (e) {} };
-  vol.value = 100;
-  try { const v = localStorage.getItem('mbaaVolCe'); if (v !== null) vol.value = v; } catch (e) {}
-  vol.oninput = () => { setVol(); vol.style.setProperty('--p', `${vol.value}%`); document.querySelector('#mute .i').className = `i ${+vol.value ? 'i-sound' : 'i-mute'}`; };
-  vol.oninput();
   master.connect(outGain); outGain.connect(actx.destination);
   const btn = document.getElementById('sound');
   const show = () => { btn.hidden = actx.state === 'running'; };
@@ -291,6 +294,34 @@ function ensureAudio() {
   addEventListener('pointerdown', unlock); addEventListener('keydown', unlock);
   actx.onstatechange = () => { show(); if (actx.state === 'running' && window.__mbaaBgmResume) window.__mbaaBgmResume(); };
   show();
+  // the tracks the match already has decode now (the stream decoder needs no context ahead)
+  if (session && !HASH && !bgmStreamReady) for (const p of session.want) if (/^bgm\/.*\.opus$/.test(p) && cache.has(p)) bgmDecode(p);
+  if (session && window.__mbaaAudioMade) window.__mbaaAudioMade();
+  if (actx.state === 'running' && window.__mbaaBgmResume) window.__mbaaBgmResume();
+  return true;
+}
+// before the first gesture: #sound shows, and any click or key makes the context
+let audioArmed = false;
+function audioArm() {
+  if (audioArmed) return;
+  audioArmed = true;
+  const btn = document.getElementById('sound');
+  btn.hidden = false;
+  const go = () => { removeEventListener('pointerdown', go, true); removeEventListener('keydown', go, true); ensureAudio(true); actx.resume(); };
+  addEventListener('pointerdown', go, true); addEventListener('keydown', go, true);
+}
+// the volume slider (works before audio exists: the context takes its level when made)
+const volGain = () => Math.pow(+document.getElementById('vol').value / 100, 2);
+function volInit() {
+  const vol = document.getElementById('vol');
+  // 100% = CE's own level (every set already carries the game's DirectSound volume, -16.66 dB at the canonical
+  // settings); the slider only attenuates below it. Default 100. Remembered under a new key: the old one stored the
+  // 50% default of the full-gain era for everyone who opened the page.
+  const setVol = () => { if (outGain) outGain.gain.value = volGain(); try { localStorage.setItem('mbaaVolCe', vol.value); } catch (e) {} };
+  vol.value = 100;
+  try { const v = localStorage.getItem('mbaaVolCe'); if (v !== null) vol.value = v; } catch (e) {}
+  vol.oninput = () => { setVol(); vol.style.setProperty('--p', `${vol.value}%`); document.querySelector('#mute .i').className = `i ${+vol.value ? 'i-sound' : 'i-mute'}`; };
+  vol.oninput();
 }
 // The game's DirectSound buffers as WebAudio voices (web/host/browser/audio_web.cpp, sound_sets.cpp). Channel = sound
 // set: SE i (0..1499), 1500 the result-screen set, -1 the BGM stream. As a DirectSound buffer, a set plays one voice: Play
@@ -317,7 +348,8 @@ function dsVoiceChain(out) {  // gain (volume) -> split -> per-side gain (pan) -
 }
 function audioHooks(Module, s) {
   ensureAudio();
-  const live = () => !HASH && actx.state === 'running' && session === s && !s.mute;
+  const running = () => !!actx && actx.state === 'running';
+  const live = () => !HASH && running() && session === s && !s.mute;
   const seBuf = new Map();  // bundle path -> decode promise
   const se = window.mbaaSeStats = { registered: 0, calls: 0, played: 0, decodeFailed: 0, stops: 0, params: 0, ctx: () => actx.state };
   const voices = new Map();  // channel -> chain
@@ -326,6 +358,7 @@ function audioHooks(Module, s) {
   const apply = (v, vol, pan) => { v.vol = vol; v.pan = pan; v.g.gain.value = dsGain(vol); dsSetPan(v, pan); };
   Module.mbaaVoicePlay = (ch, path, vol, pan) => {
     se.calls++;
+    if (!actx) return;  // (no audio yet: a Play before it is never heard; the next Play sets the voice up)
     const v = chain(ch);
     cut(v); apply(v, vol, pan);
     if (!live()) return;
@@ -343,8 +376,8 @@ function audioHooks(Module, s) {
   };
   Module.mbaaVoiceParam = (ch, vol, pan) => {
     se.params++;
-    if (ch === -1) { log(['param', vol, pan]); apply(bgmChain, vol, pan); return; }
-    apply(chain(ch), vol, pan);
+    if (ch === -1) { log(['param', vol, pan]); if (graph()) apply(bgmChain, vol, pan); return; }
+    if (actx) apply(chain(ch), vol, pan);
   };
   Module.mbaaVoiceStop = ch => {
     se.stops++;
@@ -354,7 +387,13 @@ function audioHooks(Module, s) {
   };
   s.stopSes = () => { for (const v of voices.values()) cut(v); };
   // BGM: the stream set, one looping track (back to loopPos seconds at the end, as the game's stream does)
-  const bgmChain = dsVoiceChain(musicGain), radioChain = dsVoiceChain(musicGain);  // (the radio's: each start's level)
+  // (made with the context: s.bgmSync then sets the stream's level from the log, the radio's from the last start)
+  let bgmChain = null, radioChain = null, startVol = 0;  // (the radio's: each start's level)
+  const graph = () => {
+    if (!bgmChain && actx) { bgmChain = dsVoiceChain(musicGain); radioChain = dsVoiceChain(musicGain); apply(radioChain, startVol, 0); }
+    return !!bgmChain;
+  };
+  window.__mbaaAudioMade = () => { if (session === s) graph(); };
   let bgm = null, bgmPath = '';
   // fade = seconds: the track fades out (pause) instead of cutting (seek, track change). Each track has its own fade
   // gain after the stream's volume/pan chain, so a fade never fights the game's own volume changes.
@@ -383,6 +422,7 @@ function audioHooks(Module, s) {
       path = radio.path; loop = true; loopPos = radio.loopPos; offset = 0;
     }
     halt();
+    if (!graph()) return;
     const out = radioOn() ? radioChain.g : bgmChain.g;
     const o = bgmStreamReady && bgmParsed(path.replace(/^\/game\//, ''));
     if (o) {  // streamed (bgm_stream.js): a couple of seconds decoded at a time
@@ -418,7 +458,8 @@ function audioHooks(Module, s) {
   Module.mbaaBgmStart = (path, loop, loopPos, vol, pan) => {
     log(['start', path, loop, loopPos, vol, pan]);
     s.bgmNow = path;
-    apply(bgmChain, vol, pan); apply(radioChain, vol, 0);
+    startVol = vol;
+    if (graph()) { apply(bgmChain, vol, pan); apply(radioChain, vol, 0); }
     if (!live()) { if (!radioOn()) halt(); return; }
     play(path, loop, loopPos, 0);
   };
@@ -433,10 +474,10 @@ function audioHooks(Module, s) {
       else if (ev === 'param') vp = [a[0], a[1]];
     }
     s.bgmNow = cur ? cur.path : null;
-    if (radioOn()) { if (actx.state === 'running' && !s.mute) play('', 1, 0, 0); else halt(); return; }
+    if (radioOn()) { if (running() && !s.mute) play('', 1, 0, 0); else halt(); return; }
     halt();
-    if (vp) apply(bgmChain, vp[0], vp[1]);
-    if (cur && actx.state === 'running' && !s.mute) play(cur.path, cur.loop, cur.loopPos, Math.max(0, T - cur.k - 1) / 60);
+    if (vp && graph()) apply(bgmChain, vp[0], vp[1]);
+    if (cur && running() && !s.mute) play(cur.path, cur.loop, cur.loopPos, Math.max(0, T - cur.k - 1) / 60);
   };
   s.bgmHalt = fade => { if (!radioOn() || fade) halt(fade); };  // (a seek keeps the radio; a pause fades it too)
   s.radioChanged = () => { halt(); if (!s.mute) s.bgmSync(Module._viewer_frame()); };
@@ -555,14 +596,14 @@ async function play(rep, name, catchUp = 0, want = null) {
   // stage animations on, except for native comparisons (?stageAnim=0, hash runs): the oracle's settings have them off
   call(s, 'viewer_stage_anim', Q.get('stageAnim') !== null ? +(Q.get('stageAnim') !== '0') : HASH ? 0 : 1);
   if (Q.get('seal') === '0') call(s, 'viewer_seal_off', 1);
-  if (!call(s, 'viewer_boot')) { window.__mbaaStarted = -1; status('start failed (see console)'); return; }
+  if (!call(s, 'viewer_boot')) { window.__mbaaStarted = -1; loading(false); status('start failed (see console)'); return; }
   // boot textures to the GPU store first: the snapshot (and every keyframe) then holds no pixels
   if (!s.reused) s.M._viewer_seal_boot();
   if (!s.boot && (!HASH && !CAPTURE || Q.get('reuse') === '1') && !s.M._viewer_files_open()) {
     s.boot = bootSnapshot(s.M);
     s.M.mbaaBootOpened = new Set(s.opened);  // read before the snapshot: a reused instance's later matches never open them
   }
-  if (!call(s, 'viewer_load')) { window.__mbaaStarted = -1; status('start failed (see console)'); return; }
+  if (!call(s, 'viewer_load')) { window.__mbaaStarted = -1; loading(false); status('start failed (see console)'); return; }
   if (HASH) s.M.ccall('viewer_hash_enable', null, [], []);
   call(s, 'viewer_play', 0);
   if (liveSrc && Q.get('live')) liveBegin(s);
@@ -592,6 +633,7 @@ async function play(rep, name, catchUp = 0, want = null) {
   }
   if (s !== session) return;
   call(s, 'viewer_run');
+  loading(false);
   status(`playing ${name}`);
   watch(s);
 }
@@ -611,12 +653,15 @@ function watch(s) {
     if (misses.size && s.liveSrc) { liveMissed(s); }
     else if (misses.size) { clearInterval(t); refetchAndReplay(s, call(s, 'viewer_frame')); return; }
     if (LOWMEM && s.freedAt < 0 && s.tl && s.tl.marks.length && !s.seeking && !call(s, 'viewer_files_open')) freeLoaded(s);
-    if (call(s, 'viewer_ended') && !s.endShown) {
+    // a playlist skips the win screen (scene 5: the winner's quote, which runs to the replay's end): the next match
+    // starts as the battle ends
+    const winScreen = pl.i >= 0 && pl.i + 1 < pl.items.length && !s.seeking && s.M.HEAP32[0x54EEE8 >> 2] === SCENE_WIN;
+    if ((call(s, 'viewer_ended') || winScreen) && !s.endShown) {
       s.endShown = true;
       status(`finished ${s.name} (${call(s, 'viewer_frame')} frames)`);
       if (pl.i >= 0 && pl.i + 1 < pl.items.length && !ui.paused) {  // playlist: the next match a moment later
         status(`finished ${s.name}: next up ${pl.items[pl.i + 1].name}`);
-        setTimeout(() => { if (s === session && !ui.paused) startItem(pl.i + 1); }, 1200);
+        setTimeout(() => { if (s === session && !ui.paused) startItem(pl.i + 1); }, winScreen ? 0 : 1200);
       }
     }
   }, 100);
@@ -1053,7 +1098,7 @@ async function seekTo(s, T) {
 }
 // Skip the VS intro: simulate (not drawn, silent) up to the first battle frame, then draw from there. The intro is
 // still simulated (the match state depends on it); only its picture and sound are skipped.
-const SCENE_VS = 8;  // the VS screen scene (g_CurrentSceneId 0x54EEE8)
+const SCENE_VS = 8, SCENE_WIN = 5;  // the VS screen and the win screen (g_CurrentSceneId 0x54EEE8)
 const inIntro = s => !!(s && s.tl && !s.tl.marks.length && !s.seeking && s.M.HEAP32[0x54EEE8 >> 2] === SCENE_VS);
 async function skipIntro(s) {
   const t = s.tl, M = s.M;
@@ -1085,6 +1130,9 @@ const REPLAY_STORE = 'https://replays.meltyblood.org';
 // mode (web/host/spectate.cpp): a boot tape sets the match up, then the stream's index records arrive about once a
 // second and the game plays them ~4 s behind the host (faster while it catches up after joining mid-game)
 const LIVE = Q.get('liveUrl') || location.origin + location.pathname.replace(/\/[^/]*$/, '');  // (the feed is next to the page)
+// the feed exists only on the spectate path (the Worker gives that page <base href="/">) or where ?liveUrl= names one: the
+// public page has none to ask for
+const LIVE_FEED = !!(Q.get('liveUrl') || document.querySelector('base'));
 const LIVE_BEHIND = 240;  // frames kept buffered (4 s)
 let liveSrc = null;  // {id, info, since}
 async function liveList() {
@@ -1283,6 +1331,7 @@ setInterval(() => {
 // the panel's "live now" list (refreshed every 15 s; hidden while nothing is live or the feed is unreachable)
 async function liveListShow() {
   const sec = document.getElementById('livesec'), ol = document.getElementById('liveitems');
+  if (!LIVE_FEED) { sec.hidden = true; return; }
   let l = [];
   try { l = await liveList(); } catch (e) {}
   sec.hidden = !l.length;
@@ -1752,6 +1801,7 @@ function controls() {
   btn('helpb', toggleHelp); btn('mute', toggleMute);
   document.getElementById('help').onclick = toggleHelp;
   btn('plprev', () => startItem(pl.i - 1)); btn('plnext', () => startItem(pl.i + 1)); btn('plshare', copyPlaylist);
+  btn('plsort', sortByDate);
   btn('plclear', () => { const cur = pl.items[pl.i]; pl.items = cur ? [cur] : []; pl.i = cur ? 0 : -1; renderPlaylist(); });
   // a click / tap on the picture: during the VS screen it skips it (as a button press does in the game), otherwise
   // it pauses / plays
@@ -1762,7 +1812,10 @@ function controls() {
   });
   const si = document.getElementById('skipintro');
   si.checked = ui.skipIntro;
-  si.onchange = () => { ui.skipIntro = si.checked; try { localStorage.setItem('mbaaSkipIntro', si.checked ? '1' : '0'); } catch (e) {} si.blur(); };
+  si.onchange = () => {
+    ui.skipIntro = si.checked; try { localStorage.setItem('mbaaSkipIntro', si.checked ? '1' : '0'); } catch (e) {} si.blur();
+    if (si.checked && inIntro(session)) skipIntro(session);  // (switched on during the intro: skip this one too)
+  };
   btn('back5', () => stepBy(-300, false)); btn('back1', () => stepBy(-1)); btn('fwd1', () => stepBy(1)); btn('fwd5', () => stepBy(300, false));
   document.getElementById('speed').onchange = e => { ui.speed = +e.target.value; if (session) call(session, 'viewer_speed', ui.speed); e.target.blur(); };
   const hudEl = document.getElementById('hud'), musicEl = document.getElementById('music');
@@ -1833,11 +1886,22 @@ function wantFor(rep) {
   if (Q.get('planDrop')) { const re = new RegExp(Q.get('planDrop')); want = new Set([...want].filter(f => !re.test(f))); }
   return want;
 }
+// the loading picture: the game's opening movie (web/shell/opening.webm, from Movie/Original MBAA_OP.mpeg: 480x360, no
+// sound), fetched the first time a match loads; shown from the first fetch until the game draws
+function loading(on) {
+  const v = document.getElementById('loadvid');
+  if (HASH || CAPTURE || PERF) return;
+  if (on) {
+    if (!v.src) v.src = 'opening.webm';
+    v.hidden = false; v.play().catch(() => {});
+  } else if (!v.hidden) { v.hidden = true; v.pause(); }
+}
 async function start(file) {
-  ensureAudio(); actx.resume();  // a drop or file pick is a user gesture: audio may start
+  loading(true);
+  if (ensureAudio()) actx.resume();  // (after a drop or file pick: the page has had its gesture)
   const rep = new Uint8Array(await file.arrayBuffer());
   let keys, want;
-  try { keys = repKeys(rep); want = wantFor(rep); } catch (e) { status('error: ' + e.message); return; }
+  try { keys = repKeys(rep); want = wantFor(rep); } catch (e) { loading(false); status('error: ' + e.message); return; }
   if (want && liveSrc) for (const p of liveCssFiles(man)) want.add(p);
   if (want) {
     status(`stage ${keys.stage}, P1 ${keys.p1[0]}:${keys.p1[1]} vs P2 ${keys.p2[0]}:${keys.p2[1]}: fetching`);
@@ -1931,9 +1995,23 @@ function moveItem(from, to) {
   pl.i = pl.items.indexOf(cur);
   renderPlaylist();
 }
+// the queue by when each replay was recorded (its name's YYMMDDhhmmss: a set in the order it was played); again: newest
+// first. Replays without a date keep their order, after the dated ones; the one playing stays the current one.
+let plSortDir = 1;
+function sortByDate() {
+  const when = it => ((it.name || '').replace(/^.*\//, '').match(/_(\d{12})\d{0,2}(?:\.rep)?$/i) || [])[1] || null;
+  const cur = pl.items[pl.i];
+  const keyed = pl.items.map((it, k) => [when(it), k, it]);
+  keyed.sort((a, b) => (a[0] === null) - (b[0] === null) || (a[0] && b[0] && a[0] !== b[0] ? (a[0] < b[0] ? -plSortDir : plSortDir) : a[1] - b[1]));
+  pl.items = keyed.map(x => x[2]);
+  pl.i = pl.items.indexOf(cur);
+  document.getElementById('plsort').title = plSortDir > 0 ? 'sorted oldest first: click for newest first' : 'sorted newest first: click for oldest first';
+  plSortDir = -plSortDir;
+  renderPlaylist();
+}
 function renderPlaylist() {
   const many = pl.items.length > 1;
-  for (const id of ['plshare', 'plprev', 'plnext', 'plclear']) document.getElementById(id).hidden = !many;
+  for (const id of ['plshare', 'plsort', 'plprev', 'plnext', 'plclear']) document.getElementById(id).hidden = !many;
   document.getElementById('plpos').textContent = pl.items.length ? `${pl.i + 1 || '\u2013'} / ${pl.items.length}` : '';
   const ol = document.getElementById('plitems');
   let dragFrom = -1;
@@ -2016,7 +2094,7 @@ async function exportVideo() {
   if (fx) { fx.cancel = true; return; }
   if (rec) return stopRecording(true);
   if (!s || !s.tl) return;
-  ensureAudio(); await actx.resume();
+  ensureAudio(true); await actx.resume();
   if (inIntro(s)) await skipIntro(s);
   const c = s.clip ? { ...s.clip } : roundClip(s);
   if (s.liveSrc) {  // a live match: up to the newest frame received (the round may not have ended yet)
@@ -2336,7 +2414,7 @@ async function main() {
   };
   document.body.ondragover = e => e.preventDefault();
   document.body.ondrop = e => { e.preventDefault(); loadPlaylist(repFiles(e.dataTransfer.files)); };
-  controls();
+  controls(); volInit();
   for (const key of ['boxes', 'inputs']) if (Q.get(key) === '1') { const el = document.getElementById(key); el.checked = true; el.onchange(); }
   // ?r=<id>: a shared replay in the replay store (tools/web/replay_worker.js); ?rep=<url>: any replay URL
   const rq = Q.get('r') || '';
