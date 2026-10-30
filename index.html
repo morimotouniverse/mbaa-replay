@@ -98,6 +98,13 @@
                 counter-increment: q; font-size: 12px; }
   #plitems li::before { content: counter(q); color: var(--faint); font-size: 10.5px; min-width: 1.4em; font-variant-numeric: tabular-nums; }
   #plitems li:hover { background: #ffffff0c; }
+  .livebtn { font-weight: 700; letter-spacing: .06em; padding: 2px 10px; border-radius: 999px; color: var(--faint); }
+  .livebtn::before { content: '\25CF'; margin-right: 5px; font-size: 9px; vertical-align: 2px; }
+  .livebtn.on { color: #fff; background: var(--accent); }
+  #liveitems { margin: 0; padding: 0; list-style: none; max-height: 200px; overflow-y: auto; display: flex; flex-direction: column; gap: 2px; }
+  #liveitems a { display: block; padding: 4px 8px; border-radius: 8px; color: inherit; text-decoration: none; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  #liveitems a:hover { background: #ffffff0c; }  #liveitems li.cur a { background: #e04a5a22; }
+  #liveitems a::before { content: '\25CF'; color: var(--accent); margin-right: 6px; font-size: 9px; vertical-align: 2px; }
   #plitems li.cur { background: #e04a5a22; }  #plitems li.cur::before { content: '\25B6'; color: var(--accent); }
   #plitems li .nm { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   #plitems li .dt { color: var(--faint); font-size: 10.5px; white-space: nowrap; }
@@ -166,7 +173,13 @@
     </div>
     <button id="sound" hidden>click for sound</button>
   </div>
-  <div class="sec">
+  <div class="sec" id="livesec" hidden>
+    <div class="row spread"><span class="lbl">live now (CCCaster)</span>
+      <span class="grp"><button id="livebtn" class="livebtn" title="back to live (~4 s behind the players)" hidden>LIVE</button>
+      <label class="tog" title="on: joining jumps to ~4 s behind the players; off: the whole game from its start, at normal speed"><input id="livejump" type="checkbox" checked> jump to live</label></span></div>
+    <ol id="liveitems"></ol>
+  </div>
+  <div class="sec" id="plsec">
     <div class="row spread">
       <span class="lbl">queue <span id="plpos"></span></span>
       <span class="grp">
@@ -199,8 +212,8 @@
   </div>
 </div>
 </div>
-<script src="mbaa.js?v=78e49edacab7"></script>
+<script src="mbaa.js?v=33212e6fe11e"></script>
 <script src="bgm_stream.js?v=407ac29e5c89"></script>
-<script src="viewer.js?v=af65fc4c185e"></script>
+<script src="viewer.js?v=9732d29e1ce5"></script>
 </body>
 </html>

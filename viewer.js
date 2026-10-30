@@ -28,7 +28,8 @@
 // read game memory (viewer_boxes / viewer_inputs).
 const KEY_HEX = '6d626161636377656272657061796b65792d6e6f742d612d7365637265742121';
 const Q = new URLSearchParams(location.search);
-const BUNDLE = Q.get('bundle') || 'bundle/';
+// the private live-spectate test copy (live.meltyblood.org/<secret>/, tools/web/cc_live.mjs) loads the public bundle
+const BUNDLE = Q.get('bundle') || (/^(live|spectate)\.meltyblood\.org$/.test(location.hostname) ? 'https://web.meltyblood.org/bundle/' : 'bundle/');
 const HASH = Q.get('hash') === '1', PERF = Q.get('perf') === '1', CAPTURE = Q.get('capture') === '1';
 const KF_EVERY = Math.max(10, +(Q.get('kf') || 300));  // playback keyframe interval (frames)
 const KF_NEAR = 30;  // a seek that re-simulates further than 3x this keyframes about KF_NEAR frames before its target
@@ -56,6 +57,11 @@ const net = window.mbaaNet = { objects: 0, bytes: 0, cached: 0 };
 // HTTP cache keeps them only 10 minutes.)
 let objCache = null;
 const objCacheReady = (async () => { try { objCache = await caches.open('mbaa-objects-v1'); } catch (e) {} })();
+// without persistent storage a browser clears the store when it wants space (mobile Chrome, Safari): ask once; the page
+// files themselves are kept by the service worker (sw.js; deployed builds only, a local build has no versioned names)
+if (navigator.storage && navigator.storage.persist) navigator.storage.persisted().then(p => p || navigator.storage.persist()).catch(() => {});
+if ('serviceWorker' in navigator && /^web\.meltyblood\.org$/.test(location.hostname))
+  navigator.serviceWorker.register('/sw.js').catch(e => console.warn('service worker:', e));
 async function fetchObject(h) {
   const url = `${BUNDLE}o/${h.slice(0, 2)}/${h}`;
   await objCacheReady;
@@ -128,9 +134,12 @@ const fmt = (t, c, m) => t.replace(/\{(\w):02d\}/g, (_, k) => String(k === 'c' ?
                           .replace(/\{(\w)\}/g, (_, k) => String(k === 'c' ? c : m));
 function planFiles(man, keys) {
   const p = man.plan, out = new Set([...p.boot, ...p.common]);
-  for (const t of p.stage) out.add(fmt(t, keys.stage, 0));
-  for (const f of (p.stage_files || {})[keys.stage] || []) out.add(f);
+  if (keys.stage !== null) {
+    for (const t of p.stage) out.add(fmt(t, keys.stage, 0));
+    for (const f of (p.stage_files || {})[keys.stage] || []) out.add(f);
+  }
   for (const side of [keys.p1, keys.p2]) {
+    if (!side) continue;
     const [c, m] = side;
     for (const t of p.templates) out.add(fmt(t, c, m));
     for (const f of p.chara[`${c}`] || []) out.add(f);
@@ -508,11 +517,12 @@ async function play(rep, name, catchUp = 0, want = null) {
   if (!call(s, 'viewer_load')) { window.__mbaaStarted = -1; status('start failed (see console)'); return; }
   if (HASH) s.M.ccall('viewer_hash_enable', null, [], []);
   call(s, 'viewer_play', 0);
+  if (liveSrc && Q.get('live')) liveBegin(s);
   call(s, 'viewer_hud', ui.hud ? 1 : 0);
   window.__mbaa = { Module: s.M, man };
   if (!HASH || CAPTURE) timelineInit(s);
   // the pre-scan is a second copy of the game (~400 MB with its files): not in low-memory mode, where marks come as playback reaches them
-  if (!HASH && !CAPTURE && !PERF && !catchUp && !(LOWMEM && Q.get('scan') !== '1')) startScan(s);
+  if (!HASH && !CAPTURE && !PERF && !catchUp && !s.liveSrc && !(LOWMEM && Q.get('scan') !== '1')) startScan(s);
   window.__mbaaStarted = 1;
   if (CAPTURE) { status(`loaded ${name} (capture mode)`); return; }
   if (HASH) return hashRun(s);
@@ -550,7 +560,8 @@ function watch(s) {
   s.watching = true;
   const t = setInterval(() => {
     if (s !== session) return clearInterval(t);
-    if (misses.size) { clearInterval(t); refetchAndReplay(s, call(s, 'viewer_frame')); return; }
+    if (misses.size && s.liveSrc) { liveMissed(s); }
+    else if (misses.size) { clearInterval(t); refetchAndReplay(s, call(s, 'viewer_frame')); return; }
     if (LOWMEM && s.freedAt < 0 && s.tl && s.tl.marks.length && !s.seeking && !call(s, 'viewer_files_open')) freeLoaded(s);
     if (call(s, 'viewer_ended') && !s.endShown) {
       s.endShown = true;
@@ -618,6 +629,7 @@ function timelineInit(s) {
       t.scene = scene; t.round = round;
       if (t.end === null && M._viewer_ended()) t.end = f;
     }
+    if (s.liveSrc) liveCssWatch(s);
     if (!s.seeking) incTick(s, f);
     else if (f >= t.lastKf + KF_EVERY && f >= t.simMax && !M._viewer_files_open() && !(LOWMEM && !t.marks.length)) keyframe(s, f);  // phones: none in the intro (incTick)
   };
@@ -917,6 +929,10 @@ function restore(s, kf) {
   }
   s.tl.lastCopied = copied;
   call(s, 'viewer_restore_end', ++s.gen);
+  if (s.liveSrc) {
+    liveRefeed(s);  // (the stream received since the keyframe)
+    s.M._viewer_resolve_reset();  // (the keyframe's path caches predate files added since: the next game's)
+  }
   // the restored state-hash / audio row buffers hold the keyframe's leftovers
   if (HASH) { M.ccall('viewer_hash_take', 'string', [], []); M.ccall('viewer_audio_take', 'string', [], []); }
 }
@@ -925,6 +941,7 @@ function restore(s, kf) {
 function requestSeek(T) {
   const s = session;
   if (!s || !s.tl) return Promise.resolve();
+  if (s.liveSrc && s.liveFollow) liveFollow(s, false);  // a seek on a live match: watching back
   s.tl.want = T;
   if (!s.tl.running) s.tl.running = runSeeks(s);
   return s.tl.running;
@@ -1015,6 +1032,277 @@ async function skipIntro(s) {
 // Copy the current moment: a link that opens this replay at this frame when the replay came from a URL (?rep=),
 // otherwise the replay name, time and frame as text.
 const REPLAY_STORE = 'https://replays.meltyblood.org';
+
+// ---- live CCCaster matches (?live=<id>): the bridge's feed (tools/web/cc_live.mjs) played by the game in spectate
+// mode (web/host/spectate.cpp): a boot tape sets the match up, then the stream's index records arrive about once a
+// second and the game plays them ~4 s behind the host (faster while it catches up after joining mid-game)
+const LIVE = Q.get('liveUrl') || location.origin + location.pathname.replace(/\/[^/]*$/, '');  // (the feed is next to the page)
+const LIVE_BEHIND = 240;  // frames kept buffered (4 s)
+let liveSrc = null;  // {id, info, since}
+async function liveList() {
+  const r = await fetch(`${LIVE}/live/list`, { cache: 'no-store' });
+  if (!r.ok) throw new Error(`HTTP ${r.status}`);
+  return r.json();
+}
+async function startLive(id) {
+  let info;
+  try { info = (await liveList()).find(m => m.id === id); } catch (e) { status(`live feed unreachable: ${e.message}`); return; }
+  if (!info) { status('that match is not live any more'); return; }
+  liveSrc = { id, info, since: info.game };
+  const r = await fetch(`${LIVE}/live/${id}/boot.rep?game=${info.game}`, { cache: 'no-store' });
+  if (!r.ok) { status(`live match: HTTP ${r.status}`); return; }
+  window.__mbaaRepUrl = null;
+  await start(new File([await r.arrayBuffer()], `LIVE ${info.names.map(n => n.trim()).join(' vs ')}`));
+}
+// the last index number in a block of .ccs records (u32 index, u32 kind, rng 12 + ring 220, u32 frames, u16 x 2 x frames)
+function liveLastIndex(b) {
+  const dv = new DataView(b.buffer, b.byteOffset, b.byteLength);
+  let o = 0, last = -1;
+  while (o + 244 <= b.length) { last = dv.getUint32(o, true); o += 240 + 4 + 4 * dv.getUint32(o + 240, true); }
+  return last;
+}
+const hidden = () => document.visibilityState === 'hidden';
+// "jump to live" (per viewer; off: watch each game from its start at normal speed, as CCCaster's spectate option)
+const liveJump = () => document.getElementById('livejump').checked;
+function liveJumpInit() {
+  const el = document.getElementById('livejump');
+  try { el.checked = localStorage.getItem('mbaa-live-jump') !== '0'; } catch (e) {}
+  el.onchange = () => { try { localStorage.setItem('mbaa-live-jump', el.checked ? '1' : '0'); } catch (e) {} el.blur(); };
+}
+// n frames forward as fast as the game runs, nothing drawn but the last frames (seekTo's stepping; the live hold stops
+// it at the newest frame received)
+async function liveCatchUp(s, n) {
+  const M = s.M, T = M._viewer_frame() + n, DRAW = 2;
+  s.seeking = true; s.mute = true;
+  s.stopSes(); s.bgmHalt();
+  uiApply(s);
+  call(s, 'viewer_suppress', 1);
+  let f = M._viewer_frame();
+  while (f < T - DRAW) {
+    const g = call(s, 'viewer_step', Math.min(T - DRAW - f, 600));
+    if (g === f) break;
+    f = g;
+    status(`live: catching up (${((T - f) / 60).toFixed(0)} s to go)`);
+    await new Promise(r => setTimeout(r, 0));
+    if (session !== s) return;
+  }
+  call(s, 'viewer_suppress', 0);
+  if (f < T) call(s, 'viewer_step', T - f);
+  else call(s, 'viewer_represent');
+  s.seeking = false; s.mute = ui.paused;
+  uiApply(s);
+  if (!ui.paused) s.bgmSync(M._viewer_frame());
+}
+// the panel's "live now" list (refreshed every 15 s; hidden while nothing is live or the feed is unreachable)
+async function liveListShow() {
+  const sec = document.getElementById('livesec'), ol = document.getElementById('liveitems');
+  let l = [];
+  try { l = await liveList(); } catch (e) {}
+  sec.hidden = !l.length;
+  ol.replaceChildren(...l.map(m => {
+    const li = document.createElement('li'), a = document.createElement('a');
+    a.href = `${location.pathname}?live=${m.id}` +  // (the page's <base> is the site root on the live path) (Q.get('liveUrl') ? `&liveUrl=${encodeURIComponent(Q.get('liveUrl'))}` : '');
+    a.textContent = m.matchup || m.names.map(n => n.trim()).join(' vs ');
+    if (liveSrc && liveSrc.id === m.id) li.className = 'cur';
+    li.append(a);
+    return li;
+  }));
+  setTimeout(liveListShow, 15000);
+}
+// the received records by index (each the longest so far), kept outside the game's memory: a seek's keyframe restore
+// rolls the game's copy back to what had arrived then, and liveRefeed hands it everything again
+function liveKeep(L, b) {
+  const dv = new DataView(b.buffer, b.byteOffset, b.byteLength);
+  for (let o = 0; o + 244 <= b.length;) {
+    const n = 244 + 4 * dv.getUint32(o + 240, true), i = dv.getUint32(o, true), old = L.recs.get(i);
+    if (o + n > b.length) break;
+    if (!old || old.length <= n) L.recs.set(i, b.slice(o, o + n));
+    o += n;
+  }
+}
+function liveFeed(s, b) {
+  const p = s.M._malloc(b.length);
+  s.M.HEAPU8.set(b, p);
+  call(s, 'viewer_spectate_feed', p, b.length);
+  s.M._free(p);
+}
+// A live session goes on through the retry menu and the character select (scene 20): their files load with the first
+// game (the select screen's parts, portraits and palettes for any character a player hovers, the stage list, the moon
+// check's data/<chara>_<moon>.txt (it only stats them, but a missing one changes which moons are offered), its BGM)
+function liveCssFiles(man) {
+  const out = new Set();
+  for (const p of Object.keys(man.files))
+    if (/^(grp\/c_sel_aa|grp\/bgselect|data\/_csel)\//.test(p) || /^data\/[^/]+_\d\.txt$/.test(p) || /^bgm\/bgmme99\./.test(p)) out.add(p);
+  return withSiblings(man, out);
+}
+// The next game's files, from the select screen's state (read after every frame while it runs): a seat's character once
+// it is on the moon disk (CssSlot +0x04 state >= 1, +0x14 chara), its moon from the palette step on (state >= 2, +0x18);
+// once the select is finished (scene +0x3C state >= 4: stage chosen) the stage, and for a Random seat the battle slot. Each new
+// pick is fetched in the background and put in MEMFS; from the finish on, the game is held (viewer_live_hold: no frame
+// steps) until all of them are there. The load comes ~30 frames after the finish (the fade out).
+const CSS_SCENE = 20, CSS_OBJ = 0x773158, CSS_SLOT = 0x74D8E8, BATTLE_SLOT = 0x74D838, STAGE_ID = 0x74FD98;
+function liveCssWatch(s) {
+  const H = s.M.HEAP32, g = a => H[a >> 2];
+  if (g(0x54EEE8) !== CSS_SCENE) { if (s.cssHeld) liveCssHold(s, false); s.cssKey = null; return; }
+  const done = g(CSS_OBJ + 0x3C) >= 4, known = c => !!man.plan.chara[`${c}`];
+  const sides = [0, 1].map(p => {
+    const st = g(CSS_SLOT + p * 0x24 + 4), c = g(CSS_SLOT + p * 0x24 + 0x14), m = g(CSS_SLOT + p * 0x24 + 0x18);
+    if (st >= 1 && known(c)) return [c, st >= 2 || done ? Math.max(0, m) : null];
+    // Random (99): the battle slot's copy, once the select is finished (its moon is copied a frame after the chara)
+    return done && known(g(BATTLE_SLOT + p * 0x2C + 8)) ? [g(BATTLE_SLOT + p * 0x2C + 8), Math.max(0, g(BATTLE_SLOT + p * 0x2C + 0x14))] : null;
+  });
+  const stage = done ? g(STAGE_ID) : null, key = JSON.stringify([stage, sides]);
+  if (key !== s.cssKey) {
+    s.cssKey = key;
+    const want = new Set();
+    for (const [i, side] of sides.entries()) {
+      if (!side) continue;
+      const k = { stage: null, p1: null, p2: null };
+      k[i ? 'p2' : 'p1'] = side[1] === null ? null : side;
+      if (side[1] === null) for (const f of man.plan.chara[`${side[0]}`]) want.add(f);  // the moon is not picked yet
+      else for (const f of planFiles(man, k)) want.add(f);
+    }
+    if (stage !== null) for (const f of planFiles(man, { stage, p1: null, p2: null })) want.add(f);
+    s.cssNeed = [...withSiblings(man, want)].filter(p => !s.want.has(p));
+    console.log(`live: next game P1 ${sides[0]} P2 ${sides[1]} stage ${stage}: ${s.cssNeed.length} files to load`);
+    const fetching = s.cssFetching || (s.cssFetching = new Set());
+    const need = s.cssNeed.filter(p => !fetching.has(p));  // (an earlier pick's download may have them on the way)
+    if (need.length) {
+      const t0 = performance.now(), b0 = net.bytes;
+      for (const p of need) fetching.add(p);
+      fetchAll(man, need, 'next game', true)
+        .then(() => {
+          console.log(`live: ${need.length} next-game files in ${Math.round(performance.now() - t0)} ms (${((net.bytes - b0) / 1e6).toFixed(1)} MB, all downloads)`);
+          if (session === s) liveInstall(s, need);
+        })
+        .catch(e => { console.warn('live: next game files:', e); status(`live: the next game's files did not load (${e.message})`); });
+    }
+  }
+  const ready = s.cssNeed.every(p => s.want.has(p));
+  if (done && !ready !== !!s.cssHeld) liveCssHold(s, !ready);
+}
+function liveCssHold(s, on) {
+  s.cssHeld = on;
+  call(s, 'viewer_live_hold', on ? 1 : 0);
+  if (on) status('live: loading the next game');
+}
+// fetched files into MEMFS (a stage .dat over its placeholder) and the want list (no miss for them)
+function liveInstall(s, paths) {
+  let n = 0;
+  for (const p of paths) {
+    const d = cache.get(p);
+    if (!d || s.want.has(p)) continue;
+    fsPut(s.M.FS, '/game/' + p, d); s.want.add(p); n++;
+    if (!HASH && !bgmStreamReady && /^bgm\/.*\.opus$/.test(p)) bgmDecode(p);
+  }
+  if (n) s.M._viewer_resolve_reset();  // (directory listings cached without them)
+  if (s.cssHeld && s.cssNeed.every(p => s.want.has(p))) liveCssHold(s, false);
+}
+// A file the game looked up that the page did not load: a live session cannot replay from the start (the miss path of
+// a replay); it is reported (the plan above must cover it), never retried silently
+function liveMissed(s) {
+  const l = [...misses];
+  misses.clear();
+  console.warn(`live: the game asked for ${l.length} files the page did not load:`, l);
+  window.mbaaPlanMisses = (window.mbaaPlanMisses || []).concat(l);
+  s.liveMissedN = (s.liveMissedN || 0) + l.length;
+  status(`live: ${s.liveMissedN} game files were missing (see the console); the picture may be wrong`);
+}
+function liveRefeed(s) {  // restore(): after the keyframe is back
+  const L = s.liveSrc, parts = [...L.recs.keys()].sort((x, y) => x - y).map(i => L.recs.get(i));
+  if (!parts.length) return;
+  const all = new Uint8Array(parts.reduce((n, x) => n + x.length, 0));
+  let o = 0;
+  for (const x of parts) all.set(x, o), o += x.length;
+  liveFeed(s, all);
+}
+// live: following the stream (paced, ~LIVE_BEHIND frames behind it); DVR (after a seek, a step or a pause): the replay
+// controls on everything received so far, no pacing; the LIVE button goes back
+function liveFollow(s, on) {
+  s.liveFollow = on;
+  if (!on && s.liveFF) { s.liveFF = false; call(s, 'viewer_speed', ui.speed); }
+  document.getElementById('livebtn').classList.toggle('on', on);
+}
+async function liveGoLive() {
+  const s = session;
+  if (!s || !s.liveSrc) return;
+  if (s.liveSrc.next) return startLive(s.liveSrc.id);  // the game being watched is over: the current one
+  if (ui.paused) setPaused(false);
+  liveFollow(s, true);
+  // (the stream grows while the jump runs: again until it is close)
+  for (let k = 0, ahead; k < 4 && (ahead = call(s, 'viewer_spectate_buffered')) > LIVE_BEHIND + 90 && session === s; ++k) {
+    await liveCatchUp(s, ahead - LIVE_BEHIND);
+  }
+}
+function liveBegin(s) {  // play(): after viewer_play
+  const L = liveSrc;
+  s.liveSrc = L;
+  L.since = L.info.game;
+  L.recs = new Map();
+  L.next = false;
+  liveFollow(s, true);
+  call(s, 'viewer_spectate_open', L.info.rollback, L.info.winCount);
+  const poll = async () => {
+    if (session !== s) return;
+    try {
+      const r = await fetch(`${LIVE}/live/${L.id}/rec?from=${L.info.game}&since=${L.since}`, { cache: 'no-store' });
+      if (r.ok) {
+        const b = new Uint8Array(await r.arrayBuffer());
+        if (b.length && session === s) {
+          liveKeep(L, b);
+          liveFeed(s, b);
+          L.since = liveLastIndex(b);
+        }
+      }
+    } catch (e) { console.warn('live feed:', e); }
+    if (session !== s) return;
+    let ahead = call(s, 'viewer_spectate_buffered');
+    if (s.tl && !s.seeking) s.tl.est = s.M._viewer_frame() + ahead;  // the timeline reaches the newest frame received
+    if (call(s, 'viewer_ended') || L.next) {  // the game is over: the match's next game (or the list, if it ended)
+      try {
+        const now = (await liveList()).find(m => m.id === L.id);
+        if (!now) { status('the match has ended'); return; }
+        if (now.game !== L.info.game) {
+          if (s.liveFollow) return startLive(L.id);
+          L.next = true;  // (DVR: stays on this game; LIVE goes to the current one)
+          status('live: watching back; the next game is on (LIVE to join it)');
+        }
+      } catch (e) {}
+    } else if (s.liveFollow) {
+      // pace as CCCaster's spectator: at the join (the stream starts at the game's start) jump to LIVE_BEHIND frames
+      // behind the newest frame received, unrendered as a seek ("jump to live" off: no jump); from then on normal speed,
+      // stalling only when the stream runs dry (until 2 s are buffered again)
+      if (!s.liveSynced && ahead > 0) {
+        s.liveSynced = true;
+        // (the stream grows while the jump runs: again until it is close)
+        for (let k = 0; k < 4 && liveJump() && ahead > LIVE_BEHIND + 90 && !s.seeking; ++k) {
+          await liveCatchUp(s, ahead - LIVE_BEHIND);
+          if (session !== s) return;
+          ahead = call(s, 'viewer_spectate_buffered');
+        }
+      }
+      // the link card's picture (tools/web/cc_live.mjs): this frame, now and every 2 minutes
+      if (s.liveSynced && !hidden() && performance.now() - (s.liveThumbAt || -1e9) > 120000) {
+        s.liveThumbAt = performance.now();
+        grabCard().jpeg.then(b => b && fetch(`${LIVE}/live/${L.id}/thumb`, { method: 'POST', body: b }).catch(() => {}));
+      }
+      const hold = ahead < 15 || (s.liveHeld && ahead < 120);
+      s.liveHeld = hold;
+      call(s, 'viewer_pause', hold || ui.paused || s.seeking ? 1 : 0);
+      // CCCaster's spectateFastFwd: more than 60 frames (2 x NUM_INPUTS) behind, every other frame is not drawn
+      // (CC_SKIP_FRAMES) until caught up; here, over the kept buffer: two game frames per drawn frame
+      const ff = !hold && ahead > LIVE_BEHIND + 60;
+      if (ff !== !!s.liveFF) { s.liveFF = ff; call(s, 'viewer_speed', ff ? 2 : ui.speed); }
+      if (s.cssHeld) status('live: loading the next game');
+      else status(hold ? `live: waiting for the stream (${(ahead / 60).toFixed(1)} s buffered)`
+                  : `live: ${(ahead / 60).toFixed(1)} s behind the players` + (ff ? ' (catching up)' : ''));
+    } else if (!s.seeking) {
+      status(`live: watching back, ${(ahead / 60).toFixed(0)} s behind (LIVE to catch up)`);
+    }
+    setTimeout(poll, 1000);
+  };
+  poll();
+}
 // a local replay is uploaded once (named by its SHA-256, so re-sharing it gives the same link)
 async function uploadRep(bytes) {
   const r = await fetch(`${REPLAY_STORE}/rep`, { method: 'POST', body: bytes, headers: { 'Content-Type': 'application/octet-stream' } });
@@ -1081,6 +1369,7 @@ function grabCard() {
 async function copyTimestamp() {
   const s = session;
   if (!s) return;
+  if (s.liveSrc) { status('links to a moment of a live match: not yet (E saves the clip as a video)'); return; }
   const f = s.M._viewer_frame();
   const shots = grabCard();
   const u = new URL(location.origin + location.pathname);
@@ -1112,6 +1401,7 @@ function togglePlay() {
 }
 function setPaused(p) {
   ui.paused = p;
+  if (p && session && session.liveSrc && session.liveFollow) liveFollow(session, false);
   document.querySelector('#pause .i').className = `i ${p ? 'i-play' : 'i-pause'}`;
   const s = session;
   if (!s) return;
@@ -1122,6 +1412,7 @@ function setPaused(p) {
 const curFrame = () => session ? (session.tl && session.tl.want !== null ? session.tl.want : session.M._viewer_frame()) : 0;
 function stepBy(n, pause = true) {
   if (!session || !session.tl) return Promise.resolve();
+  if (session.liveSrc && session.liveFollow) liveFollow(session, false);
   if (pause && !ui.paused) setPaused(true);
   if (n === 1 && session.tl.want === null && !session.tl.running) {  // one frame forward: just step
     call(session, 'viewer_step', 1);
@@ -1359,6 +1650,7 @@ async function start(file) {
   const rep = new Uint8Array(await file.arrayBuffer());
   let keys, want;
   try { keys = repKeys(rep); want = wantFor(rep); } catch (e) { status('error: ' + e.message); return; }
+  if (want && liveSrc) for (const p of liveCssFiles(man)) want.add(p);
   if (want) {
     status(`stage ${keys.stage}, P1 ${keys.p1[0]}:${keys.p1[1]} vs P2 ${keys.p2[0]}:${keys.p2[1]}: fetching`);
     await fetchAll(man, want, 'match assets');
@@ -1539,6 +1831,10 @@ async function exportVideo() {
   ensureAudio(); await actx.resume();
   if (inIntro(s)) await skipIntro(s);
   const c = s.clip ? { ...s.clip } : roundClip(s);
+  if (s.liveSrc) {  // a live match: up to the newest frame received (the round may not have ended yet)
+    c.b = Math.min(c.b, s.M._viewer_frame() + call(s, 'viewer_spectate_buffered'));
+    if (c.b <= c.a) { status('nothing received after the clip start yet'); return; }
+  }
   if (window.VideoEncoder && window.VideoFrame && Q.get('exportMode') !== 'realtime') {
     try { if (await fastExport(s, c)) return; }
     catch (e) { console.error('video export failed:', e); status(`video export failed: ${e.message || e}`); return; }
@@ -1600,7 +1896,9 @@ async function fastExport(s, c) {
     for (let k = pre; k < c.b; k++) {
       if (fx.cancel || session !== s) throw new Error('cancelled');
       if (encErr) throw encErr;
+      const k0 = M._viewer_frame();
       call(s, 'viewer_step', 1);
+      if (M._viewer_frame() === k0) break;  // the end of the replay (or of the live stream received)
       if (k < c.a) continue;
       g.drawImage(cv, 0, 0, EXPORT_W, EXPORT_H);
       if (ui.boxes || ui.inputs) { drawOverlay(); g.drawImage(ov, 0, 0, EXPORT_W, EXPORT_H); }
@@ -1852,6 +2150,15 @@ async function main() {
   const rq = Q.get('r') || '';
   const autoload = /^[0-9a-f]{64}$/.test(rq) ? `${REPLAY_STORE}/rep/${rq}.rep`  // links from before short ids
                  : /^[A-Za-z0-9_-]{8,43}$/.test(rq) ? `${REPLAY_STORE}/s/${rq}` : Q.get('rep');
+  liveJumpInit();
+  liveListShow();
+  if (Q.get('live')) {  // spectating: the live controls; no replay queue, no skip-intro
+    document.getElementById('plsec').hidden = true;
+    document.getElementById('skipintro').closest('label').hidden = true;
+    document.getElementById('livebtn').hidden = false;
+    document.getElementById('livebtn').onclick = e => { e.target.blur(); liveGoLive(); };
+  }
+  if (/^[A-Za-z0-9_]{4,64}$/.test(Q.get('live') || '')) return startLive(Q.get('live'));  // a live CCCaster match
   const lq = Q.get('l') || '';
   if (/^[A-Za-z0-9_-]{8,43}$/.test(lq)) {  // a shared playlist
     try {
