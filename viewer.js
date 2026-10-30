@@ -1175,11 +1175,12 @@ function playersShow(s) {
     document.getElementById('title').hidden = true;
   }
 }
-// the cursor frames' loop over the icons (10 frames, 4 game frames each, as the select screen's cursor)
+// the cursor frames' loop over the icons, at the select screen's rate (CharaSelectIcons_Update, CE 0x48BAB0: the next of
+// 10 frames every 2 game ticks)
 function playersAnimate(t) {
   const box = document.getElementById('players');
   if (!box.hidden && plArt) {
-    const f = Math.floor(t / 66.7) % 10;
+    const f = Math.floor(t * 60 / 2000) % 10;
     box.querySelectorAll('.pl').forEach((row, p) => {
       const c = row.querySelector('.ico').getContext('2d'), fr = 10 * p + f, tag = 20 + p, cell = plCells[p];
       c.clearRect(0, 0, 64, 64);
