@@ -2317,7 +2317,10 @@ async function main() {
   } else {
     cryptoKey = await crypto.subtle.importKey('raw', hex(KEY_HEX), 'AES-CTR', false, ['decrypt']);
     status('loading manifest…');
-    const r = await fetch(BUNDLE + 'manifest.bin');
+    // the manifest this page was deployed with (deploy_pages.sh writes its hash into the page): a page and a manifest
+    // from different deploys never meet (an older page cannot read a newer bundle's objects, nor the reverse)
+    const mv = (document.querySelector('meta[name="mbaa-manifest"]') || {}).content || '';
+    const r = await fetch(BUNDLE + 'manifest.bin' + (mv ? `?v=${mv}` : ''), { cache: mv ? 'default' : 'no-cache' });
     net.bytes += +(r.headers.get('content-length') || 0);
     man = JSON.parse(new TextDecoder().decode(await openObject(await r.arrayBuffer())));
     stagePanelLoad().catch(e => console.warn('stage panel:', e));

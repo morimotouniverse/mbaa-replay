@@ -35,7 +35,10 @@ async function networkFirst(r) {
   const c = await caches.open(SHELL);
   const u = new URL(r.url), key = r.mode === 'navigate' ? u.origin + u.pathname : r;  // (a page under its path alone)
   try {
-    const res = await fetch(r);
+    // (revalidated every time: the host lets a browser reuse the page for 10 minutes, and a stale page would name
+    // older page files and an older bundle manifest)
+    const res = await (r.mode === 'navigate' ? fetch(r.url, { cache: 'no-cache', credentials: 'same-origin' })
+                                             : fetch(new Request(r, { cache: 'no-cache' })));
     if (res.ok) c.put(key, res.clone());
     return res;
   } catch (err) {
