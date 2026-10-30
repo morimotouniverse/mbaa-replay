@@ -1216,7 +1216,10 @@ async function stagePanelLoad() {
   const tile = (f, title) => {
     const b = document.createElement('button'), img = document.createElement('div'), cap = document.createElement('span');
     b.className = 'tile'; b.dataset.f = f; b.title = title;
-    img.className = 'art'; if (f) img.dataset.stage = art[f] ?? ''; else img.textContent = '\u266A';
+    img.className = 'art';
+    if (!f) img.textContent = '\u266A';
+    else if (art[f] !== undefined) img.dataset.src = `web/stage/view_${String(art[f]).padStart(2, '0')}.png`;
+    else if (stagePanel.tracks[f].art) img.dataset.src = `web/stage/track_${f}.png`;  // (a screen's track: its art)
     cap.textContent = title;
     b.append(img, cap);
     b.onclick = () => radioSet(f);
@@ -1233,8 +1236,7 @@ let radioArtDone = false;
 async function radioArt() {
   if (radioArtDone) return;
   radioArtDone = true;
-  const tiles = [...document.querySelectorAll('#radiogrid .art[data-stage]')].filter(e => e.dataset.stage !== '');
-  const path = e => `web/stage/view_${String(e.dataset.stage).padStart(2, '0')}.png`;
+  const tiles = [...document.querySelectorAll('#radiogrid .art[data-src]')], path = e => e.dataset.src;
   await fetchAll(man, tiles.map(path), '', true);
   for (const e of tiles) {
     const d = cache.get(path(e));
