@@ -590,6 +590,7 @@ function fillSession(s, want, had) {
   FS.writeFile('/game/replay.rep', rep);
   M.mbaaAssetMiss = p => { if (man.files[p] && p !== MOVIE && !(s.want.has(p) && cache.has(p))) misses.add(p); };  // (the movie: movieLoad)
   if (movieBytes) M.mbaaMovie = movieBytes;
+  if (movieH264) M.mbaaMovieVideo = movieVideo(movieH264);
   trackOpens(s);
   audioHooks(M, s);
   if (!HASH && !bgmStreamReady) for (const p of s.want) if (/^bgm\/.*\.opus$/.test(p) && cache.has(p)) bgmDecode(p);
@@ -642,7 +643,7 @@ async function play(rep, name, catchUp = 0, want = null) {
   if (s !== session) return;
   call(s, 'viewer_run');
   loading(false);
-  if (!HASH && !LOWMEM) movieLoad();
+  if (!HASH) movieLoad();
   status(`playing ${name}`);
   watch(s);
 }
@@ -1936,15 +1937,62 @@ function wantFor(rep) {
 // the game reads a record at a time. Fetched once a match plays, never ahead of one (until it is here the panel stays
 // dark: the picture only); a capture run has it before it starts (its pictures are compared with the game's).
 const MOVIE = 'dat/dat_m_vs.vsmv';
-let movieBytes = null, movieLoading = null;
+// The VS movie's frames, fetched once a match plays (the panel stays dark until then; no game state depends on it):
+// the lossless file (32 MB: the picture matches CE exactly), or in low-memory mode (phones) the 2 MB H.264 copy of it
+// (tools/web/vsmovie/vsmovie_h264.py; lossy), decoded by movieVideo
+const MOVIE_H264 = 'dat/dat_m_vs.vsmh';
+let movieBytes = null, movieH264 = null, movieLoading = null;
 function movieLoad() {
   if (!movieLoading) movieLoading = (async () => {
-    const f = man.files[MOVIE];
+    const f = man.files[LOWMEM ? MOVIE_H264 : MOVIE];
     if (!f) return;
-    movieBytes = f.plain ? new Uint8Array(await (await fetch(f.plain)).arrayBuffer()) : await fetchObject(f.o, f.z);
-    if (session) session.M.mbaaMovie = movieBytes;
+    if (LOWMEM && !(typeof VideoDecoder !== 'undefined' && (await VideoDecoder.isConfigSupported(movieConfig(new Uint8Array(0)))).supported))
+      throw new Error('this browser cannot decode the H.264 movie (WebCodecs)');
+    const b = f.plain ? new Uint8Array(await (await fetch(f.plain)).arrayBuffer()) : await fetchObject(f.o, f.z);
+    if (LOWMEM) { movieH264 = b; if (session) session.M.mbaaMovieVideo = movieVideo(b); }
+    else { movieBytes = b; if (session) session.M.mbaaMovie = b; }
   })().catch(e => { movieLoading = null; console.warn('VS movie:', e); });
   return movieLoading;
+}
+// the decoder setup of a VSMH file (b empty: the one it is built with, for the support check)
+function movieConfig(b) {
+  if (!b.length) return { codec: 'avc1.640020', codedWidth: 640, codedHeight: 480 };
+  const dv = new DataView(b.buffer, b.byteOffset, b.byteLength), u = i => dv.getUint32(i, true), dl = u(24), cl = u(28);
+  return { codec: new TextDecoder().decode(b.subarray(32, 32 + cl)), codedWidth: u(8), codedHeight: u(12),
+           description: b.slice(32 + cl, 32 + cl + dl), optimizeForLatency: true };
+}
+// A VSMH file (H.264 samples by frame, a keyframe every `key`) decoded by frame index: frame(f) is frame f's VideoFrame
+// once decoded, null until then (the host asks again on its next frame: web/host/browser/d3d9_gl.cpp js_movie_frame).
+// Decoding runs AHEAD frames past the one asked for; a jump (a seek, a replay switch) starts again from the keyframe at or
+// before f. Frames outside f .. f + AHEAD are closed.
+function movieVideo(b) {
+  const dv = new DataView(b.buffer, b.byteOffset, b.byteLength), u = i => dv.getUint32(i, true);
+  const cfg = movieConfig(b), n = u(16), key = u(20), tab = 32 + u(28) + u(24), off = i => u(tab + 4 * i);
+  const AHEAD = 8, have = new Map();
+  let dec = null, next = -1, sent = [], flushed = false;
+  const restart = f => {
+    if (!dec || dec.state === 'closed')
+      dec = new VideoDecoder({ output: fr => { const i = sent.shift(); if (i === undefined) fr.close(); else have.set(i, fr); },
+                               error: e => { console.warn('VS movie decode:', e); dec = null; } });
+    else dec.reset();
+    dec.configure(cfg);
+    for (const fr of have.values()) fr.close();
+    have.clear(); sent = []; flushed = false;
+    next = f - f % key;
+  };
+  return {
+    frame(f) {
+      f = Math.min(Math.max(f, 0), n - 1);
+      for (const [i, fr] of have) if (i < f || i > f + AHEAD) { fr.close(); have.delete(i); }
+      if (!have.has(f) && !sent.includes(f) && (!dec || f < next || f >= next + key)) restart(f);
+      while (next < n && next <= f + AHEAD && dec.decodeQueueSize < 16) {
+        dec.decode(new EncodedVideoChunk({ type: next % key ? 'delta' : 'key', timestamp: next * 16667, data: b.subarray(off(next), off(next + 1)) }));
+        sent.push(next++);
+      }
+      if (next === n && sent.length && !flushed) { flushed = true; dec.flush().catch(() => {}); }  // (the last frames out)
+      return have.get(f) || null;
+    },
+  };
 }
 // the loading picture: the game's opening movie (web/shell/opening.webm, from Movie/Original MBAA_OP.mpeg: 480x360, no
 // sound), fetched the first time a match loads; shown from the first fetch until the game draws
@@ -2455,7 +2503,8 @@ async function main() {
     man = { files: {} };
     for (const p of await (await fetch(plainList)).json()) man.files[p.toLowerCase()] = { plain: plainRoot + p };
     await fetchAll(man, Object.keys(man.files), 'assets');
-    man.files[MOVIE] = { plain: plainRoot + MOVIE };  // (the page keeps it: movieLoad)
+    man.files[MOVIE] = { plain: plainRoot + MOVIE };  // (the page keeps them: movieLoad)
+    man.files[MOVIE_H264] = { plain: plainRoot + MOVIE_H264 };
   } else {
     cryptoKey = await crypto.subtle.importKey('raw', hex(KEY_HEX), 'AES-CTR', false, ['decrypt']);
     status('loading manifest…');
