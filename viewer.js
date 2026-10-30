@@ -45,10 +45,43 @@ const KF_BUDGET = +(Q.get('kfmb') || (LOWMEM ? 40 : 450)) * 1e6;
 
 const hex = h => new Uint8Array(h.match(/../g).map(x => parseInt(x, 16)));
 let cryptoKey;
-async function openObject(buf) {
+// z = 'xz' (manifest entry; tools/web/bundle_xz.py): the large files, a third smaller than deflate, decoded by a pool
+// of web/shell/xz_worker.js (one xzwasm each: parallel, and off this thread); everything else deflate, which the browser
+// decodes natively. The pool starts on the first xz object; its URL carries viewer.js's version (deploy_pages.sh hashes
+// the worker and xzwasm into it).
+let xzPool = null;
+function xzDecode(buf) {
+  if (!xzPool) {
+    const v = ((document.querySelector('script[src^="viewer.js"]') || {}).src || '').split('?')[1] || '';
+    const n = Math.max(1, Math.min(4, (navigator.hardwareConcurrency || 2) - 1));
+    xzPool = { idle: [], queue: [], jobs: new Map(), id: 0 };
+    for (let i = 0; i < n; i++) {
+      const w = new Worker('xz_worker.js' + (v ? `?${v}` : ''));
+      w.onmessage = ({ data: { id, buf, err } }) => {
+        const j = xzPool.jobs.get(id); xzPool.jobs.delete(id);
+        err ? j.rej(new Error(`xz: ${err}`)) : j.res(new Uint8Array(buf));
+        xzNext(w);
+      };
+      xzPool.idle.push(w);
+    }
+  }
+  return new Promise((res, rej) => {
+    const id = ++xzPool.id;
+    xzPool.jobs.set(id, { res, rej });
+    xzPool.queue.push({ id, buf });
+    if (xzPool.idle.length) xzNext(xzPool.idle.pop());
+  });
+}
+function xzNext(w) {
+  const j = xzPool.queue.shift();
+  if (!j) { xzPool.idle.push(w); return; }
+  w.postMessage(j, [j.buf]);
+}
+async function openObject(buf, z = null) {
   const b = new Uint8Array(buf);
-  const z = await crypto.subtle.decrypt({ name: 'AES-CTR', counter: b.slice(0, 16), length: 64 }, cryptoKey, b.slice(16));
-  const s = new Blob([z]).stream().pipeThrough(new DecompressionStream('deflate-raw'));
+  const d = await crypto.subtle.decrypt({ name: 'AES-CTR', counter: b.slice(0, 16), length: 64 }, cryptoKey, b.slice(16));
+  if (z === 'xz') return xzDecode(d);
+  const s = new Blob([d]).stream().pipeThrough(new DecompressionStream('deflate-raw'));
   return new Uint8Array(await new Response(s).arrayBuffer());
 }
 const net = window.mbaaNet = { objects: 0, bytes: 0, cached: 0 };
@@ -56,24 +89,26 @@ const net = window.mbaaNet = { objects: 0, bytes: 0, cached: 0 };
 // are kept in the Cache Storage API, and a character / stage seen before loads with no network at all. (Pages' own
 // HTTP cache keeps them only 10 minutes.)
 let objCache = null;
-const objCacheReady = (async () => { try { objCache = await caches.open('mbaa-objects-v1'); } catch (e) {} })();
+const objCacheReady = (async () => {
+  try { objCache = await caches.open('MBAACC game files'); caches.delete('mbaa-objects-v1'); } catch (e) {}  // (the deflate-only store)
+})();
 // without persistent storage a browser clears the store when it wants space (mobile Chrome, Safari): ask once; the page
 // files themselves are kept by the service worker (sw.js; deployed builds only, a local build has no versioned names)
 if (navigator.storage && navigator.storage.persist) navigator.storage.persisted().then(p => p || navigator.storage.persist()).catch(() => {});
 if ('serviceWorker' in navigator && /^web\.meltyblood\.org$/.test(location.hostname))
   navigator.serviceWorker.register('/sw.js').catch(e => console.warn('service worker:', e));
-async function fetchObject(h) {
+async function fetchObject(h, z = null) {
   const url = `${BUNDLE}o/${h.slice(0, 2)}/${h}`;
   await objCacheReady;
   if (objCache) {
-    try { const hit = await objCache.match(url); if (hit) { net.cached++; return openObject(await hit.arrayBuffer()); } } catch (e) {}
+    try { const hit = await objCache.match(url); if (hit) { net.cached++; return openObject(await hit.arrayBuffer(), z); } } catch (e) {}
   }
   const r = await fetch(url);
   if (!r.ok) throw new Error(`object ${h}: HTTP ${r.status}`);
   const buf = await r.arrayBuffer();
   net.objects++; net.bytes += buf.byteLength;
   if (objCache) objCache.put(url, new Response(buf.slice(0))).catch(() => {});
-  return openObject(buf);
+  return openObject(buf, z);
 }
 function status(t) { document.getElementById('status').textContent = t; }
 // chara id -> display name (charaselect.txt CharaNo_<id>; replay header side block +4), moon (+8): 0 C, 1 F, 2 H
@@ -174,7 +209,7 @@ async function fetchAll(man, paths, label, quiet = false) {
         const r = await fetch(f.plain);
         if (!r.ok) { console.warn(`${p}: HTTP ${r.status}`); continue; }
         data = new Uint8Array(await r.arrayBuffer());
-      } else data = await fetchObject(f.o);
+      } else data = await fetchObject(f.o, f.z);
       cache.set(p, data);
       if ((++done % 10 === 0 || done === n) && !quiet) status(`${label} ${done}/${n} (${((net.bytes - net0) / 1e6).toFixed(1)} MB downloaded${net.cached ? `, ${net.cached} files from cache` : ''})`);
     }
@@ -319,7 +354,7 @@ function audioHooks(Module, s) {
   };
   s.stopSes = () => { for (const v of voices.values()) cut(v); };
   // BGM: the stream set, one looping track (back to loopPos seconds at the end, as the game's stream does)
-  const bgmChain = dsVoiceChain(musicGain);
+  const bgmChain = dsVoiceChain(musicGain), radioChain = dsVoiceChain(musicGain);  // (the radio's: each start's level)
   let bgm = null, bgmPath = '';
   // fade = seconds: the track fades out (pause) instead of cutting (seek, track change). Each track has its own fade
   // gain after the stream's volume/pan chain, so a fade never fights the game's own volume changes.
@@ -338,13 +373,21 @@ function audioHooks(Module, s) {
   s.bgmPlaying = () => !!(bgm && bgm.stop);
   s.bgmLog = [];
   const log = ev => { const k = Module._viewer_frame(); if (!s.tl || k >= s.tl.simMax) s.bgmLog.push([k, ...ev]); };
+  // Melty radio (radio, set from the panel): its track replaces the match's music, straight through the game's track
+  // changes, stops and seeks, at a steady volume (the level the game starts its tracks at, without its fades)
+  const radioOn = () => radio && !HASH;
   const play = (path, loop, loopPos, offset) => {
+    if (radioOn()) {
+      if (bgm && bgmPath === radio.path) return;
+      path = radio.path; loop = true; loopPos = radio.loopPos; offset = 0;
+    }
     halt();
+    const out = radioOn() ? radioChain.g : bgmChain.g;
     const o = bgmStreamReady && bgmParsed(path.replace(/^\/game\//, ''));
     if (o) {  // streamed (bgm_stream.js): a couple of seconds decoded at a time
       bgmPath = path;
       const fadeGain = actx.createGain(), lead = 0.05;
-      fadeGain.connect(bgmChain.g);
+      fadeGain.connect(out);
       const st = bgmStreamPlay(actx, o, fadeGain, loop, loopPos, offset + lead, actx.currentTime + lead);
       bgm = { stop: at => st.stop(at), fadeGain };
       return;
@@ -365,16 +408,17 @@ function audioHooks(Module, s) {
         off = span > 0 ? n.loopStart + ((off - n.loopStart) % span) : 0;
       }
       n.fadeGain = actx.createGain();
-      n.connect(n.fadeGain); n.fadeGain.connect(bgmChain.g); n.start(0, Math.max(0, off));
+      n.connect(n.fadeGain); n.fadeGain.connect(out); n.start(0, Math.max(0, off));
       bgm = n;
     }, () => {});
   };
-  Module.mbaaBgmStop = () => { log(['stop']); halt(); };
+  Module.mbaaBgmStop = () => { log(['stop']); if (!radioOn()) halt(); };
   // SoundBuffer_Play on the stream: restarts the track from its beginning at the set's volume/pan
   Module.mbaaBgmStart = (path, loop, loopPos, vol, pan) => {
     log(['start', path, loop, loopPos, vol, pan]);
-    apply(bgmChain, vol, pan);
-    if (!live()) { halt(); return; }
+    s.bgmNow = path;
+    apply(bgmChain, vol, pan); apply(radioChain, vol, 0);
+    if (!live()) { if (!radioOn()) halt(); return; }
     play(path, loop, loopPos, 0);
   };
   // the track at frame T, its position and the stream's last volume / pan before T
@@ -387,11 +431,14 @@ function audioHooks(Module, s) {
       else if (ev === 'start') { cur = { path: a[0], loop: a[1], loopPos: a[2], k }; vp = [a[3], a[4]]; }
       else if (ev === 'param') vp = [a[0], a[1]];
     }
+    s.bgmNow = cur ? cur.path : null;
+    if (radioOn()) { if (actx.state === 'running' && !s.mute) play('', 1, 0, 0); else halt(); return; }
     halt();
     if (vp) apply(bgmChain, vp[0], vp[1]);
     if (cur && actx.state === 'running' && !s.mute) play(cur.path, cur.loop, cur.loopPos, Math.max(0, T - cur.k - 1) / 60);
   };
-  s.bgmHalt = halt;
+  s.bgmHalt = fade => { if (!radioOn() || fade) halt(fade); };  // (a seek keeps the radio; a pause fades it too)
+  s.radioChanged = () => { halt(); if (!s.mute) s.bgmSync(Module._viewer_frame()); };
   window.__mbaaBgmResume = () => { if (session === s && !s.mute) s.bgmSync(Module._viewer_frame()); };
   window.addEventListener('mbaa-session-end', () => { s.stopSes(); halt(); }, { once: true });
 }
@@ -1093,6 +1140,107 @@ async function liveCatchUp(s, n) {
   uiApply(s);
   if (!ui.paused) s.bgmSync(M._viewer_frame());
 }
+// The player block (spectating): per side the character's select-screen icon in its animated 1P / 2P cursor frame, the
+// player's name, the moon and character. The art is the select screen's own (grp/c_sel_aa: icons 48x64, the large row
+// set from row 4; cursor frames 64x64, P1 0-9 and P2 10-19, the 1P / 2P tags 20 / 21; moon icons 56x56 at y 288),
+// placed as CharaSelectIcons_Draw does (the icon cell from the game's chara -> cell table). The characters come from the
+// battle slots, so a game after a character select shows its new picks.
+const ICON_CELL = 0x5519F8, BSLOT = 0x74D838, MOON_X = [112, 0, 224], MOON_NAME = ['Crescent', 'Full', 'Half'];
+let plArt = null, plKey = '', plCells = [-1, -1];
+async function playersArt() {
+  if (plArt) return plArt;
+  const img = async p => { const d = cache.get(p); return d ? createImageBitmap(new Blob([d], { type: 'image/png' })) : null; };
+  const [icons, cursor] = await Promise.all([img('grp/c_sel_aa/csel_icon00.png'), img('grp/c_sel_aa/csel_cursor00.png')]);
+  return icons && cursor ? (plArt = { icons, cursor }) : null;
+}
+function playersShow(s) {
+  const box = document.getElementById('players');
+  if (!s || !s.liveSrc || !s.M) { box.hidden = true; return; }
+  const H = s.M.HEAP32, rows = box.querySelectorAll('.pl');
+  const names = (s.liveSrc.info.names || []).map(n => (n || '').trim());
+  const sides = [0, 1].map(p => [H[(BSLOT + p * 0x2C + 8) >> 2], H[(BSLOT + p * 0x2C + 0x14) >> 2]]);
+  const key = JSON.stringify([sides, names]);
+  if (key !== plKey && plArt) {
+    plKey = key;
+    sides.forEach(([c, m], p) => {
+      const row = rows[p];
+      plCells[p] = c >= 0 && c <= 100 ? H[(ICON_CELL + 4 * c) >> 2] : -1;
+      const mo = row.querySelector('.moon').getContext('2d');
+      mo.clearRect(0, 0, 56, 56);
+      if (m >= 0 && m <= 2) mo.drawImage(plArt.cursor, MOON_X[m], 288, 56, 56, 0, 0, 56, 56);
+      row.querySelector('.nm').textContent = names[p] || `Player ${p + 1}`;
+      row.querySelector('.ch span').textContent = `${m >= 0 && m <= 2 ? MOON_NAME[m] + ' ' : ''}${CHARA[c] || ''}`;
+    });
+    box.hidden = false;
+    document.getElementById('title').hidden = true;
+  }
+}
+// the cursor frames' loop over the icons (10 frames, 4 game frames each, as the select screen's cursor)
+function playersAnimate(t) {
+  const box = document.getElementById('players');
+  if (!box.hidden && plArt) {
+    const f = Math.floor(t / 66.7) % 10;
+    box.querySelectorAll('.pl').forEach((row, p) => {
+      const c = row.querySelector('.ico').getContext('2d'), fr = 10 * p + f, tag = 20 + p, cell = plCells[p];
+      c.clearRect(0, 0, 64, 64);
+      if (cell >= 0) c.drawImage(plArt.icons, 48 * (cell % 10), (Math.floor(cell / 10) + 4) * 64, 48, 64, 8, 0, 48, 64);  // (centred in the frame, as CharaSelectIcons_Draw)
+      c.drawImage(plArt.cursor, (fr % 8) * 64, Math.floor(fr / 8) * 64, 64, 64, 0, 0, 64, 64);
+      c.drawImage(plArt.cursor, (tag % 8) * 64, Math.floor(tag / 8) * 64, 64, 64, 0, 0, 64, 64);
+    });
+  }
+  requestAnimationFrame(playersAnimate);
+}
+requestAnimationFrame(playersAnimate);
+// The stage block and Melty radio (tools/web/stage_panel.py puts web/stage/* in the bundle): the stage's select-screen
+// preview and name plate, and the title of the music playing; the radio's pick replaces the match's music (replays and
+// live) until it is set back to the match's, kept per browser.
+let stagePanel = null, stageKey = '', radio = null;
+const trackOf = path => (path || '').replace(/^.*\//, '').replace(/\.\w+$/, '');
+async function stagePanelLoad() {
+  if (!man.files['web/stage/panel.json']) return;
+  await fetchAll(man, ['web/stage/panel.json'], '', true);
+  stagePanel = JSON.parse(new TextDecoder().decode(cache.get('web/stage/panel.json')));
+  const sel = document.getElementById('radio');
+  const t = Object.entries(stagePanel.tracks).filter(([f]) => /^bgmme\d+$/.test(f));  // (not the endings' long cuts)
+  sel.append(...t.map(([f, x]) => new Option(`\u266A ${x.title}`, f)));
+  sel.hidden = false;
+  sel.onchange = () => radioSet(sel.value);
+  let saved = ''; try { saved = localStorage.getItem('mbaa-radio') || ''; } catch (e) {}
+  if (saved && stagePanel.tracks[saved]) { sel.value = saved; radioSet(saved); }
+}
+async function radioSet(f) {
+  try { f ? localStorage.setItem('mbaa-radio', f) : localStorage.removeItem('mbaa-radio'); } catch (e) {}
+  const t = f && stagePanel.tracks[f];
+  if (t) await fetchAll(man, withSiblings(man, [`bgm/${f}.ogg`]), '', true);
+  if (document.getElementById('radio').value !== (f || '')) return;  // (picked again meanwhile)
+  radio = t ? { path: `/game/bgm/${f}.opus`, loopPos: t.loopPos, file: f } : null;
+  if (session && session.radioChanged) session.radioChanged();
+  stageKey = '';
+}
+async function stageShow(s) {
+  const box = document.getElementById('stageblk');
+  if (!stagePanel || !s || !s.M) { box.hidden = true; return; }
+  const id = s.M.HEAP32[STAGE_ID >> 2], st = stagePanel.stages[id];
+  const f = radio ? radio.file : trackOf(s.bgmNow) || (st && st.track), key = `${id}/${f}`;
+  if (key === stageKey) return;
+  stageKey = key;
+  const tr = stagePanel.tracks[f];
+  document.getElementById('trk').textContent = tr ? tr.title + (radio ? ' (radio)' : '') : '';
+  if (!st) { box.hidden = true; return; }
+  const n = String(id).padStart(2, '0'), paths = st.art.map(k => `web/stage/${k}_${n}.png`);
+  await fetchAll(man, paths, '', true);
+  for (const k of ['view', 'name']) {
+    const img = box.querySelector('.' + k), d = cache.get(`web/stage/${k}_${n}.png`);
+    if (img.dataset.src) URL.revokeObjectURL(img.dataset.src);
+    img.dataset.src = d ? URL.createObjectURL(new Blob([d], { type: 'image/png' })) : '';
+    img.src = img.dataset.src; img.hidden = !d;
+  }
+  box.hidden = false;
+}
+setInterval(() => {
+  stageShow(session).catch(() => {});
+  if (session && session.liveSrc) playersArt().then(() => playersShow(session)).catch(() => {});
+}, 500);
 // the panel's "live now" list (refreshed every 15 s; hidden while nothing is live or the feed is unreachable)
 async function liveListShow() {
   const sec = document.getElementById('livesec'), ol = document.getElementById('liveitems');
@@ -2135,6 +2283,7 @@ async function main() {
     const r = await fetch(BUNDLE + 'manifest.bin');
     net.bytes += +(r.headers.get('content-length') || 0);
     man = JSON.parse(new TextDecoder().decode(await openObject(await r.arrayBuffer())));
+    stagePanelLoad().catch(e => console.warn('stage panel:', e));
     if (!man.plan) await fetchAll(man, Object.keys(man.files), 'assets');  // a bundle without a plan: everything
   }
   status('ready: drop a .rep file');
@@ -2153,9 +2302,8 @@ async function main() {
                  : /^[A-Za-z0-9_-]{8,43}$/.test(rq) ? `${REPLAY_STORE}/s/${rq}` : Q.get('rep');
   liveJumpInit();
   liveListShow();
-  if (Q.get('live')) {  // spectating: the live controls; no replay queue, no skip-intro
-    document.getElementById('plsec').hidden = true;
-    document.getElementById('skipintro').closest('label').hidden = true;
+  if (Q.get('live')) {  // spectating: the live controls and the player block; the replay-only controls go (.replayonly)
+    document.body.classList.add('live');
     document.getElementById('livebtn').hidden = false;
     document.getElementById('livebtn').onclick = e => { e.target.blur(); liveGoLive(); };
   }

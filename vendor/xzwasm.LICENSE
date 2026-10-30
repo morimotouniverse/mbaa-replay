@@ -1,0 +1,3 @@
+xzwasm 0.1.2 (c) Steve Sanderson, MIT License - https://github.com/SteveSanderson/xzwasm
+Contains xz-embedded (Lasse Collin, Igor Pavlov; public domain - https://tukaani.org/xz/embedded.html)
+and walloc (c) 2020 Igalia, S.L. (MIT - https://github.com/wingo/walloc). See the header of xzwasm.min.js.

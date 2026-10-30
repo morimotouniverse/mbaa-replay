@@ -17,6 +17,10 @@
 <meta name="twitter:title" content="MBAACC Replay Viewer">
 <meta name="twitter:description" content="Watch Melty Blood Actress Again Current Code replays in your browser, frame-exact.">
 <meta name="twitter:image" content="https://web.meltyblood.org/preview.png">
+<link rel="manifest" href="site.webmanifest">
+<link rel="icon" href="icon-192.png">
+<link rel="apple-touch-icon" href="icon-192.png">
+<meta name="theme-color" content="#0d0d14">
 <link rel="stylesheet" href="icons.css?v=cc463c473d3a">
 <style>
   :root { --bg: #0d0d14; --panel: #15151f; --raise: #1d1d2a; --fg: #ececf4; --muted: #8a8aa2; --faint: #5c5c74;
@@ -46,6 +50,22 @@
   /* now playing */
   #title { font-size: 15px; font-weight: 650; letter-spacing: .01em; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   #status { color: var(--muted); font-size: 11.5px; overflow-wrap: anywhere; min-height: 1.4em; }
+  #players { display: flex; flex-direction: column; gap: 4px; margin-bottom: 4px; }
+  #players .pl { display: flex; align-items: center; gap: 8px; min-width: 0; }
+  #players .ico { width: 48px; height: 48px; flex: none; image-rendering: auto; }
+  #players .who { min-width: 0; display: flex; flex-direction: column; line-height: 1.25; }
+  #players .nm { font-size: 14px; font-weight: 650; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  #players .ch { font-size: 11.5px; color: var(--muted); display: flex; align-items: center; gap: 4px; }
+  #players .moon { width: 16px; height: 16px; flex: none; }
+  #players .vs { font-size: 10px; color: var(--faint); letter-spacing: .12em; padding-left: 56px; }
+  body.live .replayonly { display: none !important; }
+  #players[hidden], #stageblk[hidden], #radio[hidden] { display: none; }
+  #stageblk { display: flex; flex-direction: column; gap: 3px; margin-top: 6px; }
+  #stageblk .view { width: 100%; max-width: 256px; aspect-ratio: 256 / 96; object-fit: cover; border-radius: 6px; }
+  #stageblk .name { width: 100%; max-width: 256px; aspect-ratio: 8 / 1; }
+  #stageblk .trk { font-size: 12px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  #stageblk .trk::before { content: '\266A'; margin-right: 5px; color: var(--accent); }
+  #radio { max-width: 100%; }
   .clock { display: flex; align-items: baseline; gap: 8px; font-variant-numeric: tabular-nums; }
   #time { font-size: 20px; font-weight: 600; letter-spacing: .02em; }
   #fc { color: var(--faint); font-size: 11px; margin-left: auto; }
@@ -127,8 +147,14 @@
 </div>
 <div class="controls" id="controls">
   <div class="sec">
+    <div id="players" hidden>
+      <div class="pl"><canvas class="ico" width="64" height="64"></canvas><div class="who"><span class="nm"></span><span class="ch"><canvas class="moon" width="56" height="56"></canvas><span></span></span></div></div>
+      <div class="vs">VS</div>
+      <div class="pl"><canvas class="ico" width="64" height="64"></canvas><div class="who"><span class="nm"></span><span class="ch"><canvas class="moon" width="56" height="56"></canvas><span></span></span></div></div>
+    </div>
     <div id="title">MBAACC replays</div>
     <div id="status">loading…</div>
+    <div id="stageblk" hidden><img class="view" alt=""><img class="name" alt=""><div class="trk" id="trk"></div></div>
   </div>
   <div class="sec">
     <div class="clock"><span id="time">0:00.0</span><span class="hint" id="dur"></span><span id="fc"></span></div>
@@ -145,14 +171,14 @@
   </div>
   <div class="sec">
     <div class="row spread">
-      <span class="grp"><span class="lbl" style="margin-right:6px">clip</span>
+      <span class="grp replayonly"><span class="lbl" style="margin-right:6px">clip</span>
         <button class="txt" id="clipa" title="clip in point ({)">in</button>
         <button class="txt" id="clipb" title="clip out point (})">out</button>
         <button id="cliploop" title="loop the clip, or the round when no clip is set (L)"><i class="i i-loop"></i></button>
         <button id="clipexp" title="save the clip (or the round) as a video (E)"><i class="i i-film"></i></button><button id="clipx" title="clear the clip (Esc)"><i class="i i-x"></i></button>
       </span>
       <span class="grp">
-        <button id="copyt" title="copy a link to this moment, or to the clip when one is set (C)"><i class="i i-share"></i></button>
+        <button id="copyt" class="replayonly" title="copy a link to this moment, or to the clip when one is set (C)"><i class="i i-share"></i></button>
         <button id="full" title="fullscreen, integer scaled (F)"><i class="i i-full"></i></button>
         <button id="helpb" title="keyboard shortcuts (?)"><i class="i i-help"></i></button>
       </span>
@@ -160,7 +186,7 @@
   </div>
   <div class="sec">
     <div class="row">
-      <label class="chip" title="skip the VS intro when a replay starts"><input id="skipintro" type="checkbox">skip intro</label>
+      <label class="chip replayonly" title="skip the VS intro when a replay starts"><input id="skipintro" type="checkbox">skip intro</label>
       <label class="chip" title="hitbox overlay (H)"><input id="boxes" type="checkbox">hitboxes</label>
       <label class="chip" title="input display (I)"><input id="inputs" type="checkbox">inputs</label>
       <label class="chip" title="the game's HUD: health, meter, timer, combo counters (U)"><input id="hud" type="checkbox" checked>HUD</label>
@@ -169,6 +195,7 @@
     <div class="row">
       <select id="scale" title="picture size: auto = largest whole multiple that fits"><option value="auto">size auto</option><option value="1">size 1x</option><option value="2">size 2x</option><option value="3">size 3x</option><option value="4">size 4x</option><option value="fit">size fit</option></select>
       <select id="speed" title="speed"><option value="1">speed 1x</option><option value="2">speed 2x</option><option value="4">speed 4x</option></select>
+      <select id="radio" title="Melty radio: play any track instead of the match's music (stays until set back)" hidden><option value="">match music</option></select>
       <button id="mute" title="mute (M)"><i class="i i-sound"></i></button><input id="vol" type="range" min="0" max="100" value="50" aria-label="volume">
     </div>
     <button id="sound" hidden>click for sound</button>
@@ -179,7 +206,7 @@
       <label class="tog" title="on: joining jumps to ~4 s behind the players; off: the whole game from its start, at normal speed"><input id="livejump" type="checkbox" checked> jump to live</label></span></div>
     <ol id="liveitems"></ol>
   </div>
-  <div class="sec" id="plsec">
+  <div class="sec replayonly" id="plsec">
     <div class="row spread">
       <span class="lbl">queue <span id="plpos"></span></span>
       <span class="grp">
@@ -214,6 +241,6 @@
 </div>
 <script src="mbaa.js?v=33212e6fe11e"></script>
 <script src="bgm_stream.js?v=407ac29e5c89"></script>
-<script src="viewer.js?v=ea71b5bc4ec2"></script>
+<script src="viewer.js?v=6108a96b716d"></script>
 </body>
 </html>
