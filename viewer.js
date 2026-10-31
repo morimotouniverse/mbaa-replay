@@ -894,6 +894,15 @@ function thin(t) {
 // apart; and a page once seen changing stays hot. At F the changed pages are copied raw and packed during the post
 // pass. Seeks (no frames shown) keyframe in one pass.
 const KF_PHASE = 60;
+// keyframe packing's time per display frame: PACK_MS from the first pack call of a window (a window = PACK_WIN ms, about
+// one refresh); at least one batch per window, so it always finishes
+const PACK_MS = 3, PACK_WIN = 12;
+let packWin = -1e9, packCalls = 0;
+function packTime() {
+  const now = performance.now();
+  if (now - packWin > PACK_WIN) { packWin = now; packCalls = 0; }
+  return packCalls++ === 0 || now - packWin < PACK_MS;
+}
 function hashRuns(M, idx) {  // hash the listed pages (sorted), one wasm call per run of consecutive pages
   let p = 0;
   for (let i = 0; i < idx.length;) {
@@ -936,7 +945,9 @@ function incTick(s, f) {
     }
     if (f >= c.F && c.cur === c.cold.length && !M._viewer_files_open() && !t.kfs.some(k => k.frame === f)) incCommit(s, f, c);
   } else {  // post pass
-    if (c.raw.length) packBatch(t, c.raw.splice(0, Math.ceil(c.rawTotal / (KF_PHASE / 2))));
+    // packed against wall time, not a share per game frame: a catch-up tick runs several game frames, and a share each
+    // (zlib on the VS screen's ~2 MB of changed pages: ~40 ms) made a slow tick slower, so one stall fed the next
+    while (c.raw.length && packTime()) packBatch(t, c.raw.splice(0, 8));
     const n = Math.min(c.tentative.length, c.cur + slice);
     const part = c.tentative.slice(c.cur, n);
     if (part.length) {
