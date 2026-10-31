@@ -539,7 +539,48 @@ async function glRecover() {
   if (s.liveSrc) return startLive(s.liveSrc.id);
   return play(s.rep, s.name, curFrame(), s.want ? new Set([...s.want, ...want]) : null);
 }
+// Background play: a hidden page gets no animation frames, so a worker's timer (not slowed for hidden pages) ticks the
+// game instead, sound and all; nothing is drawn unless a picture-in-picture window shows it
+let bgTicker = null;
+function bgTick(on) {
+  if (on && !bgTicker) {
+    bgTicker = new Worker(URL.createObjectURL(new Blob(['setInterval(() => postMessage(0), 16)'], { type: 'text/javascript' })));
+    bgTicker.onmessage = () => {
+      const s = session;
+      if (s && s.M && document.visibilityState === 'hidden') try { s.M._viewer_tick(document.pictureInPictureElement ? 1 : 0); } catch (e) {}
+    };
+  } else if (!on && bgTicker) { bgTicker.terminate(); bgTicker = null; }
+}
+// Picture in picture: the canvas as a (silent: the page plays the sound) video stream, popped out by the button or, where
+// the browser allows, by leaving the page while a match plays
+let pipVideo = null;
+function pipSource() {
+  if (pipVideo) return pipVideo;
+  pipVideo = document.createElement('video');
+  pipVideo.id = 'pipv'; pipVideo.muted = true; pipVideo.playsInline = true; pipVideo.autoPictureInPicture = true;
+  pipVideo.srcObject = document.getElementById('canvas').captureStream(60);
+  pipVideo.addEventListener('leavepictureinpicture', () => { if (document.visibilityState === 'hidden') bgTick(true); });
+  document.body.append(pipVideo);
+  return pipVideo;
+}
+async function togglePip() {
+  if (!document.pictureInPictureEnabled) return;
+  try {
+    if (document.pictureInPictureElement) return await document.exitPictureInPicture();
+    const v = pipSource();
+    await v.play();
+    await v.requestPictureInPicture();
+  } catch (e) { status(`picture in picture: ${e.message}`); }
+}
+if (document.pictureInPictureEnabled) {
+  document.getElementById('pip').hidden = false;
+  // (Chrome: the page asks to pop out when it is left while playing)
+  try { navigator.mediaSession.setActionHandler('enterpictureinpicture', () => togglePip()); } catch (e) {}
+  // (an automatic pop-out needs the stream already playing: from the first touch on, which also allows sound)
+  addEventListener('pointerdown', () => pipSource().play().catch(() => {}), { once: true });
+}
 document.addEventListener('visibilitychange', () => {
+  bgTick(document.visibilityState === 'hidden');
   if (document.visibilityState !== 'visible') return;
   // (a browser that never sends webglcontextrestored: the session is started again once the page is back)
   setTimeout(glRecover, 1000);
@@ -1740,6 +1781,7 @@ function liveBegin(s) {  // play(): after viewer_play
       const r = await fetch(`${LIVE}/live/${L.id}/rec?from=${L.info.game}&since=${L.since}&v=${VIEWER}`, { cache: 'no-store' });
       if (r.ok) {
         const b = new Uint8Array(await r.arrayBuffer());
+        if (b.length) L.dataAt = performance.now();
         if (b.length && session === s) {
           liveKeep(L, b);
           liveFeed(s, b);
@@ -1751,16 +1793,30 @@ function liveBegin(s) {  // play(): after viewer_play
     if (session !== s) return;
     let ahead = call(s, 'viewer_spectate_buffered');
     if (s.tl && !s.seeking) s.tl.est = s.M._viewer_frame() + ahead;  // the timeline reaches the newest frame received
-    if (call(s, 'viewer_ended') || L.next) {  // the game is over: the match's next game (or the list, if it ended)
+    // the game is over (or, following live, its stream has gone quiet: the players left at the win quote, which CCCaster's
+    // spectators never see end): the match's next game, another match when this one has left the list, or wait
+    const over = call(s, 'viewer_ended') || L.next;
+    const dry = s.liveFollow && ahead < 15 && performance.now() - (L.dataAt ?? (L.dataAt = performance.now())) > 6000;
+    if ((over || dry) && performance.now() - (L.listAt || -1e9) > (over ? 1000 : 5000)) {
+      L.listAt = performance.now();
       try {
-        const now = (await liveList()).find(m => m.id === L.id);
-        if (!now) { status('the match has ended'); return; }
+        const l = await liveList(), now = l.find(m => m.id === L.id);
+        if (session !== s) return;
+        if (!now) {
+          const next = s.liveFollow && liveNextMatch(l);
+          if (!next) { status('the match has ended'); return; }
+          status(`the match has ended: on to ${next.matchup || (next.names || []).join(' vs ')}`);
+          setTimeout(() => { if (session === s) startLive(next.id); }, 2500);
+          return;
+        }
         if (now.game !== L.info.game) {
           if (s.liveFollow) return startLive(L.id);
           L.next = true;  // (DVR: stays on this game; LIVE goes to the current one)
           status('live: watching back; the next game is on (LIVE to join it)');
         }
       } catch (e) {}
+    }
+    if (over) {
     } else if (s.liveFollow) {
       // pace: LIVE_BEHIND frames behind the newest frame received. At the join (the stream starts at the game's start)
       // and whenever the viewer falls more than 2 s further behind (a hidden tab, a slow machine, a load) it jumps
@@ -1803,6 +1859,13 @@ function liveBegin(s) {  // play(): after viewer_play
     setTimeout(poll, 1000);
   };
   poll();
+}
+// after a match leaves the list: one with either of its players (a new set of theirs), else the most watched
+function liveNextMatch(l) {
+  const L = liveSrc, names = new Set((L.info.names || []).map(n => (n || '').trim().toLowerCase()).filter(Boolean));
+  const others = l.filter(m => m.id !== L.id);
+  return others.find(m => (m.names || []).some(n => names.has((n || '').trim().toLowerCase())))
+      || others.sort((a, b) => (b.viewers || 0) - (a.viewers || 0))[0] || null;
 }
 // a local replay is uploaded once (named by its SHA-256, so re-sharing it gives the same link)
 async function uploadRep(bytes) {
@@ -2063,7 +2126,7 @@ function controls() {
   const sc = document.getElementById('scale');
   sc.value = scaleMode;
   sc.onchange = () => { scaleMode = sc.value; try { localStorage.setItem('mbaaScale', scaleMode); } catch (e) {} fitStage(); sc.blur(); };
-  btn('full', toggleFullscreen); btn('fsx', toggleFullscreen);
+  btn('full', toggleFullscreen); btn('fsx', toggleFullscreen); btn('pip', togglePip);
   document.getElementById('marks').addEventListener('click', e => {
     const s = session;
     if (!s || !s.tl) return;

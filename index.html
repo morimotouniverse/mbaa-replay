@@ -221,6 +221,8 @@
                                  background: #b8323f; color: #fff; text-shadow: none; font-size: 11px; font-weight: 600; letter-spacing: normal; line-height: 16px; }
   #watching:empty { display: none; }
   .i-eye { --m: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath d='M12 5C6.5 5 2.4 9.2 1 12c1.4 2.8 5.5 7 11 7s9.6-4.2 11-7c-1.4-2.8-5.5-7-11-7zm0 11.5a4.5 4.5 0 1 1 0-9 4.5 4.5 0 0 1 0 9zm0-2.2a2.3 2.3 0 1 0 0-4.6 2.3 2.3 0 0 0 0 4.6z'/%3E%3C/svg%3E"); }
+  .i-pip { --m: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath d='M2 4h20v16H2zm2 2v12h16V6zm7 5h8v6h-8z' fill-rule='evenodd'/%3E%3C/svg%3E"); }
+  #pipv { position: fixed; left: 0; top: 0; width: 2px; height: 2px; opacity: 0; pointer-events: none; }
   #players #watching { margin-left: 6px; vertical-align: 1px; }
   #plitems li.cur { background: #e04a5a22; }  #plitems li.cur::before { content: '\25B6'; color: var(--accent); }
   #plitems li .nm { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
@@ -281,6 +283,7 @@
       </span>
       <span class="grp">
         <button id="copyt" class="replayonly" title="copy a link to this moment, or to the clip when one is set (C)"><i class="i i-share"></i></button>
+        <button id="pip" title="picture in picture: a small window over other apps" hidden><i class="i i-pip"></i></button>
         <button id="full" title="fullscreen, integer scaled (F)"><i class="i i-full"></i></button>
         <button id="helpb" title="keyboard shortcuts (?)"><i class="i i-help"></i></button>
       </span>
@@ -346,8 +349,8 @@
   </div>
 </div>
 </div>
-<script src="mbaa.js?v=80030ae75f69"></script>
+<script src="mbaa.js?v=ba5b062d0813"></script>
 <script src="bgm_stream.js?v=407ac29e5c89"></script>
-<script src="viewer.js?v=564fcea66fac"></script>
+<script src="viewer.js?v=d9236679390a"></script>
 </body>
 </html>
