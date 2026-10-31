@@ -95,7 +95,7 @@ const objCacheReady = (async () => {
 // without persistent storage a browser clears the store when it wants space (mobile Chrome, Safari): ask once; the page
 // files themselves are kept by the service worker (sw.js; deployed builds only, a local build has no versioned names)
 if (navigator.storage && navigator.storage.persist) navigator.storage.persisted().then(p => p || navigator.storage.persist()).catch(() => {});
-if ('serviceWorker' in navigator && /^web\.meltyblood\.org$/.test(location.hostname))
+if ('serviceWorker' in navigator && /^(replay|watch)\.meltyblood\.org$/.test(location.hostname))
   navigator.serviceWorker.register('/sw.js').catch(e => console.warn('service worker:', e));
 async function fetchObject(h, z = null) { return openObject(await fetchRaw(h), z); }
 // an object or a pack (tools/web/bundle_pack.py: a group's small objects back to back) as stored, from this device's
