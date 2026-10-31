@@ -1509,6 +1509,13 @@ function bannerTunePanel() {
   document.body.appendChild(box);
 }
 if (TUNE) bannerTunePanel();
+// The players' win streaks, as the game's own (the banner's "N WINS"; ResultMenu_UpdatePlayerStats counts them on):
+// the bridge's for this game (a viewer that knew them sent them), else unknown (from 0, as a CCCaster spectator). Put
+// in after viewer_play (CharaSelect_InitReplayMode zeroes them) and before the first frame: the match start copies them
+// for the banner (ResetBattleMode: Netplay_GetWinCounts).
+function liveSeedStreak(s) {
+  if (liveSrc.info.streak) liveSrc.info.streak.forEach((w, p) => { s.M.HEAP32[STREAK[p] >> 2] = w; });
+}
 // Each game's first battle frame: the streaks it started with, to the bridge (later viewers start from them)
 function liveStreak(s) {
   if (!s.streakKnown || s.M.HEAP32[0x54EEE8 >> 2] !== 1) return;
@@ -1989,6 +1996,8 @@ function controls() {
   }
   addEventListener('keydown', e => {
     if (e.ctrlKey || e.metaKey || e.altKey) return;
+    const tg = e.target;  // (typing in a text field: its keys, not the shortcuts)
+    if (tg && (tg.isContentEditable || tg.tagName === 'TEXTAREA' || (tg.tagName === 'INPUT' && !/^(checkbox|range|radio|button)$/.test(tg.type)))) return;
     const k = e.key, sec = e.shiftKey ? 300 : 60;
     const flip = id => { const el = document.getElementById(id); el.checked = !el.checked; el.onchange(); };
     if (k === ' ') togglePlay();
