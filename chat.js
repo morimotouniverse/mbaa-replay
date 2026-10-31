@@ -229,6 +229,7 @@
       <button type="submit" class="txt">send</button></form>
     <details><summary><canvas class="me" width="42" height="56"></canvas><span class="mynick"></span><span class="cstate"></span></summary>
       <div class="prow">nick <input id="chatnick" type="text" maxlength="24" spellcheck="false"></div>
+      <div class="prow"><label><input id="chattags" type="checkbox"> show #tags (Name#1234)</label></div>
       <div class="prow">colour <span class="sws"></span><input id="chatcolor" type="color" title="any colour"></div>
       <div class="prow">moon <span class="moons"></span></div>
       <div class="cgrid"></div>
@@ -240,6 +241,16 @@
   const logEl = $('#chatlog'), tabsEl = $('.ctabs'), input = $('#chatin'), cmdIn = $('#chatcmd'), stateEl = $('.cstate');
   cmdIn.value = String(store.get('mbaa-chat-cmd', '')).slice(0, 60);  // (kept, as Nico's command box is)
   cmdIn.onchange = () => store.set('mbaa-chat-cmd', cmdIn.value.trim());
+  // Signed-in names are "Name#1234" (the community account's tag keeps them unique); shown without the #tag unless the
+  // viewer turns tags on (kept); the full name stays in the tooltip.
+  let showTags = !!store.get('mbaa-chat-tags', false);
+  const disp = n => showTags ? String(n) : String(n).replace(/#\d{4}$/, '');
+  $('#chattags').checked = showTags;
+  $('#chattags').onchange = e => {
+    showTags = e.target.checked; store.set('mbaa-chat-tags', showTags);
+    for (const el of sec.querySelectorAll('.cnick[data-full]')) el.textContent = (el.dataset.act ? '* ' : '') + disp(el.dataset.full);
+    authShow();
+  };
   let toolHook = () => {};  // (the commands toolbar's redraw, set once its section has run: the profile colour shows on it)
 
   const over = document.createElement('div');
@@ -288,7 +299,7 @@
   }
   $('#chatnick').onchange = e => {
     const n = e.target.value.trim();
-    if (irc.account) { e.target.value = irc.nick; sys('signed in: your nick is your account'); return; }
+    if (irc.account) { e.target.value = disp(shownNick(irc.account, irc.account, auth.name)); sys('signed in: your name is your account (change it with "change name")'); return; }
     if (!NICK_RE.test(n)) { e.target.value = prof.nick; sys('nick: letters, digits, _ - [ ] { } | ^ ` (not starting with a digit or -), up to 24'); return; }
     if (!nameOk(n)) { e.target.value = prof.nick; sys('that nick is not allowed'); return; }
     prof.nick = n; saveProf(); profShow();
@@ -328,7 +339,8 @@
     const tm = document.createElement('span'); tm.className = 'ctime';
     tm.textContent = l.time.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
     const nk = document.createElement('span'); nk.className = 'cnick'; nk.style.color = readable(l.color);
-    nk.textContent = l.action ? `* ${l.nick}` : l.nick;
+    nk.textContent = l.action ? `* ${disp(l.nick)}` : disp(l.nick);
+    nk.dataset.full = l.nick; nk.title = l.nick; if (l.action) nk.dataset.act = '1';
     body.append(tm, nk, document.createTextNode(l.text));
     li.append(body);
     if (l.msgid) {
@@ -545,7 +557,7 @@
   function nicoRaw(l, t) {
     const cmds = nicoCmds(l.cmd), fixed = cmds.includes('ue') || cmds.includes('shita');
     const mail = l.color ? [...cmds, readableHex(l.color)] : cmds;
-    return { fixed, raw: { id: ++nico.id, vpos: fixed ? t : t + 100, content: l.action ? `${l.nick} ${l.text}` : l.text, mail,
+    return { fixed, raw: { id: ++nico.id, vpos: fixed ? t : t + 100, content: l.action ? `${disp(l.nick)} ${l.text}` : l.text, mail,
       owner: false, premium: true, date: Math.floor(l.time.getTime() / 1000), user_id: 0, layer: -1, is_my_post: !!l.self } };
   }
   async function danmaku(l) {
@@ -745,7 +757,7 @@
     const signedIn = !!irc.account;
     if (signedIn) {
       const t = document.createElement('span');
-      t.textContent = `signed in as ${shownNick(irc.account, irc.account, auth.name)}${auth.provider ? ` (with ${auth.provider})` : ''}`;
+      t.textContent = `signed in as ${disp(shownNick(irc.account, irc.account, auth.name))}${auth.provider ? ` (with ${auth.provider})` : ''}`;
       const b = document.createElement('button'); b.type = 'button'; b.className = 'signout'; b.textContent = 'sign out';
       b.onclick = async () => {
         try { await fetch(`${AUTH_URL}/logout`, { method: 'POST', credentials: 'same-origin' }); } catch (e) {}
@@ -776,7 +788,10 @@
     // a guest on a server with sign-in: no input (channels are +M); without sign-in (auth 'none'): as before
     formEl.hidden = !signedIn && auth.state !== 'none' && auth.state !== 'unknown';
     $('#chatnick').disabled = signedIn;
-    if (signedIn) { $('.mynick').textContent = shownNick(irc.account, irc.account, auth.name); $('#chatnick').value = irc.account; }
+    if (signedIn) {  // (the nick box shows the name, not the IRC nick "Name-1234"; renaming is "change name")
+      const full = shownNick(irc.account, irc.account, auth.name);
+      $('.mynick').textContent = disp(full); $('.mynick').title = full; $('#chatnick').value = disp(full);
+    }
   }
   // a name box: create the community account (POST <auth>/create) or rename it (<auth>/name); then a fresh connection
   function nameForm(what, value, label) {
