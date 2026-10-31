@@ -1654,20 +1654,26 @@ function liveBegin(s) {  // play(): after viewer_play
         }
       } catch (e) {}
     } else if (s.liveFollow) {
-      // pace as CCCaster's spectator: at the join (the stream starts at the game's start) jump to LIVE_BEHIND frames
-      // behind the newest frame received, unrendered as a seek ("jump to live" off: no jump); from then on normal speed,
-      // stalling only when the stream runs dry (until 2 s are buffered again)
-      if (!s.liveSynced && ahead > 0) {
-        s.liveSynced = true;
+      // pace: LIVE_BEHIND frames behind the newest frame received. At the join (the stream starts at the game's start)
+      // and whenever the viewer falls more than 2 s further behind (a hidden tab, a slow machine, a load) it jumps
+      // there, unrendered as a seek ("jump to live" off: no jump, the game from its start); then normal speed, stalling
+      // only when the stream runs dry (until 2 s are buffered again)
+      if (ahead > 0) s.liveSynced = true;
+      if (s.liveSynced && liveJump() && !hidden() && !s.cssHeld && !s.loadHeld && !call(s, 'viewer_spectate_in_retry')) {
         // (the stream grows while the jump runs: again until it is close)
-        for (let k = 0; k < 4 && liveJump() && ahead > LIVE_BEHIND + 90 && !s.seeking; ++k) {
+        for (let k = 0; k < 4 && ahead > LIVE_BEHIND + 120 && !s.seeking; ++k) {
           await liveCatchUp(s, ahead - LIVE_BEHIND);
           if (session !== s) return;
           ahead = call(s, 'viewer_spectate_buffered');
         }
       }
-      // the link card's picture (tools/web/cc_live.mjs): this frame, now and every 2 minutes
-      if (s.liveSynced && !hidden() && performance.now() - (s.liveThumbAt || -1e9) > 120000) {
+      // the link card's picture (tools/web/cc_live.mjs): a fight on screen (4 s into the battle scene: past its fade-in;
+      // not mid-jump, not dark), as soon as there is one, then every 2 minutes
+      const battle = s.M.HEAP32[0x54EEE8 >> 2] === 1;
+      if (!battle) s.battleAt = null;
+      else if (s.battleAt == null) s.battleAt = performance.now();
+      if (s.liveSynced && battle && !hidden() && !s.seeking && performance.now() - s.battleAt > 4000
+          && performance.now() - (s.liveThumbAt || -1e9) > 120000 && !cardDark()) {
         s.liveThumbAt = performance.now();
         grabCard().jpeg.then(b => b && fetch(`${LIVE}/live/${L.id}/thumb`, { method: 'POST', body: b }).catch(() => {}));
       }
@@ -1676,8 +1682,8 @@ function liveBegin(s) {  // play(): after viewer_play
       const hold = !call(s, 'viewer_spectate_in_retry') && (ahead < 15 || (s.liveHeld && ahead < 120));
       s.liveHeld = hold;
       call(s, 'viewer_pause', hold || ui.paused || s.seeking ? 1 : 0);
-      // CCCaster's spectateFastFwd: more than 60 frames (2 x NUM_INPUTS) behind, every other frame is not drawn
-      // (CC_SKIP_FRAMES) until caught up; here, over the kept buffer: two game frames per drawn frame
+      // up to the jump (or without it): CCCaster's spectateFastFwd, more than 60 frames (2 x NUM_INPUTS) over the kept
+      // buffer, two game frames per drawn frame until caught up
       const ff = !hold && ahead > LIVE_BEHIND + 60;
       if (ff !== !!s.liveFF) { s.liveFF = ff; call(s, 'viewer_speed', ff ? 2 : ui.speed); }
       if (s.cssHeld) status('live: loading the next game');
@@ -1742,6 +1748,18 @@ async function shareThumb(id, f, shots) {
 // the picture on screen now: the 640x480 frame centred on a 960x480 dark card (link cards are ~2:1: X crops a 4:3
 // image), as JPEG (X does not reliably take WebP). Call it before any await lets playback move on (the GL canvas keeps
 // its drawing buffer)
+// the game picture's mean brightness under 24 of 255 (a fade, a load, a black stage): not a card
+function cardDark() {
+  try {
+    const c = document.createElement('canvas'); c.width = 32; c.height = 24;
+    const g = c.getContext('2d', { willReadFrequently: true });
+    g.drawImage(document.getElementById('canvas'), 0, 0, 32, 24);
+    const d = g.getImageData(0, 0, 32, 24).data;
+    let sum = 0;
+    for (let i = 0; i < d.length; i += 4) sum += d[i] * 0.299 + d[i + 1] * 0.587 + d[i + 2] * 0.114;
+    return sum / (d.length / 4) < 24;
+  } catch (e) { return true; }
+}
 function grabCard() {
   const jpeg = new Promise(res => {
     try {
