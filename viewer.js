@@ -734,6 +734,7 @@ function timelineInit(s) {
       if (t.end === null && M._viewer_ended()) t.end = f;
     }
     if (s.liveSrc) { liveCssWatch(s); liveRematchHold(s); liveBanner(s); liveStreak(s); }
+    else if (TUNE) liveBanner(s);
     if (!s.seeking) incTick(s, f);
     else if (f >= t.lastKf + KF_EVERY && f >= t.simMax && !M._viewer_files_open() && !(LOWMEM && !t.marks.length)) keyframe(s, f);  // phones: none in the intro (incTick)
   };
@@ -1451,35 +1452,63 @@ function liveLoaderGate(s) {
 // name with other characters, by the page at the banner's place (#banner0 / #banner1; the streak stays the game's)
 const STREAK = [0x76FC14, 0x770EB4];  // g_P1ConsecutiveWinStreak, g_P2ConsecutiveWinStreak (the player records', +0x4A0)
 const asciiName = n => /^[\x20-\x7e]*$/.test(n);
+// ?tune=1: a panel to fine-tune the banner live (main_browser.cpp BannerTune), also on replays with test names
+const TUNE = Q.get('tune') === '1';
+const bannerTune = { nameStep: 10, nameSize: 16, nameDy: 0, winsStep: 8, winsSize: 11, winsDy: -11, maxPx: 216, scrollFrames: 10,
+  gap: 5, streak: -1, pageFont: 13, testP1: '', testP2: '' };
 function liveBanner(s) {
-  const names = ((s.liveSrc.info.names) || []).map(n => (n || '').trim());
-  const key = JSON.stringify([names, ui.names]);
+  const T = bannerTune;
+  const live = ((s.liveSrc && s.liveSrc.info.names) || []).map(n => (n || '').trim());
+  const names = [0, 1].map(p => (TUNE && [T.testP1, T.testP2][p]) || live[p] || '');
+  const key = JSON.stringify([names, ui.names, TUNE && T]);
   if (key !== s.bannerKey) {
     s.bannerKey = key;
-    call(s, 'viewer_banner_enable', ui.names && names.some(Boolean) ? 1 : 0);
-    for (const p of [0, 1]) s.M.ccall('viewer_banner_name', null, ['number', 'string'], [p, asciiName(names[p] || '') ? names[p] || '' : '']);
+    call(s, 'viewer_banner_enable', ui.names && (TUNE || names.some(Boolean)) ? 1 : 0);
+    for (const p of [0, 1]) {
+      const n = names[p], game = asciiName(n);
+      s.M.ccall('viewer_banner_name', null, ['number', 'string', 'number'], [p, game ? n : '', n && !game ? 1 : 0]);
+    }
+    call(s, 'viewer_banner_tune', T.nameStep, T.nameSize, T.nameDy, T.winsStep, T.winsSize, T.winsDy, T.maxPx, T.scrollFrames,
+      T.gap, T.streak);
   }
   const W = document.getElementById('canvas').clientWidth, sc = W / 640;
   for (const p of [0, 1]) {
-    const el = document.getElementById(`banner${p}`), n = names[p] || '';
+    const el = document.getElementById(`banner${p}`), n = names[p];
     const y = ui.names && n && !asciiName(n) ? call(s, 'viewer_banner_y', p) : -1000;
     if (y <= -1000) { el.hidden = true; continue; }
     const span = el.firstChild;
     if (span.textContent !== n) span.textContent = n;
-    // the game's banner: centred on x 168 / 470, 16 px high from y; 20 characters of 10 px (kNameMax, kNameStep)
-    el.style.setProperty('--bs', sc.toFixed(3));
-    Object.assign(el.style, { left: `${(p ? 470 : 168) * sc}px`, top: `${(y + 2) * sc}px`, width: `${200 * sc}px`, textAlign: 'center' });
+    // the game's banner: centred on x 168 / 470, 16 px high from y; marquee past maxPx (as the game-drawn names)
+    el.style.setProperty('--bs', (sc * T.pageFont / 13).toFixed(3));
+    Object.assign(el.style, { left: `${(p ? 470 : 168) * sc}px`, top: `${(y + T.nameDy + 2) * sc}px`, width: `${T.maxPx * sc}px`,
+      textAlign: 'center' });
     el.hidden = false;
-    el.classList.toggle('scroll', span.offsetWidth > 200 * sc);
+    el.classList.toggle('scroll', span.offsetWidth > T.maxPx * sc);
   }
 }
-// The players' win streaks, as the game's own (the banner's "N WINS"; ResultMenu_UpdatePlayerStats counts them on):
-// the bridge's for this game (a viewer that knew them sent them), else unknown (from 0, as a CCCaster spectator). Put
-// in after viewer_play (CharaSelect_InitReplayMode zeroes them) and before the first frame: the match start copies them
-// for the banner (ResetBattleMode: Netplay_GetWinCounts).
-function liveSeedStreak(s) {
-  if (liveSrc.info.streak) liveSrc.info.streak.forEach((w, p) => { s.M.HEAP32[STREAK[p] >> 2] = w; });
+function bannerTunePanel() {
+  const T = bannerTune, box = document.createElement('div');
+  box.id = 'tunepanel';
+  const nums = [['nameStep', 'name: letter advance', 4, 16], ['nameSize', 'name: glyph size', 6, 24], ['nameDy', 'name: y offset', -16, 16],
+    ['winsStep', 'wins: letter advance', 4, 16], ['winsSize', 'wins: glyph size', 6, 24], ['winsDy', 'wins: y above name', -30, 10],
+    ['maxPx', 'marquee past (px)', 60, 300], ['scrollFrames', 'marquee: frames per letter', 1, 30], ['gap', 'marquee: gap (spaces)', 0, 12],
+    ['streak', 'test streak (-1 = real)', -1, 20], ['pageFont', 'page-drawn name: font px', 8, 20]];
+  box.innerHTML = '<b>banner tuning</b>' + nums.map(([k, l, lo, hi]) =>
+    `<label>${l}<input type="range" min="${lo}" max="${hi}" step="1" data-k="${k}" value="${T[k]}"><output>${T[k]}</output></label>`).join('') +
+    '<label>test P1 name<input type="text" data-k="testP1"></label><label>test P2 name<input type="text" data-k="testP2"></label>' +
+    '<button type="button">copy values</button>';
+  box.addEventListener('input', e => {
+    const k = e.target.dataset.k; if (!k) return;
+    T[k] = e.target.type === 'range' ? +e.target.value : e.target.value;
+    if (e.target.nextElementSibling) e.target.nextElementSibling.textContent = e.target.value;
+  });
+  box.querySelector('button').onclick = () => {
+    const { testP1, testP2, ...v } = T;
+    navigator.clipboard.writeText(JSON.stringify(v)).then(() => status('banner values copied'), () => status(JSON.stringify(v)));
+  };
+  document.body.appendChild(box);
 }
+if (TUNE) bannerTunePanel();
 // Each game's first battle frame: the streaks it started with, to the bridge (later viewers start from them)
 function liveStreak(s) {
   if (!s.streakKnown || s.M.HEAP32[0x54EEE8 >> 2] !== 1) return;

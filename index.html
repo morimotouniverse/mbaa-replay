@@ -17,7 +17,7 @@
 <meta name="twitter:title" content="MBAACC Replay Viewer">
 <meta name="twitter:description" content="Watch Melty Blood Actress Again Current Code replays in your browser, frame-exact.">
 <meta name="twitter:image" content="https://web.meltyblood.org/preview.png">
-<meta name="mbaa-manifest" content="e80b00b937bb">
+<meta name="mbaa-manifest" content="2ef3d2e51c1d">
 <link rel="manifest" href="site.webmanifest">
 <link rel="icon" href="icon-192.png">
 <link rel="apple-touch-icon" href="icon-192.png">
@@ -72,7 +72,12 @@
   .banner span { display: inline-block; }
   .banner.scroll span { padding-left: 100%; animation: banner 9s linear infinite; }
   @keyframes banner { to { transform: translateX(-100%); } }
-  #banner1.scroll span { animation-direction: reverse; }  /* (P2 to the right: away from VERSUS, as the game-drawn ones) */
+  #banner1.scroll span { animation-direction: reverse; }
+  #tunepanel { position: fixed; left: 12px; bottom: 12px; z-index: 50; background: #15131fee; border: 1px solid #ffffff2a;
+    border-radius: 10px; padding: 10px 12px; font-size: 12px; display: flex; flex-direction: column; gap: 4px; max-width: 300px; }
+  #tunepanel label { display: grid; grid-template-columns: 1fr 110px 28px; align-items: center; gap: 6px; }
+  #tunepanel label:has(input[type=text]) { grid-template-columns: 1fr 140px; }
+  #tunepanel input[type=text] { background: #0006; color: inherit; border: 1px solid #ffffff2a; border-radius: 4px; padding: 2px 4px; }  /* (P2 to the right: away from VERSUS, as the game-drawn ones) */
   /* scrollbars in the panel's colours (Firefox: scrollbar-*; Chromium / Safari: ::-webkit-scrollbar) */
   * { scrollbar-width: thin; scrollbar-color: #ffffff2a transparent; }
   ::-webkit-scrollbar { width: 8px; height: 8px; }
@@ -273,8 +278,8 @@
   </div>
 </div>
 </div>
-<script src="mbaa.js?v=9dd4d19c12fb"></script>
+<script src="mbaa.js?v=309fa156a4c9"></script>
 <script src="bgm_stream.js?v=407ac29e5c89"></script>
-<script src="viewer.js?v=5ad0a0f01aac"></script>
+<script src="viewer.js?v=fcde9ad79dde"></script>
 </body>
 </html>
