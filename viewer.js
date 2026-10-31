@@ -29,7 +29,7 @@
 const KEY_HEX = '6d626161636377656272657061796b65792d6e6f742d612d7365637265742121';
 const Q = new URLSearchParams(location.search);
 // the private live-spectate test copy (live.meltyblood.org/<secret>/, tools/web/cc_live.mjs) loads the public bundle
-const BUNDLE = Q.get('bundle') || (/^(live|spectate)\.meltyblood\.org$/.test(location.hostname) ? 'https://replay.meltyblood.org/bundle/' : 'bundle/');
+const BUNDLE = Q.get('bundle') || (/^(live|spectate)\.meltyblood\.org$/.test(location.hostname) ? 'https://watch.meltyblood.org/bundle/' : 'bundle/');
 const HASH = Q.get('hash') === '1', PERF = Q.get('perf') === '1', CAPTURE = Q.get('capture') === '1';
 const KF_EVERY = Math.max(10, +(Q.get('kf') || 300));  // playback keyframe interval (frames)
 const KF_NEAR = 30;  // a seek that re-simulates further than 3x this keyframes about KF_NEAR frames before its target
