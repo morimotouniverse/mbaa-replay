@@ -1255,19 +1255,53 @@ const LIVE_FEED = !!(Q.get('liveUrl') || document.querySelector('base'));
 // the spectate page: named for what it shows from the first paint on (the replay page's heading until a match loads)
 if (document.querySelector('base')) { document.getElementById('title').textContent = 'MBAACC live'; document.title = 'MBAACC Live'; }
 const LIVE_BEHIND = 240;  // frames kept buffered (4 s)
+const LIVE_WIN = 8;  // polls (~8 s) the catch-up decisions look back over (a round end's burst and pause: ~5 s)
 let liveSrc = null;  // {id, info, since}
+// the feed's state, shown over the picture (index.html #livenotice): the operator's notice (header X-Live-Notice on any
+// feed answer: tools/web/bridge_restart.sh sets it before restarting the bridge and clears it once it is back), and failed
+// requests (no answer, a timeout, a 5xx from the Worker: the bridge is down). A notice up at the last answer stays up
+// while the feed is down (the restart itself); without one, two failures in a row show "unreachable". Meanwhile the polls
+// back off (liveNet.delay), and a match missing from the list just after (the bridge re-joining its hosts) is waited for
+const liveNet = { fails: 0, troubleAt: -1e9, notice: '' };
+liveNet.delay = () => liveNet.fails ? Math.min(1000 * 2 ** (liveNet.fails - 1), 5000) : 1000;
+liveNet.recent = () => performance.now() - liveNet.troubleAt < 60000;
+function liveNoticeShow() {
+  const e = document.getElementById('livenotice'), n = liveNet;
+  if (!e) return;
+  const t = n.notice || (n.fails >= 2 ? 'Live server unreachable \u2014 retrying\u2026' : '');
+  if (e.textContent !== t) e.textContent = t;
+  e.hidden = !t;
+  e.classList.toggle('down', !n.notice);
+}
+async function liveFetch(url, opt) {
+  const n = liveNet, fail = () => { n.fails++; n.troubleAt = performance.now(); liveNoticeShow(); };
+  let r;
+  try { r = await fetch(url, { cache: 'no-store', signal: AbortSignal.timeout ? AbortSignal.timeout(10000) : undefined, ...opt }); }
+  catch (e) { fail(); throw e; }
+  if (r.status >= 500) { fail(); return r; }
+  let h = r.headers.get('X-Live-Notice') || '';
+  try { h = decodeURIComponent(h); } catch (e) {}
+  n.fails = 0; n.notice = h;
+  if (h) n.troubleAt = performance.now();
+  liveNoticeShow();
+  return r;
+}
+function liveRetry(id) {  // startLive could not reach the feed: again, unless a replay was opened meanwhile
+  if (session && !session.liveSrc) return;
+  setTimeout(() => { if (!session || session.liveSrc) startLive(id); }, Math.max(2000, liveNet.delay()));
+}
 async function liveList() {
-  const r = await fetch(`${LIVE}/live/list`, { cache: 'no-store' });
+  const r = await liveFetch(`${LIVE}/live/list`);
   if (!r.ok) throw new Error(`HTTP ${r.status}`);
   return r.json();
 }
 async function startLive(id) {
   let info;
-  try { info = (await liveList()).find(m => m.id === id); } catch (e) { status(`live feed unreachable: ${e.message}`); return; }
-  if (!info) { status('that match is not live any more'); return; }
+  try { info = (await liveList()).find(m => m.id === id); } catch (e) { status(`live feed unreachable: ${e.message}`); return liveRetry(id); }
+  if (!info) { status('that match is not live any more'); return liveNet.recent() ? liveRetry(id) : undefined; }
   liveSrc = { id, info, since: info.game };
-  const r = await fetch(`${LIVE}/live/${id}/boot.rep?game=${info.game}`, { cache: 'no-store' });
-  if (!r.ok) { status(`live match: HTTP ${r.status}`); return; }
+  const r = await liveFetch(`${LIVE}/live/${id}/boot.rep?game=${info.game}`).catch(() => null);
+  if (!r || !r.ok) { status(`live match: ${r ? `HTTP ${r.status}` : 'unreachable'}`); return !r || r.status >= 500 ? liveRetry(id) : undefined; }
   window.__mbaaRepUrl = null;
   await start(new File([await r.arrayBuffer()], `LIVE ${info.names.map(n => n.trim()).join(' vs ')}`));
 }
@@ -1494,12 +1528,12 @@ async function radioArt() {
     if (d) e.style.backgroundImage = `url(${URL.createObjectURL(new Blob([d], { type: /\.jpg$/.test(path(e)) ? 'image/jpeg' : 'image/png' }))})`;
   }
 }
-// a pick: '' (the match's music), an MBAACC track (bgmmeNN) or an older game's ('ac:01')
 // an MBAACC track's stages (panel.json: the stages whose BGM it is), the tile's (the first with a preview) first
 function radioTrackStages(f) {
   const ids = Object.entries(stagePanel.stages).filter(([, st]) => st.track === f).map(([id, st]) => [+id, st.art.includes('view')]);
   return [...ids.filter(x => x[1]), ...ids.filter(x => !x[1])].map(x => x[0]);
 }
+// a pick: '' (the match's music), an MBAACC track (bgmmeNN) or an older game's ('ac:01')
 function radioTrack(f) {
   if (!f) return null;
   if (!f.includes(':')) {
@@ -1588,8 +1622,8 @@ function radioStageSync(s) {
   const want = st ? radioDatId(st.dat) : stage ? radioDatId(`stage:${stage}`) : 0;
   if (!want && M._viewer_radio_stage_in()) radioOwnStage(s);
   if (M._viewer_radio_stage_id() === want) return;
-  if (st && !radioPut(s, st.dat)) return;
   if (stage) { if (radioFilesIn(s, stage)) M._viewer_radio_stage_want_stage(stage, want); return; }
+  if (st && !radioPut(s, st.dat)) return;
   if (st) st.lights.forEach(([pos, power], i) => M._viewer_radio_stage_light(i, pos, power));
   M.ccall('viewer_radio_stage_want', null, ['string', 'number', 'number'], [st ? st.dat : '', want, st ? st.lights.length : 0]);
 }
@@ -1734,7 +1768,10 @@ const CSS_SCENE = 20, CSS_OBJ = 0x773158, CSS_SLOT = 0x74D8E8, BATTLE_SLOT = 0x7
 function liveCssWatch(s) {
   const H = s.M.HEAP32, g = a => H[a >> 2];
   if (g(0x54EEE8) !== CSS_SCENE) { if (s.cssHeld) liveCssHold(s, false); s.cssKey = null; return; }
-  const done = g(CSS_OBJ + 0x3C) >= 4, known = c => !!man.plan.chara[`${c}`];
+  const done = g(CSS_OBJ + 0x3C) >= 4;
+  // (the plan's chara keys are "<chara>:<moon>" only: a lookup by the bare id found none, so no pick was ever seen
+  // and the next game's files came only at the loader gate, after the VS screen had read its cut-ins: missed)
+  const known = c => c >= 0 && Object.keys(man.plan.chara).some(k => k.startsWith(`${c}:`));
   const sides = [0, 1].map(p => {
     const st = g(CSS_SLOT + p * 0x24 + 4), c = g(CSS_SLOT + p * 0x24 + 0x14), m = g(CSS_SLOT + p * 0x24 + 0x18);
     if (st >= 1 && known(c)) return [c, st >= 2 || done ? Math.max(0, m) : null];
@@ -1750,7 +1787,8 @@ function liveCssWatch(s) {
       if (!side) continue;
       const k = { stage: null, p1: null, p2: null };
       k[i ? 'p2' : 'p1'] = side[1] === null ? null : side;
-      if (side[1] === null) for (const f of man.plan.chara[`${side[0]}`]) want.add(f);  // the moon is not picked yet
+      // the moon not picked yet: every moon's files (planFiles takes all of them for a moon it has no key for)
+      if (side[1] === null) { k[i ? 'p2' : 'p1'] = [side[0], -1]; for (const f of planFiles(man, k)) want.add(f); }
       else for (const f of planFiles(man, k)) want.add(f);
     }
     if (stage !== null) for (const f of planFiles(man, { stage, p1: null, p2: null })) want.add(f);
@@ -1929,6 +1967,9 @@ function liveMissed(s) {
   window.mbaaPlanMisses = (window.mbaaPlanMisses || []).concat(l);
   s.liveMissedN = (s.liveMissedN || 0) + l.length;
   status(`live: ${s.liveMissedN} game files were missing (see the console); the picture may be wrong`);
+  // fetched now all the same: the game's next look-up of them (the next game, a rematch) finds them
+  const want = [...withSiblings(man, new Set(l))].filter(p => !liveHas(s, p));
+  if (want.length) fetchAll(man, want, 'missed files', true).then(() => { if (session === s) liveInstall(s, want); }).catch(() => {});
 }
 function liveRefeed(s) {  // restore(): after the keyframe is back
   const L = s.liveSrc, parts = [...L.recs.keys()].sort((x, y) => x - y).map(i => L.recs.get(i));
@@ -1971,10 +2012,14 @@ function liveBegin(s) {  // play(): after viewer_play
   const poll = async () => {
     if (session !== s) return;
     try {
-      const r = await fetch(`${LIVE}/live/${L.id}/rec?from=${L.info.game}&since=${L.since}&v=${VIEWER}`, { cache: 'no-store' });
+      const r = await liveFetch(`${LIVE}/live/${L.id}/rec?from=${L.info.game}&since=${L.since}&v=${VIEWER}`);
       if (r.ok) {
         const b = new Uint8Array(await r.arrayBuffer());
-        if (b.length) L.dataAt = performance.now();
+        // (every answer repeats the newest index whole: new data = a later index or a longer answer, else the stream is
+        // quiet, which the dry check below needs to see)
+        const last = b.length ? liveLastIndex(b) : -1;
+        if (b.length && (last !== L.since || b.length !== L.recLen)) L.dataAt = performance.now();
+        L.recLen = b.length;
         if (b.length && session === s) {
           liveKeep(L, b);
           liveFeed(s, b);
@@ -1986,42 +2031,74 @@ function liveBegin(s) {  // play(): after viewer_play
     if (session !== s) return;
     let ahead = call(s, 'viewer_spectate_buffered');
     if (s.tl && !s.seeking) s.tl.est = s.M._viewer_frame() + ahead;  // the timeline reaches the newest frame received
+    // the buffer's floor over the last LIVE_WIN polls: what the catch-up decisions go by. The stream is bursty: each
+    // poll brings ~60 frames at once, and at every round end the host's stream runs ahead (its KO / win pose: ~1.2 s of
+    // input messages at twice the rate, ~60-110 frames over real time) then pauses (~1.5 s with no frames while it loads
+    // the next round), so the buffer swings ~+100 / -90 frames there and settles back. Judged by the newest sample, the
+    // burst set off the 2x fast-forward (and could set off the unrendered jump) right on the KO: a visible hiccup before
+    // the win pose (artifacts/xz_check/live_end). A real backlog (a hidden tab, a slow machine, a load) raises the floor too.
+    const hist = s.liveAheadHist || (s.liveAheadHist = []);
+    hist.push(ahead);
+    if (hist.length > LIVE_WIN) hist.shift();
+    const floor = Math.min(...hist);
     // the game is over (or, following live, its stream has gone quiet: the players left at the win quote, which CCCaster's
     // spectators never see end): the match's next game, another match when this one has left the list, or wait
     const over = call(s, 'viewer_ended') || L.next;
     const dry = s.liveFollow && ahead < 15 && performance.now() - (L.dataAt ?? (L.dataAt = performance.now())) > 6000;
-    if ((over || dry) && performance.now() - (L.listAt || -1e9) > (over ? 1000 : 5000)) {
+    // (following, the list is also read every 5 s for a game the session has not reached: below)
+    if ((over || dry || s.liveFollow) && performance.now() - (L.listAt || -1e9) > (over ? 1000 : 5000)) {
       L.listAt = performance.now();
       try {
         const l = await liveList(), now = l.find(m => m.id === L.id);
         if (session !== s) return;
-        if (!now) {
+        if (!now && ((!over && !dry) || liveNet.recent())) {  // (the 5 s check: the session still has the stream's end to
+          // play; or the feed was just down: the restarted bridge re-joins its hosts)
+        } else if (now && (over || dry) && now.index < L.since && liveNet.recent()) {
+          return startLive(L.id);  // (after a restart: the bridge's new capture of the match, numbered from its own join)
+        } else if (!now) {
           const next = s.liveFollow && liveNextMatch(l);
           if (!next) { status('the match has ended'); return; }
           status(`the match has ended: on to ${next.matchup || (next.names || []).join(' vs ')}`);
           setTimeout(() => { if (session === s) startLive(next.id); }, 2500);
           return;
         }
-        if (now.game !== L.info.game) {
-          if (s.liveFollow) return startLive(L.id);
-          L.next = true;  // (DVR: stays on this game; LIVE goes to the current one)
-          status('live: watching back; the next game is on (LIVE to join it)');
+        else if (now.game !== L.info.game) {
+          // the session goes on into the players' next game itself (retry menu, character select, loading); a newer game
+          // on the list it has not reached 30 s after the list showed it means it stopped following them (a phase it
+          // cannot play: the character select is partly ported, artifacts/cc_spectate/css_unported.txt): that game, from
+          // its start (else the page sat on the result menu for good, "0.0 s behind", the stream flowing past it)
+          const g0 = call(s, 'viewer_spectate_game'), g = g0 >= 0 ? g0 : L.info.game;  // (-1: still the first)
+          if (L.seenGame !== now.game) { L.seenGame = now.game; L.seenGameAt = performance.now(); }
+          const lost = liveJump() && g < now.game && performance.now() - L.seenGameAt > 30000;  // ("jump to live" off: behind on purpose)
+          if (lost && s.liveFollow && !over && !dry)
+            console.warn(`live: the list is on game ${now.game} for 30 s, this session still on ${g}: joining it`);
+          if (s.liveFollow && (over || dry || lost)) return startLive(L.id);
+          if (!s.liveFollow) {
+            L.next = true;  // (DVR: stays on this game; LIVE goes to the current one)
+            status('live: watching back; the next game is on (LIVE to join it)');
+          }
         }
       } catch (e) {}
     }
     if (over) {
     } else if (s.liveFollow) {
       // pace: LIVE_BEHIND frames behind the newest frame received. At the join (the stream starts at the game's start)
-      // and whenever the viewer falls more than 2 s further behind (a hidden tab, a slow machine, a load) it jumps
+      // and whenever the buffer's floor is more than 10 s over (a hidden tab, a slow machine, a load) it jumps
       // there, unrendered as a seek ("jump to live" off: no jump, the game from its start); then normal speed, stalling
       // only when the stream runs dry (until 2 s are buffered again)
       if (ahead > 0) s.liveSynced = true;
       if (s.liveSynced && liveJump() && !hidden() && !s.cssHeld && !s.loadHeld && !call(s, 'viewer_spectate_in_retry')) {
         // (the stream grows while the jump runs: again until it is close)
-        for (let k = 0; k < 4 && ahead > LIVE_BEHIND + 120 && !s.seeking; ++k) {
+        // (at the join: a jump past 2 s over; later only a real backlog, 10 s over the floor: a hidden tab, a load. The
+        // stream also drifts ahead ~1-2 s over a few round ends, the host's transitions being shorter than ours: the
+        // fast-forward below takes that up, rendered, where a jump cut the sound and skipped the picture at a round end)
+        const jumpOver = s.liveJoined ? 600 : 120;
+        s.liveJoined = true;
+        for (let k = 0; k < 4 && Math.min(ahead, floor) > LIVE_BEHIND + jumpOver && !s.seeking; ++k) {
           await liveCatchUp(s, ahead - LIVE_BEHIND);
           if (session !== s) return;
           ahead = call(s, 'viewer_spectate_buffered');
+          hist.length = 0; hist.push(ahead);  // (the floor starts again from where the jump landed)
         }
       }
       // the link card's picture (tools/web/cc_live.mjs): a fight on screen (4 s into the battle scene: past its fade-in;
@@ -2040,8 +2117,8 @@ function liveBegin(s) {  // play(): after viewer_play
       s.liveHeld = hold;
       call(s, 'viewer_pause', hold || ui.paused || s.seeking ? 1 : 0);
       // up to the jump (or without it): CCCaster's spectateFastFwd, more than 60 frames (2 x NUM_INPUTS) over the kept
-      // buffer, two game frames per drawn frame until caught up
-      const ff = !hold && ahead > LIVE_BEHIND + 60;
+      // buffer (its floor: not a burst), two game frames per drawn frame until caught up
+      const ff = !hold && Math.min(ahead, floor) > LIVE_BEHIND + 60;
       if (ff !== !!s.liveFF) { s.liveFF = ff; call(s, 'viewer_speed', ff ? 2 : ui.speed); }
       if (s.cssHeld) status('live: loading the next game');
       else status(hold ? `live: waiting for the stream (${(ahead / 60).toFixed(1)} s buffered)`
@@ -2049,7 +2126,7 @@ function liveBegin(s) {  // play(): after viewer_play
     } else if (!s.seeking) {
       status(`live: watching back, ${(ahead / 60).toFixed(0)} s behind (LIVE to catch up)`);
     }
-    setTimeout(poll, 1000);
+    setTimeout(poll, liveNet.delay());
   };
   poll();
 }

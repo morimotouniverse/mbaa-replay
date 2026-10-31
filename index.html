@@ -124,6 +124,13 @@
   .banner.scroll span { padding-left: 100%; animation: banner 9s linear infinite; }
   @keyframes banner { to { transform: translateX(-100%); } }
   #banner1.scroll span { animation-direction: reverse; }
+  /* live: the feed's state over the top of the picture (viewer.js liveNet: a restart notice, or the feed unreachable) */
+  #livenotice { position: absolute; left: 50%; top: 10px; transform: translateX(-50%); z-index: 5; max-width: calc(100% - 24px);
+    box-sizing: border-box; padding: 6px 12px; border-radius: 8px; background: #15131fe6; border: 1px solid var(--accent2);
+    color: var(--fg); font-size: 12.5px; line-height: 1.3; text-align: center; pointer-events: none;
+    box-shadow: 0 4px 16px rgba(0, 0, 0, .5); }
+  #livenotice[hidden] { display: none; }
+  #livenotice.down { border-color: var(--accent); }
   #tunepanel { position: fixed; left: 12px; bottom: 12px; z-index: 50; background: #15131fee; border: 1px solid #ffffff2a;
     border-radius: 10px; padding: 10px 12px; font-size: 12px; display: flex; flex-direction: column; gap: 4px; max-width: 300px; }
   #tunepanel label { display: grid; grid-template-columns: 1fr 110px 28px; align-items: center; gap: 6px; }
@@ -254,6 +261,7 @@
   <canvas id="canvas" width="640" height="480" oncontextmenu="event.preventDefault()"></canvas>
   <canvas id="overlay"></canvas>
   <div class="banner" id="banner0" hidden><span></span></div><div class="banner" id="banner1" hidden><span></span></div>
+  <div id="livenotice" role="status" aria-live="polite" hidden></div>
   <video id="loadvid" muted loop playsinline preload="none" poster="opening.webp" hidden></video>
 </div>
 <div class="controls" id="controls">
@@ -362,6 +370,6 @@
 </div>
 <script src="mbaa.js?v=656bfbcbabd0"></script>
 <script src="bgm_stream.js?v=407ac29e5c89"></script>
-<script src="viewer.js?v=de0d7c52cb11"></script>
+<script src="viewer.js?v=f6f3d69ea0a5"></script>
 </body>
 </html>
