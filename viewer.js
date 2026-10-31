@@ -1808,11 +1808,14 @@ function liveFeed(s, b) {
 // A live session goes on through the retry menu and the character select (scene 20): their files load with the first
 // game (the select screen's parts, portraits and palettes for any character a player hovers, the stage list, the moon
 // check's data/<chara>_<moon>.txt (it only stats them, but a missing one changes which moons are offered), its BGM and
-// the retry menu's (bgmme98))
+// the retry menu's (bgmme98)), and every story/battle/<name>(ex)_table.txt: the select's exit reads both seats' tables
+// (CharaSelect_InitSlotBattleBuffer -> StoryMode_LoadBattleTable, one counted RNG draw each when the file is there),
+// before the random stage roll; without them the roll picks another stage)
 function liveCssFiles(man) {
   const out = new Set();
   for (const p of Object.keys(man.files))
-    if (/^(grp\/c_sel_aa|grp\/bgselect|data\/_csel)\//.test(p) || /^data\/[^/]+_\d\.txt$/.test(p) || /^bgm\/bgmme9[89]\./.test(p)) out.add(p);
+    if (/^(grp\/c_sel_aa|grp\/bgselect|data\/_csel)\//.test(p) || /^data\/[^/]+_\d\.txt$/.test(p) || /^bgm\/bgmme9[89]\./.test(p) ||
+        /^story\/battle\/[^/]+_table\.txt$/.test(p)) out.add(p);
   return withSiblings(man, out);
 }
 // The next game's files, from the select screen's state (read after every frame while it runs): a seat's character once
@@ -2502,6 +2505,7 @@ window.mbaaChatApi = { art: playersArt, iconCell, chara: CHARA, liveId: () => se
     return L && s.M ? { info: L.info, base: LIVE, follow: !!s.liveFollow, recs: L.recs || null,
                         ahead: L.recs && !s.seeking ? call(s, 'viewer_spectate_buffered') : null } : null; } };
 if (document.querySelector('meta[name="mbaa-chat"]') || (/^(127\.0\.0\.1|localhost)$/.test(location.hostname) && Q.has('chat'))) {
+  document.body.classList.add('haschat');  // (the chat layout from the start: fitStage)
   const el = document.createElement('script');
   el.src = (document.querySelector('meta[name="mbaa-chatjs"]') || { content: 'chat.js' }).content;
   document.body.append(el);
@@ -3312,10 +3316,57 @@ let scaleMode = 'auto';
 try { scaleMode = localStorage.getItem('mbaaScale') || 'auto'; } catch (e) {}
 const SIDE_W = 320 + 16;  // the controls panel beside the picture, with its gap
 const FS_SIDE = 212;  // fullscreen: the least room beside the picture for the controls column (with its gap)
+// Chat pages (body.haschat, index.html's layout notes): by the window's shape, 'port' (an upright phone or tablet: the
+// picture on top, chat filling the rest), 'land' (a phone on its side: the picture left, chat right), 'desk' (the chat
+// column right, the controls under the picture). While the on-screen keyboard is up (body.kbd) the shape is kept (it
+// only shortens the window). chatHidden: the chat column hidden (its button; not upright, where chat is the page).
+let chatHidden = false, layMode = '';
+try { chatHidden = localStorage.getItem('mbaaChatHidden') === '1'; } catch (e) {}
+function chatLayout() {
+  const b = document.body, W = window.innerWidth, H = window.innerHeight;
+  if (!b.classList.contains('haschat')) return W > H && H < 520 ? 'land' : '';  // (no chat: a phone on its side, the same less chat)
+  if (b.classList.contains('kbd') && layMode) return layMode;
+  return W < H ? (W < 900 ? 'port' : 'desk') : (H < 520 ? 'land' : 'desk');
+}
 function fitStage() {
   overlayDirty = true;  // (the picture moved or changed size: the overlay drawn again over it)
   const dpr = window.devicePixelRatio || 1, stage = document.querySelector('.stage'), ctl = document.getElementById('controls');
-  const full = !!stage && stage.classList.contains('fs');
+  const full = !!stage && stage.classList.contains('fs'), b = document.body, root = document.documentElement;
+  const tr = document.getElementById('transportsec');
+  if (!full) {  // (fullscreen keeps the page's layout under it)
+    layMode = chatLayout();
+    const mob = layMode === 'port' || layMode === 'land';
+    b.classList.toggle('mob', mob); b.classList.toggle('port', layMode === 'port'); b.classList.toggle('land', layMode === 'land');
+    b.classList.toggle('nochat', (chatHidden || !b.classList.contains('haschat')) && (layMode === 'land' || layMode === 'desk'));
+    b.classList.toggle('deskchat', layMode === 'desk' && !chatHidden);
+    if (!mob) b.classList.remove('sheet', 'kbd');
+    const ct = document.getElementById('chattog');
+    if (ct) ct.classList.toggle('on', !chatHidden);
+  }
+  const setW = (w, label) => { root.style.setProperty('--w', `${Math.floor(w * 1000) / 1000}px`); if (stage) stage.dataset.scale = label; };
+  if (!full && b.classList.contains('mob')) {
+    // the visual viewport (the window less the on-screen keyboard) is the page: .main pinned to it
+    const vv = window.visualViewport, zoomed = vv && vv.scale > 1.01;
+    const vh = vv && !zoomed ? vv.height : window.innerHeight, W = root.clientWidth;
+    root.style.setProperty('--vvh', `${vh}px`); root.style.setProperty('--vvt', `${vv && !zoomed ? vv.offsetTop : 0}px`);
+    let w;
+    if (layMode === 'port') {  // the picture as wide as leaves chat its least height under it and the transport
+      const trH = tr && tr.offsetParent ? tr.offsetHeight : 0;
+      w = Math.min(W, (vh - trH - (b.classList.contains('kbd') ? 170 : 220)) * 4 / 3);
+    } else w = Math.min(W - (b.classList.contains('nochat') ? 200 : Math.max(W * 0.35, 240)), vh * 4 / 3);
+    if (/^\d$/.test(scaleMode)) w = Math.min(w, 640 * +scaleMode / dpr);
+    return setW(Math.max(w, 120), 'fit');
+  }
+  const trH = !full && tr ? tr.offsetHeight + 6 : 0;  // (the transport under the picture; in fullscreen it is over it)
+  if (!full && b.classList.contains('deskchat')) {
+    const chatW = Math.round(Math.min(400, Math.max(300, window.innerWidth * 0.24)));
+    root.style.setProperty('--chatw', `${chatW}px`);
+    const W = root.clientWidth - 32 - chatW - 12, H = window.innerHeight - 16 - trH;
+    const k = Math.floor(Math.min(W * dpr / 640, H * dpr / 480)), fit = Math.min(W, H * 4 / 3);
+    if (scaleMode === 'fit') return setW(fit, 'fit');
+    if (/^\d$/.test(scaleMode)) return setW(640 * +scaleMode / dpr, `${scaleMode}x`);
+    return k >= 1 && dpr < 2 ? setW(640 * k / dpr, `${k}x`) : setW(fit, 'fit');
+  }
   const Wwin = full ? window.innerWidth : document.documentElement.clientWidth - 32;
   const H = full ? window.innerHeight : window.innerHeight - 16;
   // fullscreen with FS_SIDE or more beside the full-height picture (landscape): the controls go there (.sidebar)
@@ -3323,26 +3374,46 @@ function fitStage() {
   if (stage) stage.classList.toggle('sidebar', sidebar);
   const W = sidebar ? Wwin - FS_SIDE : Wwin;
   // controls below the picture take their stacked height; beside it, SIDE_W of width. Pick the layout with the larger picture.
+  // (the transport is under the picture in both)
   document.body.classList.remove('side');
-  const below = full ? 0 : (ctl ? ctl.offsetHeight + 8 : 0);
-  const kSide = Math.floor(Math.min((W - SIDE_W) * dpr / 640, H * dpr / 480));
+  const below = full ? 0 : (ctl ? ctl.offsetHeight + 8 : 0) + trH, Hs = H - trH;
+  const kSide = Math.floor(Math.min((W - SIDE_W) * dpr / 640, Hs * dpr / 480));
   const kBelow = Math.floor(Math.min(W * dpr / 640, (H - below) * dpr / 480));
-  const side = !full && kSide >= kBelow && W - SIDE_W >= 320;
+  // (high-density screens, auto: no whole multiples, the larger fitted picture: beside the panel, or the width with the
+  // picture and the transport in the window, the panel scrolled to below)
+  const hiAuto = !full && dpr >= 2 && scaleMode === 'auto';
+  const wSide = Math.min(W - SIDE_W, Hs * 4 / 3), wBelow = Math.min(W, 960, Math.max(320, Hs * 4 / 3));
+  const side = !full && W - SIDE_W >= 320 && (hiAuto ? wSide >= wBelow : kSide >= kBelow);
   document.body.classList.toggle('side', side);
   let w, label;
-  if (scaleMode === 'fit') { w = side ? Math.min(W - SIDE_W, H * 4 / 3) : Math.min(W, (H - below) * 4 / 3); label = 'fit'; }
+  if (scaleMode === 'fit') { w = side ? Math.min(W - SIDE_W, Hs * 4 / 3) : Math.min(W, (H - below) * 4 / 3); label = 'fit'; }
   else if (/^\d$/.test(scaleMode)) { w = 640 * +scaleMode / dpr; label = `${scaleMode}x`; }
   else {
     // high-density screens (phones): a game pixel is already 2+ device pixels, uneven rows are invisible there, and a
-    // whole multiple would leave a small picture: fit the width instead
+    // whole multiple would leave a small picture: fit the width instead (beside the panel: the room there)
     // (fullscreen on such a screen: the whole screen, as large as it fits)
     const k = dpr >= 2 ? 0 : side ? kSide : kBelow;
-    w = k >= 1 ? 640 * k / dpr : full ? Math.min(W, H * 4 / 3) : Math.min(W, 960); label = k >= 1 ? `${k}x` : 'fit';
+    w = k >= 1 ? 640 * k / dpr : full ? Math.min(W, H * 4 / 3) : side ? wSide : wBelow;
+    label = k >= 1 ? `${k}x` : 'fit';
   }
-  document.documentElement.style.setProperty('--w', `${Math.floor(w * 1000) / 1000}px`);
-  if (stage) stage.dataset.scale = label;
+  setW(w, label);
 }
 addEventListener('resize', fitStage);
+// the layout's own controls: the phone menu sheet, the chat column's show / hide, the chat profile; the on-screen
+// keyboard (a chat text field focused on a phone: body.kbd) and the visual viewport it shortens
+(function layoutControls() {
+  const b = document.body, on = (id, f) => { const el = document.getElementById(id); if (el) el.onclick = e => { e.currentTarget.blur(); f(); }; };
+  on('menub', () => b.classList.add('sheet'));
+  on('sheetx', () => b.classList.remove('sheet'));
+  on('profb', () => { b.classList.remove('sheet'); const d = document.querySelector('#chatsec details'); if (d) d.open = true; });
+  on('chattog', () => { chatHidden = !chatHidden; try { localStorage.setItem('mbaaChatHidden', chatHidden ? '1' : '0'); } catch (e) {} fitStage(); });
+  const typing = el => !!el && el.matches && el.matches('#chatsec input[type=text], #chatsec textarea');
+  document.addEventListener('focusin', e => { if (b.classList.contains('mob') && typing(e.target) && !b.classList.contains('kbd')) { b.classList.add('kbd'); fitStage(); } });
+  document.addEventListener('focusout', () => setTimeout(() => {
+    if (b.classList.contains('kbd') && !typing(document.activeElement)) { b.classList.remove('kbd'); fitStage(); }
+  }, 60));
+  if (window.visualViewport) { visualViewport.addEventListener('resize', fitStage); visualViewport.addEventListener('scroll', fitStage); }
+})();
 addEventListener('resize', () => marquee(document.getElementById('players')));
 document.addEventListener('fullscreenchange', () => setFs(document.fullscreenElement === document.querySelector('.stage')));
 // Fullscreen: the stage (the Fullscreen API; a phone also turns to landscape), or where there is none for a page element

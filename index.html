@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="viewport" content="width=device-width, initial-scale=1, interactive-widget=resizes-content">
 <title>MBAACC Replay Viewer</title>
 <meta name="description" content="Watch Melty Blood Actress Again Current Code replays in your browser, frame-exact.">
 <meta property="og:type" content="website">
@@ -18,7 +18,7 @@
 <meta name="twitter:description" content="Watch Melty Blood Actress Again Current Code replays in your browser, frame-exact.">
 <meta name="twitter:image" content="https://watch.meltyblood.org/preview.png">
 <meta name="mbaa-manifest" content="c7d5223cc952">
-<meta name="mbaa-chatjs" content="chat.js?v=4637d200880f">
+<meta name="mbaa-chatjs" content="chat.js?v=6d343ebd2aff">
 <link rel="manifest" href="site.webmanifest">
 <link rel="icon" href="icon-192.png">
 <link rel="apple-touch-icon" href="icon-192.png">
@@ -57,20 +57,100 @@
   .mobfs .fs-out, .fs .mobfs .fs-in { display: none; }
   .fs .mobfs .fs-out { display: inline-block; }
   @media (pointer: coarse) { .mobfs { display: inline-flex !important; } }
-  /* an upright phone: the transport right under the picture, before the players and the rest */
-  @media (max-width: 720px) { body:not(.side) #transportsec { order: -1; } }
   #overlay { position: absolute; left: 0; top: 0; width: 100%; height: 100%; pointer-events: none; }
   /* while a match loads: the game's opening movie (muted) over the black picture */
   #loadvid { position: absolute; left: 0; top: 0; width: 100%; aspect-ratio: 4 / 3; object-fit: cover; background: #000; pointer-events: none; }
   #loadvid[hidden] { display: none; }
   .stage.fs #loadvid { inset: auto; left: auto; top: auto; width: var(--w); }
-  /* everything else is one panel: beside the picture when the window is wide (body.side), else below it */
-  .main { display: flex; flex-direction: column; align-items: center; gap: 12px; margin: auto 0; }
-  body.side .main { flex-direction: row; align-items: center; }
+  /* Layout (viewer.js fitStage sets the body classes). The transport (time, seek bar, buttons) is always under the
+     picture. Without chat: the rest is one panel, beside the picture when that gives a larger picture (body.side), else
+     below it. With chat (body.haschat): desktop (body.deskchat) the chat column on the right, the panel under the
+     picture; an upright phone / tablet (body.mob.port) the picture pinned on top, the transport, chat filling the rest
+     of the height; a phone on its side (body.mob.land) the picture on the left, the transport and chat in a column on
+     the right (body.nochat: chat hidden). On phones (body.mob) the panel is a full-screen sheet behind the menu button
+     (body.sheet: open), and while the chat input has the on-screen keyboard (body.kbd) the transport steps aside. */
+  .main { display: grid; grid-template-columns: var(--w); grid-template-areas: "stage" "tr" "ctl"; justify-content: center;
+          align-items: start; gap: 6px 12px; margin: auto 0; }
+  .stage { grid-area: stage; }  #transportsec { grid-area: tr; }  #controls { grid-area: ctl; }  #chatcol { grid-area: chat; }
+  body.side .main { grid-template-columns: var(--w) 330px; grid-template-rows: auto auto; grid-template-areas: "stage ctl" "tr ctl"; }
+  body.side #controls { align-self: center; }
+  #transportsec { width: var(--w); box-sizing: border-box; padding: 2px 4px; }
+  .clock #livebtn { margin-left: 8px; align-self: center; }
+  body:not(.mob) .mobonly, body:not(.haschat) .chatonly { display: none !important; }
+  .i-chat { --m: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath d='M3 4h18v12H8l-5 4zm4 5v2h2V9zm4 0v2h2V9zm4 0v2h2V9z' fill-rule='evenodd'/%3E%3C/svg%3E"); }
+  .i-menu { --m: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Ccircle cx='5' cy='12' r='2.4'/%3E%3Ccircle cx='12' cy='12' r='2.4'/%3E%3Ccircle cx='19' cy='12' r='2.4'/%3E%3C/svg%3E"); }
+  #chattog.on { color: var(--muted); background: none; }  #chattog:not(.on) { color: var(--accent2); }
+  /* the chat column: a panel; chat.js's section fills it (its lines take the height left, scrolling inside) */
+  #chatcol { display: none; box-sizing: border-box; min-width: 0; min-height: 0; background: var(--panel); border: 1px solid var(--line);
+             border-radius: 12px; padding: 10px; box-shadow: 0 10px 40px rgba(0, 0, 0, .4); }
+  body.haschat:is(.deskchat, .mob):not(.nochat) #chatcol { display: flex; }
+  #chatcol > #chatsec { flex: 1 1 auto; min-width: 0; min-height: 0; display: flex; flex-direction: column; gap: 6px; }
+  body.haschat #chatlog { height: auto; flex: 1 1 0; min-height: 40px; font-size: 13px; }
+  body.deskchat .main { grid-template-columns: var(--w) var(--chatw, 340px); grid-template-rows: auto auto 1fr;
+                        grid-template-areas: "stage chat" "tr chat" "ctl chat"; margin: 0; }
+  body.deskchat #chatcol { position: sticky; top: 8px; height: calc(100vh - 16px); height: calc(100dvh - 16px); }
+  /* phones with chat: the page itself never scrolls; .main is the visual viewport (viewer.js: --vvh / --vvt, so the input
+     stays above the on-screen keyboard) */
+  html:has(body.mob) { overflow: hidden; height: 100%; overscroll-behavior: none; }
+  body.mob { padding: 0; overflow: hidden; height: 100%; min-height: 0; overscroll-behavior: none; }
+  body.mob .main { position: fixed; left: 0; right: 0; top: var(--vvt, 0px); height: var(--vvh, 100dvh); margin: 0; gap: 0;
+                   justify-content: stretch; }
+  body.mob.port .main { grid-template-columns: 100%; grid-template-rows: auto auto minmax(0, 1fr); grid-template-areas: "stage" "tr" "chat"; }
+  body.mob.port .stage { justify-self: center; }
+  body.mob.land .main { grid-template-columns: var(--w) minmax(0, 1fr); grid-template-rows: auto minmax(0, 1fr); grid-template-areas: "stage tr" "stage chat"; }
+  body.mob.land.nochat .main { grid-template-rows: 100%; grid-template-areas: "stage tr"; }
+  body.mob.land .stage { align-self: center; }
+  body.mob.land.nochat #transportsec { align-self: center; }
+  body.mob .stage canvas#canvas { box-shadow: none; }
+  body.mob #chatcol { border-radius: 0; border-width: 1px 0 0; padding: 6px 8px 8px; box-shadow: none; }
+  body.mob.land #chatcol { border-width: 0 0 0 1px; }
+  #transportsec { display: grid; grid-template-columns: auto minmax(0, 1fr); grid-template-areas: "tl tl" "clk tp";
+                           align-items: center; gap: 0 6px; }
+  body.mob #transportsec { width: 100%; padding: 2px 8px; }
+  body.mob.land #transportsec { border-left: 1px solid var(--line); background: var(--panel); }
+  #transportsec .timeline { grid-area: tl; }
+  #transportsec .clock { grid-area: clk; align-items: center; }
+  #transportsec .transport { grid-area: tp; justify-content: flex-end; flex-wrap: nowrap; }
+  #transportsec #fc { margin-left: 10px; }
+  body:not(.mob) #transportsec .transport { flex-wrap: wrap; }
+  @media (max-width: 600px) { body:not(.mob) #transportsec { grid-template-columns: 100%; grid-template-areas: "clk" "tl" "tp"; }
+                              body:not(.mob) #transportsec .transport { justify-content: center; } }
+  body.mob #time { font-size: 13px; }  body.mob :is(#fc, #dur) { display: none; }
+  body.mob #marks { height: 12px; }
+  body.mob #transportsec .transport button { padding: 6px; }
+  body.mob #pause { width: 34px; height: 34px; margin: 0 3px; }
+  body.mob :is(#back5, #fwd5) { display: none; }
+  body.mob.land #transportsec { grid-template-columns: 100%; grid-template-areas: "tl" "clk" "tp"; }
+  body.mob.land #transportsec .transport { justify-content: center; }
+  body.mob.port #chattog { display: none !important; }
+  body.mob #chatcol { align-self: stretch; }
+  body.mob #chatsec .chead { flex-wrap: nowrap; }  body.mob #chatsec .chead > .lbl, body.mob #chatsec .cprev { display: none; }
+  body.mob #chatsec .ctool { flex-wrap: nowrap; overflow-x: auto; }
+  body.mob #chatsec .ctool > * { flex: none; }  body.mob #chatsec .ctool .cmore { margin-left: auto; }
+  /* (the toolbar scrolls sideways when narrow: its colour popup is placed on the chat section, over the lines) */
+  body.mob #chatsec { position: relative; }  body.mob #chatsec .ctool { position: static; }
+  body.mob #chatsec .cpop { left: 0; right: 0; top: auto; bottom: 46px; max-height: 70%; overflow-y: auto; }
+  body.mob.kbd #transportsec, body.mob.kbd #chatsec .ctool, body.mob.land.kbd #chatsec .chead { display: none; }
+  /* chat on phones: 16px inputs (iOS zooms the page into a smaller one), the profile behind the menu (a full-screen panel
+     when open) */
+  body.mob #chatsec input[type=text] { font-size: 16px; }
+  body.mob #chatsec .cform button { padding: 6px 12px; }
+  body.mob #chatsec details:not([open]) { display: none; }
+  body.mob #chatsec details[open] { position: fixed; inset: 0; z-index: 95; background: var(--panel); padding: 14px; overflow-y: auto; }
+  body.mob #chatsec details[open] summary { font-size: 14px; }
+  body.mob #chatsec details[open] summary::after { content: '\2715'; margin-left: auto; font-size: 18px; padding: 4px 8px; }
+  body.mob #chatsec details .cgrid { max-height: none; }
+  /* the menu sheet: every other control, full screen */
+  body.mob #controls { position: fixed; inset: 0; z-index: 90; width: auto; max-height: none; border: 0; border-radius: 0;
+                       overflow-y: auto; overscroll-behavior: contain; display: none; }
+  body.mob.sheet #controls { display: flex; }
+  .sheethead { display: flex; align-items: center; gap: 8px; }
+  .sheethead #sheetx { margin-left: auto; }
   .controls { display: flex; flex-direction: column; gap: 10px; width: var(--w); box-sizing: border-box; background: var(--panel);
               border: 1px solid var(--line); border-radius: 12px; padding: 14px; position: relative;
               box-shadow: 0 10px 40px rgba(0, 0, 0, .4); }
   body.side .controls { width: 330px; max-height: calc(100vh - 16px); overflow-y: auto; }
+  body.mob .controls { width: auto; }
   .sec { display: flex; flex-direction: column; gap: 8px; }
   .sec + .sec { border-top: 1px solid var(--line); padding-top: 10px; }
   .row { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
@@ -264,7 +344,25 @@
   <div id="livenotice" role="status" aria-live="polite" hidden></div>
   <video id="loadvid" muted loop playsinline preload="none" poster="opening.webp" hidden></video>
 </div>
+  <div class="sec" id="transportsec">
+    <div class="clock"><span id="time">0:00.0</span><span class="hint" id="dur"></span><span id="fc"></span><button id="livebtn" class="livebtn" title="back to live (~4 s behind the players)" hidden>LIVE</button></div>
+    <div class="timeline"><canvas id="marks"></canvas><input id="seek" type="range" min="0" max="1" value="0" step="1" aria-label="seek"></div>
+    <div class="row transport">
+      <button id="prevr" title="previous round ([)"><i class="i i-prev"></i></button>
+      <button id="back5" title="back 5 s (Shift+Left)"><i class="i i-rewind"></i></button>
+      <button id="back1" title="back one frame (,)"><i class="i i-back"></i></button>
+      <button id="pause" title="pause / play (Space)"><i class="i i-pause"></i></button>
+      <button id="fwd1" title="forward one frame (.)"><i class="i i-play"></i></button>
+      <button id="fwd5" title="forward 5 s (Shift+Right)"><i class="i i-ffwd"></i></button>
+      <button id="nextr" title="next round (])"><i class="i i-next"></i></button>
+      <button id="fsx" class="mobfs" title="fullscreen (F)"><i class="i i-full fs-in"></i><i class="i i-x fs-out"></i></button>
+      <button id="chattog" class="chatonly on" title="show / hide the chat"><i class="i i-chat"></i></button>
+      <button id="menub" class="mobonly" title="menu: the match, settings, radio, live list, queue, chat profile"><i class="i i-menu"></i></button>
+    </div>
+  </div>
+<div id="chatcol"></div>
 <div class="controls" id="controls">
+  <div class="sheethead mobonly"><span class="lbl">menu</span><button class="txt chatonly" id="profb">chat profile</button><button id="sheetx" title="close the menu"><i class="i i-x"></i></button></div>
   <div class="sec">
     <div id="matchcard">
     <div id="players" hidden>
@@ -276,20 +374,6 @@
     </div>
     <div id="title">MBAACC replays</div>
     <div id="status">loading…</div>
-  </div>
-  <div class="sec" id="transportsec">
-    <div class="clock"><span id="time">0:00.0</span><span class="hint" id="dur"></span><span id="fc"></span></div>
-    <div class="timeline"><canvas id="marks"></canvas><input id="seek" type="range" min="0" max="1" value="0" step="1" aria-label="seek"></div>
-    <div class="row transport">
-      <button id="prevr" title="previous round ([)"><i class="i i-prev"></i></button>
-      <button id="back5" title="back 5 s (Shift+Left)"><i class="i i-rewind"></i></button>
-      <button id="back1" title="back one frame (,)"><i class="i i-back"></i></button>
-      <button id="pause" title="pause / play (Space)"><i class="i i-pause"></i></button>
-      <button id="fwd1" title="forward one frame (.)"><i class="i i-play"></i></button>
-      <button id="fwd5" title="forward 5 s (Shift+Right)"><i class="i i-ffwd"></i></button>
-      <button id="nextr" title="next round (])"><i class="i i-next"></i></button>
-      <button id="fsx" class="mobfs" title="fullscreen (F)"><i class="i i-full fs-in"></i><i class="i i-x fs-out"></i></button>
-    </div>
   </div>
   <div class="sec">
     <div class="row spread">
@@ -330,8 +414,7 @@
   </div>
   <div class="sec" id="livesec" hidden>
     <div class="row spread"><span class="lbl">live now (CCCaster)</span>
-      <span class="grp"><button id="livebtn" class="livebtn" title="back to live (~4 s behind the players)" hidden>LIVE</button>
-      <label class="tog" title="on: joining jumps to ~4 s behind the players; off: the whole game from its start, at normal speed"><input id="livejump" type="checkbox" checked> jump to live</label></span></div>
+      <span class="grp"><label class="tog" title="on: joining jumps to ~4 s behind the players; off: the whole game from its start, at normal speed"><input id="livejump" type="checkbox" checked> jump to live</label></span></div>
     <ol id="liveitems"></ol>
   </div>
   <div class="sec replayonly" id="plsec">
@@ -368,8 +451,8 @@
   </div>
 </div>
 </div>
-<script src="mbaa.js?v=d1b78f055dc2"></script>
+<script src="mbaa.js?v=78cb9bf622fc"></script>
 <script src="bgm_stream.js?v=407ac29e5c89"></script>
-<script src="viewer.js?v=a8d097d82173"></script>
+<script src="viewer.js?v=36be91e3f425"></script>
 </body>
 </html>

@@ -234,11 +234,16 @@
       <div class="prow">moon <span class="moons"></span></div>
       <div class="cgrid"></div>
     </details>`;
-  const controls = document.getElementById('controls');
+  // (the page's chat column, beside or under the picture: index.html / viewer.js fitStage; an older page: the panel)
+  const controls = document.getElementById('controls'), col = document.getElementById('chatcol');
   const after = document.getElementById('livesec');
-  if (after && after.parentNode === controls) after.after(sec); else controls.append(sec);
+  if (col) col.append(sec); else if (after && after.parentNode === controls) after.after(sec); else controls.append(sec);
   const $ = s => sec.querySelector(s);
   const logEl = $('#chatlog'), tabsEl = $('.ctabs'), input = $('#chatin'), cmdIn = $('#chatcmd'), stateEl = $('.cstate');
+  // the newest line stays in view when the log's box changes size (the on-screen keyboard, a rotation, the layout)
+  let logStick = true;
+  logEl.addEventListener('scroll', () => { logStick = logEl.scrollHeight - logEl.scrollTop - logEl.clientHeight < 30; }, { passive: true });
+  if (window.ResizeObserver) new ResizeObserver(() => { if (logStick) logEl.scrollTop = logEl.scrollHeight; }).observe(logEl);
   cmdIn.value = String(store.get('mbaa-chat-cmd', '')).slice(0, 60);  // (kept, as Nico's command box is)
   cmdIn.onchange = () => store.set('mbaa-chat-cmd', cmdIn.value.trim());
   // Signed-in names are "Name#1234" (the community account's tag keeps them unique); shown without the #tag unless the
