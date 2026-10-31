@@ -7,9 +7,11 @@
 // #m-<match id> (joined and shown automatically).
 //
 // Profile: nick, colour, character and moon (the select screen's icon), kept in localStorage and sent with every
-// message as client tags (+mbaa/color, +mbaa/chara, +mbaa/moon); plain IRC clients ignore them. The panel shows each
-// line with the sender's icon and colour; the overlay (Nico Nico style, toggle "on picture") sends each new line of the
-// shown channel across the game picture, right to left in ~6 s, on a free row, as text in the sender's colour.
+// message as client tags (+mbaa/color, +mbaa/chara, +mbaa/moon; +mbaa/cmd: the sender's Niconico commands, e.g.
+// "ue big red", from the commands box); plain IRC clients ignore them. The panel shows each line with the sender's icon
+// and colour; the overlay (toggle "on picture") shows each new line of the shown channel on the game picture as a
+// Niconico comment (laid out and drawn by the vendored niconicomments, see the overlay section), as text in the
+// sender's colour unless their commands name another.
 (() => {
   'use strict';
   const api = window.mbaaChatApi;
@@ -108,10 +110,9 @@
   #chatsec .moons canvas, #chatsec .cgrid canvas { cursor: pointer; border-radius: 4px; border: 2px solid transparent; }
   #chatsec .moons canvas.on, #chatsec .cgrid canvas.on { border-color: #fff; background: #ffffff18; }
   #chatsec .cgrid { display: grid; grid-template-columns: repeat(auto-fill, 34px); gap: 2px; max-height: 120px; overflow-y: auto; margin-top: 6px; }
-  #chatover { position: absolute; inset: 0; overflow: hidden; pointer-events: none; z-index: 1; contain: strict; }
-  .stage.fs #chatover { inset: auto; width: var(--w); height: auto; aspect-ratio: 4 / 3; }
-  #chatover .dm { position: absolute; left: 0; top: 0; white-space: nowrap; font-weight: 700; display: flex; align-items: center; gap: .25em;
-                  will-change: transform; text-shadow: 0 0 2px #000, 0 0 2px #000, 1px 1px 0 #000, -1px -1px 0 #000, 1px -1px 0 #000, -1px 1px 0 #000; }
+  #chatsec .cform input#chatcmd { flex: 0 1 90px; font-size: 11px; color: var(--muted); }
+  #chatover { position: absolute; left: 0; top: 0; width: 100%; height: 100%; overflow: hidden; pointer-events: none; z-index: 1; }
+  #chatover canvas { position: absolute; top: 0; height: 100%; }
   `;
   document.head.append(css);
 
@@ -121,7 +122,8 @@
     <div class="chead"><span class="lbl">chat</span><span class="ctabs"></span>
       <label class="tog" title="new comments cross the game picture (Nico Nico style)"><input id="chatover_on" type="checkbox"> on picture</label></div>
     <ol id="chatlog" aria-live="polite"></ol>
-    <form class="cform" autocomplete="off"><input id="chatin" type="text" maxlength="${MAXLEN}" placeholder="say something…" enterkeyhint="send">
+    <form class="cform" autocomplete="off"><input id="chatcmd" type="text" maxlength="60" spellcheck="false" placeholder="commands"
+      title="Niconico commands for your comments on the picture, e.g. ue / shita (top / bottom, 3 s), big / small, a colour (red, pink, orange, yellow, green, cyan, blue, purple, white, black, white2, red2, …, or #rrggbb). Empty: scrolls, medium, your colour."><input id="chatin" type="text" maxlength="${MAXLEN}" placeholder="say something…" enterkeyhint="send">
       <button type="submit" class="txt">send</button></form>
     <details><summary><canvas class="me" width="48" height="48"></canvas><span class="mynick"></span><span class="cstate"></span></summary>
       <div class="prow">nick <input id="chatnick" type="text" maxlength="24" spellcheck="false"></div>
@@ -133,7 +135,9 @@
   const after = document.getElementById('livesec');
   if (after && after.parentNode === controls) after.after(sec); else controls.append(sec);
   const $ = s => sec.querySelector(s);
-  const logEl = $('#chatlog'), tabsEl = $('.ctabs'), input = $('#chatin'), stateEl = $('.cstate');
+  const logEl = $('#chatlog'), tabsEl = $('.ctabs'), input = $('#chatin'), cmdIn = $('#chatcmd'), stateEl = $('.cstate');
+  cmdIn.value = String(store.get('mbaa-chat-cmd', '')).slice(0, 60);  // (kept, as Nico's command box is)
+  cmdIn.onchange = () => store.set('mbaa-chat-cmd', cmdIn.value.trim());
 
   const over = document.createElement('div');
   over.id = 'chatover';
@@ -142,7 +146,7 @@
   const overOn = $('#chatover_on');
   overOn.checked = store.get('mbaa-chat-over', true);
   over.hidden = !overOn.checked;
-  overOn.onchange = () => { store.set('mbaa-chat-over', overOn.checked); over.hidden = !overOn.checked; if (!overOn.checked) over.replaceChildren(); overOn.blur(); };
+  overOn.onchange = () => { store.set('mbaa-chat-over', overOn.checked); over.hidden = !overOn.checked; if (!overOn.checked) nicoReset(); overOn.blur(); };
 
   // profile editor
   function profShow() {
@@ -238,36 +242,98 @@
   }
   const sys = (text, name) => addLine(name || shown, { sys: true, text, time: new Date() });
 
-  // ---- the overlay ----
-  const ROWS = 11, DUR = 6000, GAP = 24;
-  const rows = Array.from({ length: ROWS }, () => ({ start: 0, w: 0, W: 1 }));
-  function danmaku(l) {
+  // ---- the overlay: Niconico's own comment layout ----
+  // Drawn by niconicomments 0.4.1 (MIT, xpadev-net; vendor/niconicomments-0.4.1.js, self-hosted, loaded on the first
+  // comment), a reimplementation of the official nicovideo HTML5 player's renderer: its 1920x1080 stage (font sizes
+  // from the 384-line Flash stage: small / medium / big), naka comments crossing commentDrawRange + width in 4 s after
+  // a 1 s lead-in (so longer comments move faster), the official collision (a row is taken while any earlier comment
+  // overlaps this one in time-x at the stage's left / right collision lines; the lowest free row, else a random y),
+  // ue / shita fixed 3 s, black outline, Nico's colour names. Our picture is 4:3: the canvas is the 16:9 stage at the
+  // picture's height, centred, so the picture shows the stage's 4:3 middle (240..1680, the same area a 4:3 video fills
+  // in the official 16:9 player; comments enter at its right edge).
+  // Live comments: the overlay keeps its own clock (vpos = hundredths of a second since it was built) and adds each
+  // comment as it arrives (addComments), naka at now + 1 s (the stage's 1 s lead-in: it enters as it arrives), fixed
+  // ones at now; drawn on rAF while any is on screen, the instance dropped once all have left.
+  const NICO_SRC = 'vendor/niconicomments-0.4.1.js?v=0.4.1';
+  const NICO_COLORS = ['white', 'red', 'pink', 'orange', 'yellow', 'green', 'cyan', 'blue', 'purple', 'black', 'white2',
+    'niconicowhite', 'red2', 'truered', 'pink2', 'orange2', 'passionorange', 'yellow2', 'madyellow', 'green2', 'elementalgreen',
+    'cyan2', 'blue2', 'marinblue', 'purple2', 'nobleviolet', 'black2'];
+  const NICO_CMDS = new Set(['ue', 'shita', 'naka', 'big', 'medium', 'small', 'defont', 'mincho', 'gothic', 'ender', 'full', ...NICO_COLORS]);
+  // a sender's commands (the commands box, or a received +mbaa/cmd tag): known Niconico commands and #rrggbb only
+  const nicoCmds = t => String(t || '').toLowerCase().split(/[\s　]+/).filter(c => NICO_CMDS.has(c) || COLOR_RE.test(c)).slice(0, 8);
+  // the sender's colour, lifted as readable() does, as #rrggbb (Nico's colour code command)
+  const readableHex = hex => '#' + readable(hex).match(/\d+/g).map(n => (+n).toString(16).padStart(2, '0')).join('');
+  const nico = { lib: null, loading: null, inst: null, cv: null, t0: 0, list: [], id: 0, end: 0, raf: 0, size: '' };
+  const vposNow = () => Math.round((performance.now() - nico.t0) / 10);
+  function nicoLoad() {
+    if (nico.lib || nico.loading) return nico.loading;
+    return nico.loading = new Promise((res, rej) => {
+      const e = document.createElement('script'); e.src = NICO_SRC;
+      e.onload = () => { nico.lib = window.NiconiComments; res(); };
+      e.onerror = () => { nico.loading = null; rej(new Error('niconicomments did not load')); };
+      document.head.append(e);
+    });
+  }
+  // exactly over the picture (as viewer.js pins #overlay: in fullscreen the picture is not where a centred box would be)
+  function pin() {
+    const gameCv = document.getElementById('canvas');  // (looked up each time: viewer.js replaces it on a GL context change)
+    if (!gameCv) return;
+    const L = `${gameCv.offsetLeft}px`, T = `${gameCv.offsetTop}px`, W = `${gameCv.offsetWidth}px`, H = `${gameCv.offsetHeight}px`;
+    const st = over.style;
+    if (st.left !== L || st.top !== T || st.width !== W || st.height !== H) Object.assign(st, { left: L, top: T, width: W, height: H });
+  }
+  function nicoReset() {
+    if (nico.raf) cancelAnimationFrame(nico.raf);
+    nico.raf = 0;
+    if (nico.inst) try { nico.inst.destroy(); } catch (e) {}
+    nico.inst = null; nico.list = []; nico.size = ''; nico.end = 0;
+    if (nico.cv) { nico.cv.remove(); nico.cv = null; }
+  }
+  // (re)built for the overlay's size: the stage's layout is in its own 1920x1080 units, so a rebuild with the same
+  // comments (same order, same vpos) lays them out the same; the comments that have left are dropped then
+  function nicoBuild() {
+    const w = over.clientWidth, h = over.clientHeight, dpr = Math.min(2, window.devicePixelRatio || 1);
+    if (!w || !h) return false;
+    const now = vposNow();
+    nico.list = nico.list.filter(c => c.end > now);
+    if (nico.inst) try { nico.inst.destroy(); } catch (e) {}
+    if (!nico.cv) { nico.cv = document.createElement('canvas'); over.append(nico.cv); }
+    const cw = h * 16 / 9;
+    nico.cv.width = Math.round(cw * dpr); nico.cv.height = Math.round(h * dpr);
+    nico.cv.style.width = `${cw}px`; nico.cv.style.left = `${(w - cw) / 2}px`;
+    nico.inst = new nico.lib(nico.cv, nico.list.map(c => c.raw), { format: 'formatted', mode: 'html5' });
+    nico.size = `${w}x${h}@${dpr}`;
+    return true;
+  }
+  function nicoFrame() {
+    nico.raf = 0;
+    if (!nico.inst || over.hidden) return;
+    pin();
+    const dpr = Math.min(2, window.devicePixelRatio || 1);
+    if (`${over.clientWidth}x${over.clientHeight}@${dpr}` !== nico.size && !nicoBuild()) return;
+    const now = vposNow();
+    if (now > nico.end) { nicoReset(); return; }  // (all gone: the next comment starts a fresh stage)
+    nico.inst.drawCanvas(now);
+    nico.raf = requestAnimationFrame(nicoFrame);
+  }
+  async function danmaku(l) {
     if (!overOn.checked || document.visibilityState === 'hidden') return;
-    const W = over.clientWidth, H = over.clientHeight;
-    if (!W || !H) return;
-    const rh = H / (ROWS + 1);
-    const el = document.createElement('div');
-    el.className = 'dm';
-    el.style.color = readable(l.color);
-    el.style.fontSize = `${Math.max(12, Math.round(rh * 0.62))}px`;
-    el.textContent = l.action ? `${l.nick} ${l.text}` : l.text;  // (text only, as on Nico Nico: the icon is the panel's)
-    el.style.transform = `translateX(${W}px)`;
-    over.append(el);
-    const w = el.offsetWidth, now = performance.now();
-    // a free row: the last comment's tail is in (with a gap), and it leaves the left edge before this one gets there
-    const free = rows.map((r, i) => {
-      if (!r.start) return i;
-      const tailIn = r.start + DUR * (r.w + GAP) / (r.W + r.w);
-      const headLeft = now + DUR * W / (W + w), otherGone = r.start + DUR;
-      return now >= tailIn && headLeft >= otherGone ? i : -1;
-    }).filter(i => i >= 0);
-    const row = free.length ? free[Math.floor(Math.random() * free.length)]
-                            : rows.reduce((b, r, i) => (r.start < rows[b].start ? i : b), 0);
-    rows[row] = { start: now, w, W };
-    el.style.top = `${Math.round(rh * (row + 0.5) + (rh - el.offsetHeight) / 2)}px`;
-    const a = el.animate([{ transform: `translateX(${W}px)` }, { transform: `translateX(${-w}px)` }], { duration: DUR, easing: 'linear' });
-    a.onfinish = () => el.remove();
-    while (over.childElementCount > 60) over.firstChild.remove();
+    try { await nicoLoad(); } catch (e) { return; }
+    if (!overOn.checked || document.visibilityState === 'hidden') return;
+    pin();
+    const cmds = nicoCmds(l.cmd), fixed = cmds.includes('ue') || cmds.includes('shita');
+    // the sender's own commands first (Nico takes the first colour given), the profile colour as the default
+    const mail = l.color ? [...cmds, readableHex(l.color)] : cmds;
+    if (!nico.inst) { nico.t0 = performance.now(); nico.list = []; if (!nicoBuild()) return; }
+    const now = vposNow(), vpos = fixed ? now : now + 100;
+    const raw = { id: ++nico.id, vpos, content: l.action ? `${l.nick} ${l.text}` : l.text, mail, owner: false, premium: true,
+                  date: Math.floor(Date.now() / 1000), user_id: 0, layer: -1, is_my_post: !!l.self };
+    // (gone: naka by its timeline's end, vpos + 300 + 125; fixed after 300)
+    const end = vpos + (fixed ? 300 : 425) + 10;
+    nico.list.push({ raw, end });
+    nico.end = Math.max(nico.end, end);
+    if (nico.list.length > 200) nicoBuild(); else nico.inst.addComments(raw);
+    if (!nico.raf) nico.raf = requestAnimationFrame(nicoFrame);
   }
 
   // ---- IRC ----
@@ -379,7 +445,7 @@
         const moon = /^[0-2]$/.test(t['+mbaa/moon'] || '') ? +t['+mbaa/moon'] : -1;
         addLine(target, { nick: m.nick, text: clean(text), action, hist, self: m.nick === irc.nick, msgid: t.msgid,
                           time: t.time ? new Date(t.time) : new Date(), color: COLOR_RE.test(t['+mbaa/color'] || '') ? t['+mbaa/color'] : null,
-                          chara: validChara(chara) ? chara : -1, moon });
+                          chara: validChara(chara) ? chara : -1, moon, cmd: nicoCmds(t['+mbaa/cmd']).join(' ') });
         return;
       }
       case 'FAIL': sys(`server: ${clean(p.slice(2).join(' '))}`); return;
@@ -402,12 +468,13 @@
     const now = performance.now();
     if (now - irc.lastSend < 700) { sys('slow down a little'); return; }
     irc.lastSend = now;
-    const tags = irc.caps.has('message-tags') ? `@+mbaa/color=${prof.color};+mbaa/chara=${prof.chara};+mbaa/moon=${prof.moon} ` : '';
+    const cmd = nicoCmds(cmdIn.value).join(' ');
+    const tags = irc.caps.has('message-tags') ? `@+mbaa/color=${prof.color};+mbaa/chara=${prof.chara};+mbaa/moon=${prof.moon}${cmd ? `;+mbaa/cmd=${cmd.replace(/ /g, '\\s')}` : ''} ` : '';
     irc.send(`${tags}PRIVMSG ${shown} :${text}`);
     if (!irc.caps.has('echo-message')) {
       const action = text.startsWith('\x01ACTION ');
       addLine(shown, { nick: irc.nick, text: action ? text.slice(8, -1) : text, action, self: true, time: new Date(),
-                       color: prof.color, chara: prof.chara, moon: prof.moon });
+                       color: prof.color, chara: prof.chara, moon: prof.moon, cmd });
     }
   }
   $('.cform').onsubmit = e => { e.preventDefault(); say(input.value); input.value = ''; };
@@ -426,5 +493,5 @@
 
   tabs(); render();
   connect();
-  window.mbaaChat = { irc, chans, prof, danmaku, say, show: name => { chan(name); shown = name; tabs(); render(); }, status: () => ({ connected: irc.registered, nick: irc.nick, caps: [...irc.caps], shown, matchChan }) };  // (tests)
+  window.mbaaChat = { irc, chans, prof, danmaku, say, nico, feed: raw => on(parse(raw)), show: name => { chan(name); shown = name; tabs(); render(); }, status: () => ({ connected: irc.registered, nick: irc.nick, caps: [...irc.caps], shown, matchChan }) };  // (tests)
 })();
