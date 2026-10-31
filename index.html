@@ -97,13 +97,18 @@
   #matchcard:has(#stageblk:not([hidden])) .trk { grid-area: 2 / 1; margin-top: 4px; }
   #matchcard:has(#stageblk:not([hidden])) #players { grid-area: 1 / 1; z-index: 1; flex-direction: row; align-items: flex-start;
     justify-content: space-between; gap: 4px; margin: 0; padding: 6px 6px 0; text-shadow: 0 1px 2px #000, 0 0 6px #000; }
-  #matchcard:has(#stageblk:not([hidden])) #players .pl { flex: 1 1 0; gap: 5px; align-items: flex-start; }
+  #matchcard:has(#stageblk:not([hidden])) #players .pl { flex: 1 1 0; gap: 4px; align-items: flex-start; min-width: 0; }
+  #matchcard:has(#stageblk:not([hidden])) #players .who { flex: 1 1 0; }
+  #matchcard:has(#stageblk:not([hidden])) #players .nm { font-size: 12.5px; }
+  #matchcard:has(#stageblk:not([hidden])) #players .ch { font-size: 10.5px; white-space: nowrap; min-width: 0; }
+  #matchcard:has(#stageblk:not([hidden])) #players .ch .mqx { flex: 0 1 auto; }
+  #matchcard:has(#stageblk:not([hidden])) #players .moon { width: 12px; height: 12px; }
   #matchcard:has(#stageblk:not([hidden])) #players .pl:last-child { flex-direction: row-reverse; text-align: right; }
   #matchcard:has(#stageblk:not([hidden])) #players .pl:last-child .ch { justify-content: flex-end; }
-  #matchcard:has(#stageblk:not([hidden])) #players .ico { width: 44px; height: 44px; }
+  #matchcard:has(#stageblk:not([hidden])) #players .ico { width: 36px; height: 36px; }
   #matchcard:has(#stageblk:not([hidden])) #players .ch { color: #e6e6f0; }
   #matchcard:has(#stageblk:not([hidden])) #players .vs { padding: 14px 0 0; display: flex; flex-direction: column; align-items: center; gap: 3px;
-    color: #fff; font-weight: 700; flex: none; }
+    color: #fff; font-weight: 700; flex: none; font-size: 9.5px; }
   #matchcard:has(#stageblk:not([hidden])) #players #watching { margin: 0; }
   body.live .replayonly { display: none !important; }
   body:not(.live) .liveonly { display: none !important; }
@@ -192,25 +197,28 @@
                 counter-increment: q; font-size: 12px; }
   #plitems li::before { content: counter(q); color: var(--faint); font-size: 10.5px; min-width: 1.4em; font-variant-numeric: tabular-nums; }
   #plitems li:hover { background: #ffffff0c; }
-  .livebtn { font-weight: 700; letter-spacing: .06em; padding: 2px 10px; border-radius: 999px; color: var(--faint); }
+  .livebtn { font-weight: 700; letter-spacing: .06em; padding: 3px 10px; line-height: 16px; font-size: 12px; border-radius: 999px; color: var(--faint); }
   .livebtn::before { content: '\25CF'; margin-right: 5px; font-size: 9px; vertical-align: 2px; }
   .livebtn.on { color: #fff; background: var(--accent); }
   #liveitems { margin: 0; padding: 0; list-style: none; max-height: 200px; overflow-y: auto; display: flex; flex-direction: column; gap: 2px; }
   #liveitems a { display: block; padding: 4px 8px; border-radius: 8px; color: inherit; text-decoration: none; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   #liveitems a:hover { background: #ffffff0c; }  #liveitems li.cur a { background: #e04a5a22; }
-  #liveitems a { display: flex; align-items: center; gap: 6px; }
+  /* one grid for every row: bullet, left half, vs, right half, the viewer badge's slot (kept when a row has none) */
+  #liveitems a { display: grid; grid-template-columns: 9px minmax(0, 1fr) 16px minmax(0, 1fr) 40px; align-items: center; gap: 6px; }
+  #liveitems .lvs { text-align: center; }  #liveitems .lview { justify-self: end; }  #liveitems .lview:empty { visibility: hidden; }
   #liveitems a::before { content: '\25CF'; color: var(--accent); font-size: 9px; flex: none; }
   #liveitems .side { display: flex; align-items: center; gap: 3px; min-width: 0; flex: 1 1 0; }  /* (equal halves: a long name scrolls in its own) */
   #liveitems .lico { width: 28px; height: 28px; flex: none; margin: -2px 0; }
   #liveitems .lmoon { width: 12px; height: 12px; flex: none; }
-  #liveitems .lnm { overflow: hidden; white-space: nowrap; min-width: 0; }
-  #liveitems .lnm .t { display: inline-block; }
-  #liveitems .lnm.mq .t { animation: lmq var(--dur) ease-in-out infinite alternate; }
+  /* a text longer than its room scrolls to its end and back (viewer.js marquee(): .mqx holding a .t) */
+  #liveitems .lnm, .mqx { overflow: hidden; white-space: nowrap; min-width: 0; }
+  #liveitems .lnm .t, .mqx .t { display: inline-block; }
+  #liveitems .lnm.mq .t, .mqx.mq .t { animation: lmq var(--dur) ease-in-out infinite alternate; }
   @keyframes lmq { 0%, 15% { transform: translateX(0); } 85%, 100% { transform: translateX(var(--d)); } }
-  @media (prefers-reduced-motion: reduce) { #liveitems .lnm.mq .t { animation: none; } #liveitems .lnm { text-overflow: ellipsis; } }
+  @media (prefers-reduced-motion: reduce) { #liveitems .lnm.mq .t, .mqx.mq .t { animation: none; } #liveitems .lnm, .mqx { text-overflow: ellipsis; } }
   #liveitems .lvs { font-size: 10px; color: var(--faint); letter-spacing: .08em; flex: none; }
   #liveitems .lview, #watching { display: inline-flex; align-items: center; gap: 3px; padding: 1px 6px; border-radius: 999px; flex: none;
-                                 background: #e04a5a26; color: #ff9aa5; font-size: 11px; font-weight: 600; letter-spacing: normal; line-height: 16px; }
+                                 background: #b8323f; color: #fff; text-shadow: none; font-size: 11px; font-weight: 600; letter-spacing: normal; line-height: 16px; }
   #watching:empty { display: none; }
   .i-eye { --m: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath d='M12 5C6.5 5 2.4 9.2 1 12c1.4 2.8 5.5 7 11 7s9.6-4.2 11-7c-1.4-2.8-5.5-7-11-7zm0 11.5a4.5 4.5 0 1 1 0-9 4.5 4.5 0 0 1 0 9zm0-2.2a2.3 2.3 0 1 0 0-4.6 2.3 2.3 0 0 0 0 4.6z'/%3E%3C/svg%3E"); }
   #players #watching { margin-left: 6px; vertical-align: 1px; }
@@ -240,9 +248,9 @@
   <div class="sec">
     <div id="matchcard">
     <div id="players" hidden>
-      <div class="pl"><canvas class="ico" width="64" height="64"></canvas><div class="who"><span class="nm"></span><span class="ch"><canvas class="moon" width="56" height="56"></canvas><span></span></span></div></div>
+      <div class="pl"><canvas class="ico" width="64" height="64"></canvas><div class="who"><span class="nm mqx"><span class="t"></span></span><span class="ch"><canvas class="moon" width="56" height="56"></canvas><span class="mqx"><span class="t"></span></span></span></div></div>
       <div class="vs">VS <span id="watching"></span></div>
-      <div class="pl"><canvas class="ico" width="64" height="64"></canvas><div class="who"><span class="nm"></span><span class="ch"><canvas class="moon" width="56" height="56"></canvas><span></span></span></div></div>
+      <div class="pl"><canvas class="ico" width="64" height="64"></canvas><div class="who"><span class="nm mqx"><span class="t"></span></span><span class="ch"><canvas class="moon" width="56" height="56"></canvas><span class="mqx"><span class="t"></span></span></span></div></div>
     </div>
     <div id="stageblk" hidden><img class="view" alt=""><img class="name" alt=""><div class="trk" id="trk"></div></div>
     </div>
@@ -340,6 +348,6 @@
 </div>
 <script src="mbaa.js?v=80030ae75f69"></script>
 <script src="bgm_stream.js?v=407ac29e5c89"></script>
-<script src="viewer.js?v=951684f561a4"></script>
+<script src="viewer.js?v=564fcea66fac"></script>
 </body>
 </html>

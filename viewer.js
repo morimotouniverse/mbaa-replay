@@ -1286,11 +1286,12 @@ function playersShow(s) {
       plCells[p] = iconCell(c);
       drawMoon(row.querySelector('.moon'), m);
       const moon = m >= 0 && m <= 2 ? MOON_NAME[m] : m === 9 ? 'Eclipse' : '';  // (9: the bosses' moon)
-      row.querySelector('.nm').textContent = names[p] || CHARA[c] || `Player ${p + 1}`;
-      row.querySelector('.ch span').textContent = names[p] ? `${moon} ${CHARA[c] || ''}`.trim() : moon;
+      row.querySelector('.nm .t').textContent = names[p] || CHARA[c] || `Player ${p + 1}`;
+      row.querySelector('.ch .t').textContent = names[p] ? `${moon} ${CHARA[c] || ''}`.trim() : moon;
     });
     box.hidden = false;
     document.getElementById('title').hidden = true;
+    requestAnimationFrame(() => marquee(box));
   }
 }
 // the cursor frames' loop over the icons, at the select screen's rate (CharaSelectIcons_Update, CE 0x48BAB0: the next of
@@ -1389,12 +1390,23 @@ async function stageShow(s) {
     img.dataset.src = d ? URL.createObjectURL(new Blob([d], { type: 'image/png' })) : '';
     img.src = img.dataset.src; img.hidden = !d;
   }
+  if (box.hidden) requestAnimationFrame(() => marquee(document.getElementById('players')));  // (the card's layout: measured again)
   box.hidden = false;
 }
 setInterval(() => {
   stageShow(session).catch(() => {});
   playersArt().then(() => playersShow(session)).catch(() => {});
 }, 500);
+// a text longer than its room (sel: boxes holding a .t) scrolls to its end and back, at ~25 px/s, resting at both ends
+function marquee(root, sel = '.mqx') {
+  for (const nm of root.querySelectorAll(sel)) {
+    const over = nm.firstChild.scrollWidth - nm.clientWidth;
+    nm.classList.toggle('mq', over > 2);
+    if (over <= 2) continue;
+    nm.style.setProperty('--d', `${-over}px`);
+    nm.style.setProperty('--dur', `${(over / 25 / 0.7 + 0.5).toFixed(1)}s`);
+  }
+}
 // the watched match's viewer count (the live list's, every 15 s), on the players panel's VS line
 function liveWatching(n) {
   const e = document.getElementById('watching');
@@ -1411,8 +1423,20 @@ async function liveListShow() {
   try { await playersArt(); } catch (e) {}
   sec.hidden = !l.length;
   const el = (tag, cls, txt) => { const e = document.createElement(tag); if (cls) e.className = cls; if (txt != null) e.textContent = txt; return e; };
+  // a row whose players haven't changed is kept as it is (a rebuild would restart its names' scrolling mid-way)
+  const old = new Map([...ol.children].map(li => [li.dataset.key, li]));
+  const badge = (v, n) => { v.title = n ? `${n} watching` : ''; v.replaceChildren(...(n ? [el('i', 'i i-eye'), String(n)] : [])); };
   ol.replaceChildren(...l.map(m => {
-    const li = document.createElement('li'), a = document.createElement('a');
+    const key = JSON.stringify([m.id, m.names, m.chara, m.moon, !!plArt]);
+    let li = old.get(key);
+    if (li) {
+      badge(li.querySelector('.lview'), m.viewers);
+      li.className = liveSrc && liveSrc.id === m.id ? 'cur' : '';
+      if (li.className) liveWatching(m.viewers);
+      return li;
+    }
+    li = document.createElement('li'); li.dataset.key = key;
+    const a = document.createElement('a');
     // (the page's <base> is the site root on the live path: a bare ?live= would leave it)
     a.href = `${location.pathname}?live=${m.id}` + (Q.get('liveUrl') ? `&liveUrl=${encodeURIComponent(Q.get('liveUrl'))}` : '');
     const names = (m.names || []).map(n => (n || '').trim());
@@ -1430,26 +1454,14 @@ async function liveListShow() {
       sp.title = `${mo === 9 ? 'Eclipse' : MOON_NAME[mo] || ''} ${CHARA[c] || ''}`.trim();
       return sp;
     };
-    a.append(side(0), el('span', 'lvs', 'vs'), side(1));
-    if (m.viewers) {
-      const v = el('span', 'lview');
-      v.title = `${m.viewers} watching`;
-      v.append(el('i', 'i i-eye'), String(m.viewers));
-      a.append(v);
-    }
+    const v = el('span', 'lview'); badge(v, m.viewers);
+    a.append(side(0), el('span', 'lvs', 'vs'), side(1), v);
     if (liveSrc && liveSrc.id === m.id) { li.className = 'cur'; liveWatching(m.viewers); }
     li.append(a);
     return li;
   }));
   if (!l.some(m => liveSrc && liveSrc.id === m.id)) liveWatching(0);
-  // a name longer than its room scrolls to its end and back (a marquee), at ~25 px/s, resting at both ends
-  for (const nm of ol.querySelectorAll('.lnm')) {
-    const over = nm.firstChild.scrollWidth - nm.clientWidth;
-    if (over <= 2) continue;
-    nm.classList.add('mq');
-    nm.style.setProperty('--d', `${-over}px`);
-    nm.style.setProperty('--dur', `${(over / 25 / 0.7 + 0.5).toFixed(1)}s`);
-  }
+  marquee(ol, '.lnm:not(.mq)');
   setTimeout(liveListShow, 15000);
 }
 // the received records by index (each the longest so far), kept outside the game's memory: a seek's keyframe restore
@@ -2734,6 +2746,7 @@ function fitStage() {
   if (stage) stage.dataset.scale = label;
 }
 addEventListener('resize', fitStage);
+addEventListener('resize', () => marquee(document.getElementById('players')));
 document.addEventListener('fullscreenchange', () => setFs(document.fullscreenElement === document.querySelector('.stage')));
 // Fullscreen: the stage (the Fullscreen API; a phone also turns to landscape), or where there is none for a page element
 // (iPhone) the stage over the whole window. The timeline and transport move into it as a bar over the picture's bottom,
