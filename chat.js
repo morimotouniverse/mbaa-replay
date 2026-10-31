@@ -716,7 +716,8 @@
     'multi-prefix', 'sasl', 'account-tag'];
   // a signed-in sender's name: "<Name>-0042" (+ a letter on a clash) -> "Name#0042"; +mbaa/name's exact display name
   // when it maps to that nick (chat_auth.py safe())
-  const safeName = n => String(n).replace(/[^A-Za-z0-9_]/g, '_').replace(/^_+|_+$/g, '').slice(0, 19) || 'user';
+  // (as the auth-script's safe(): ASCII letters, digits, _ and accented Latin letters; anything else _)
+  const safeName = n => String(n).normalize('NFC').replace(/[^A-Za-z0-9_\u00C0-\u00D6\u00D8-\u00F6\u00F8-\u024F]/g, '_').replace(/^_+|_+$/g, '').slice(0, 19) || 'user';
   function shownNick(nick, account, tagName) {
     const mm = account && key(account) === key(nick) ? /^(.+)-(\d{4})[a-z]?$/.exec(nick) : null;
     if (!mm) return nick;
