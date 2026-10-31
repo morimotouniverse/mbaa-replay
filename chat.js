@@ -9,7 +9,7 @@
 // Profile: nick, colour, character and moon (the select screen's icon), kept in localStorage and sent with every
 // message as client tags (+mbaa/color, +mbaa/chara, +mbaa/moon); plain IRC clients ignore them. The panel shows each
 // line with the sender's icon and colour; the overlay (Nico Nico style, toggle "on picture") sends each new line of the
-// shown channel across the game picture, right to left in ~6 s, on a free row.
+// shown channel across the game picture, right to left in ~6 s, on a free row, as text in the sender's colour.
 (() => {
   'use strict';
   const api = window.mbaaChatApi;
@@ -112,7 +112,6 @@
   .stage.fs #chatover { inset: auto; width: var(--w); height: auto; aspect-ratio: 4 / 3; }
   #chatover .dm { position: absolute; left: 0; top: 0; white-space: nowrap; font-weight: 700; display: flex; align-items: center; gap: .25em;
                   will-change: transform; text-shadow: 0 0 2px #000, 0 0 2px #000, 1px 1px 0 #000, -1px -1px 0 #000, 1px -1px 0 #000, -1px 1px 0 #000; }
-  #chatover .dm canvas { height: 1.3em; width: 1.3em; filter: drop-shadow(0 0 1px #000); }
   `;
   document.head.append(css);
 
@@ -251,7 +250,7 @@
     el.className = 'dm';
     el.style.color = readable(l.color);
     el.style.fontSize = `${Math.max(12, Math.round(rh * 0.62))}px`;
-    el.append(iconCanvas('', 48, l.chara, l.moon), document.createTextNode(l.action ? `${l.nick} ${l.text}` : l.text));
+    el.textContent = l.action ? `${l.nick} ${l.text}` : l.text;  // (text only, as on Nico Nico: the icon is the panel's)
     el.style.transform = `translateX(${W}px)`;
     over.append(el);
     const w = el.offsetWidth, now = performance.now();
