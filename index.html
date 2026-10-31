@@ -43,8 +43,21 @@
   .stage.fs.idle .fsbar { opacity: 0; pointer-events: none; }
   .stage.fs.idle { cursor: none; }
   .fsbar .transport button { min-width: 44px; min-height: 40px; }
-  .fsonly { display: none !important; }
-  .fsbar .fsonly { display: inline-flex !important; }
+  /* landscape fullscreen (.sidebar: the room beside the 4:3 picture): the controls in a column there, always shown */
+  .stage.fs.sidebar { gap: 12px; }
+  .stage.fs.sidebar .fsbar { position: static; flex: 0 1 340px; min-width: 200px; background: none; padding: 8px max(8px, env(safe-area-inset-right)) 8px 0; }
+  .stage.fs.sidebar.idle .fsbar { opacity: 1; pointer-events: auto; }
+  .stage.fs.sidebar.idle { cursor: auto; }
+  .stage.fs.sidebar .transport { flex-wrap: wrap; }
+  .stage.fs.sidebar .transport button { min-width: 36px; padding-left: 2px; padding-right: 2px; }
+  /* the transport's fullscreen button: phones (beside frame step), and in fullscreen (as leave) */
+  .mobfs { display: none !important; }
+  .fsbar .mobfs { display: inline-flex !important; }
+  .mobfs .fs-out, .fs .mobfs .fs-in { display: none; }
+  .fs .mobfs .fs-out { display: inline-block; }
+  @media (pointer: coarse) { .mobfs { display: inline-flex !important; } }
+  /* an upright phone: the transport right under the picture, before the players and the rest */
+  @media (max-width: 720px) { body:not(.side) #transportsec { order: -1; } }
   #overlay { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; }
   /* while a match loads: the game's opening movie (muted) over the black picture */
   #loadvid { position: absolute; left: 0; top: 0; width: 100%; aspect-ratio: 4 / 3; object-fit: cover; background: #000; pointer-events: none; }
@@ -223,7 +236,7 @@
       <button id="fwd1" title="forward one frame (.)"><i class="i i-play"></i></button>
       <button id="fwd5" title="forward 5 s (Shift+Right)"><i class="i i-ffwd"></i></button>
       <button id="nextr" title="next round (])"><i class="i i-next"></i></button>
-      <button id="fsx" class="fsonly" title="leave fullscreen (F)"><i class="i i-x"></i></button>
+      <button id="fsx" class="mobfs" title="fullscreen (F)"><i class="i i-full fs-in"></i><i class="i i-x fs-out"></i></button>
     </div>
   </div>
   <div class="sec">
@@ -303,6 +316,6 @@
 </div>
 <script src="mbaa.js?v=80030ae75f69"></script>
 <script src="bgm_stream.js?v=407ac29e5c89"></script>
-<script src="viewer.js?v=33dfc157e64c"></script>
+<script src="viewer.js?v=4353e7b4bb44"></script>
 </body>
 </html>

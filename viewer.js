@@ -2041,11 +2041,15 @@ function controls() {
   stageEl.addEventListener('pointermove', e => { if (stageEl.classList.contains('fs') && e.pointerType === 'mouse') fsWake(); });
   stageEl.addEventListener('pointerdown', e => {
     if (e.target.closest('.fsbar')) { fsWake(); return; }  // (the bar's own controls)
-    if (stageEl.classList.contains('fs')) {
-      const hidden = stageEl.classList.contains('idle');
-      fsWake();
-      if (hidden && e.pointerType !== 'mouse') return;  // a tap on a phone shows the bar first
+    // touch: outside fullscreen a tap goes fullscreen; in it, a tap shows / hides the controls over the picture (beside
+    // it they stay); pause is a button. A mouse click pauses / plays, as always.
+    if (e.pointerType !== 'mouse') {
+      if (!stageEl.classList.contains('fs')) { toggleFullscreen(); return; }
+      if (stageEl.classList.contains('sidebar')) return;
+      if (stageEl.classList.contains('idle')) fsWake(); else { clearTimeout(fsTimer); stageEl.classList.add('idle'); }
+      return;
     }
+    if (stageEl.classList.contains('fs')) fsWake();
     if (e.button > 0 || !session) return;
     if (actx && actx.state !== 'running') return;  // this click only turns sound on (the page-wide unlock handles it)
     togglePlay();
@@ -2667,11 +2671,16 @@ function stopRecording(save) {
 let scaleMode = 'auto';
 try { scaleMode = localStorage.getItem('mbaaScale') || 'auto'; } catch (e) {}
 const SIDE_W = 320 + 16;  // the controls panel beside the picture, with its gap
+const FS_SIDE = 212;  // fullscreen: the least room beside the picture for the controls column (with its gap)
 function fitStage() {
   const dpr = window.devicePixelRatio || 1, stage = document.querySelector('.stage'), ctl = document.getElementById('controls');
   const full = !!stage && stage.classList.contains('fs');
-  const W = full ? window.innerWidth : document.documentElement.clientWidth - 32;
+  const Wwin = full ? window.innerWidth : document.documentElement.clientWidth - 32;
   const H = full ? window.innerHeight : window.innerHeight - 16;
+  // fullscreen with FS_SIDE or more beside the full-height picture (landscape): the controls go there (.sidebar)
+  const sidebar = full && Wwin - H * 4 / 3 >= FS_SIDE;
+  if (stage) stage.classList.toggle('sidebar', sidebar);
+  const W = sidebar ? Wwin - FS_SIDE : Wwin;
   // controls below the picture take their stacked height; beside it, SIDE_W of width. Pick the layout with the larger picture.
   document.body.classList.remove('side');
   const below = full ? 0 : (ctl ? ctl.offsetHeight + 8 : 0);
