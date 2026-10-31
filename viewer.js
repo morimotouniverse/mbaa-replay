@@ -1446,9 +1446,9 @@ function liveLoaderGate(s) {
     .catch(e => { console.warn('live: game files:', e); status(`live: the game's files did not load (${e.message})`); });
   return false;
 }
-// Live: the players' names on the game's versus banner, instead of CHALLENGER (the streak after them: "NAME  2 WINS"):
-// drawn by the game in its ASCII font (viewer_banner_name: main_browser.cpp banner_text, a marquee when long); a name
-// with other characters, by the page at the banner's place (#banner0 / #banner1)
+// Live: the players' names on the game's versus banner, instead of CHALLENGER (the streak above them, smaller): drawn
+// by the game in its ASCII font (viewer_banner_name: main_browser.cpp banner_draw, a marquee past 20 characters); a
+// name with other characters, by the page at the banner's place (#banner0 / #banner1; the streak stays the game's)
 const STREAK = [0x76FC14, 0x770EB4];  // g_P1ConsecutiveWinStreak, g_P2ConsecutiveWinStreak (the player records', +0x4A0)
 const asciiName = n => /^[\x20-\x7e]*$/.test(n);
 function liveBanner(s) {
@@ -1464,14 +1464,13 @@ function liveBanner(s) {
     const el = document.getElementById(`banner${p}`), n = names[p] || '';
     const y = ui.names && n && !asciiName(n) ? call(s, 'viewer_banner_y', p) : -1000;
     if (y <= -1000) { el.hidden = true; continue; }
-    const k = call(s, 'viewer_banner_streak', p), text = n + (k === 1 ? '  1 WIN' : k > 1 ? `  ${k} WINS` : '');
     const span = el.firstChild;
-    if (span.textContent !== text) span.textContent = text;
-    // the game's banner: centred on x 168 / 470, 16 px high from y; at most 12 characters of 12 px (kBannerMax)
+    if (span.textContent !== n) span.textContent = n;
+    // the game's banner: centred on x 168 / 470, 16 px high from y; 20 characters of 10 px (kNameMax, kNameStep)
     el.style.setProperty('--bs', sc.toFixed(3));
-    Object.assign(el.style, { left: `${(p ? 470 : 168) * sc}px`, top: `${(y + 2) * sc}px`, width: `${144 * sc}px`, textAlign: 'center' });
+    Object.assign(el.style, { left: `${(p ? 470 : 168) * sc}px`, top: `${(y + 2) * sc}px`, width: `${200 * sc}px`, textAlign: 'center' });
     el.hidden = false;
-    el.classList.toggle('scroll', span.offsetWidth > 144 * sc);
+    el.classList.toggle('scroll', span.offsetWidth > 200 * sc);
   }
 }
 // The players' win streaks, as the game's own (the banner's "N WINS"; ResultMenu_UpdatePlayerStats counts them on):
