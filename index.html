@@ -17,7 +17,8 @@
 <meta name="twitter:title" content="MBAACC Replay Viewer">
 <meta name="twitter:description" content="Watch Melty Blood Actress Again Current Code replays in your browser, frame-exact.">
 <meta name="twitter:image" content="https://web.meltyblood.org/preview.png">
-<meta name="mbaa-manifest" content="aec1c69c2f9d">
+<meta name="mbaa-manifest" content="c7d5223cc952">
+<meta name="mbaa-chatjs" content="chat.js?v=3b7335c4c80c">
 <link rel="manifest" href="site.webmanifest">
 <link rel="icon" href="icon-192.png">
 <link rel="apple-touch-icon" href="icon-192.png">
@@ -37,7 +38,7 @@
   .stage.fs { background: #000; display: flex; align-items: center; justify-content: center; width: 100%; height: 100%; }
   .stage.fs:not(:fullscreen) { position: fixed; inset: 0; z-index: 100; height: 100dvh; }
   .stage.fs canvas#canvas { width: var(--w); box-shadow: none; }
-  .stage.fs #overlay { inset: auto; width: var(--w); height: auto; aspect-ratio: 4 / 3; }
+  .stage.fs #overlay { width: var(--w); height: auto; aspect-ratio: 4 / 3; }  /* (left / top: the picture's, viewer.js drawOverlay) */
   .fsbar { position: absolute; left: 0; right: 0; bottom: 0; padding: 18px max(12px, env(safe-area-inset-right)) max(10px, env(safe-area-inset-bottom)) max(12px, env(safe-area-inset-left));
            background: linear-gradient(transparent, #000d 40%); transition: opacity .25s; }
   .stage.fs.idle .fsbar { opacity: 0; pointer-events: none; }
@@ -58,7 +59,7 @@
   @media (pointer: coarse) { .mobfs { display: inline-flex !important; } }
   /* an upright phone: the transport right under the picture, before the players and the rest */
   @media (max-width: 720px) { body:not(.side) #transportsec { order: -1; } }
-  #overlay { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; }
+  #overlay { position: absolute; left: 0; top: 0; width: 100%; height: 100%; pointer-events: none; }
   /* while a match loads: the game's opening movie (muted) over the black picture */
   #loadvid { position: absolute; left: 0; top: 0; width: 100%; aspect-ratio: 4 / 3; object-fit: cover; background: #000; pointer-events: none; }
   #loadvid[hidden] { display: none; }
@@ -359,8 +360,8 @@
   </div>
 </div>
 </div>
-<script src="mbaa.js?v=c8f34a786195"></script>
+<script src="mbaa.js?v=b426ec4703e2"></script>
 <script src="bgm_stream.js?v=407ac29e5c89"></script>
-<script src="viewer.js?v=280d322cbb1b"></script>
+<script src="viewer.js?v=46a4ceeb5ce2"></script>
 </body>
 </html>

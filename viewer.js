@@ -1146,7 +1146,7 @@ function restore(s, kf) {
   }
   // the restored state-hash / audio row buffers hold the keyframe's leftovers
   if (HASH) { M.ccall('viewer_hash_take', 'string', [], []); M.ccall('viewer_audio_take', 'string', [], []); }
-  radioStageSync(s);  // (the keyframe's Raito Radio stage picture state: the pick's set again)
+  radioStageSync(s);  // (the keyframe's Raito Radio stage state: the pick's sent again)
 }
 // Seek to frame T (the state after T steps; the picture is frame T's). Coalesced: while a seek runs only the latest
 // request waits, the ones in between are dropped (dragging the slider, holding the step key).
@@ -1397,8 +1397,9 @@ requestAnimationFrame(playersAnimate);
 // radio_bundle.py web/radio/*): the stage's select-screen preview and name plate, and the title of the music playing;
 // the radio's pick replaces the match's music (replays and live) until it is set back to the match's. Its game bar
 // switches the track list between MBAACC and the older games (Act Cadenza, Re-ACT, Melty Blood: their list, tracks and
-// stage pictures fetched only when picked); an older game's stage track also shows that game's stage behind the fight
-// (web/host/radio_stage.cpp, presentation only). Each tile links Raito's own upload of the song where there is one.
+// stage files fetched only when picked); an older game's stage track also runs that game's own stage file in the
+// game's background engine in place of the match's stage (web/host/radio_stage.cpp; the fight is untouched). Each
+// tile links Raito's own upload of the song where there is one.
 let stagePanel = null, stageKey = '', radio = null, oldRadio = null, radioGame = 'aacc';
 const RADIO_GAMES = [['aacc', 'MBAACC'], ['ac', 'Act Cadenza'], ['re', 'Re-ACT'], ['mb', 'Melty Blood']];
 const trackOf = path => (path || '').replace(/^.*\//, '').replace(/\.\w+$/, '');
@@ -1500,8 +1501,8 @@ function radioTrack(f) {
     return t && { title: t.title, key: `bgm/${f}.opus`, fetch: withSiblings(man, [`bgm/${f}.ogg`]), loopPos: t.loopPos };
   }
   const t = oldRadio && oldRadio.byKey[f];
-  return t && { title: t.title, key: t.f, fetch: [t.f, ...(t.pic ? [t.pic, t.tile] : [])], loopPos: t.loopPos,
-                pic: t.pic, tile: t.tile, stageName: t.stageName,
+  return t && { title: t.title, key: t.f, fetch: [t.f, ...(t.dat ? [t.dat] : []), ...(t.tile ? [t.tile] : [])], loopPos: t.loopPos,
+                dat: t.dat, lights: t.lights || [], tile: t.tile, stageName: t.stageName,
                 game: (RADIO_GAMES.find(([g]) => g === t.game) || [])[1] };
 }
 let radioPick = '';
@@ -1511,53 +1512,53 @@ async function radioSet(f) {
   for (const b of document.querySelectorAll('#radiogrid .tile')) b.classList.toggle('on', b.dataset.f === f);
   document.getElementById('radiotog').textContent = `♪ ${t ? t.title : 'match music'}`;
   if (t) await fetchAll(man, t.fetch, '', true);
-  const pic = t && t.pic ? await radioPicture(t.pic) : null;
   if (radioPick !== f) return;  // (picked again meanwhile)
   radio = t ? { path: `/game/${t.key}`, loopPos: t.loopPos, file: f, title: t.title, tile: t.tile, stageName: t.stageName,
-                game: t.game, pic } : null;
+                game: t.game, dat: t.dat && cache.has(t.dat) ? t.dat : '', lights: t.lights } : null;
   if (session && session.radioChanged) session.radioChanged();
   stageKey = '';
   radioStageSync(session);
   if (ui.paused && session && session.tl) requestSeek(curFrame());  // (paused: the frame drawn again, with its stage)
 }
-// The stage picture: decoded once per picture into RGBA; put into the game's texture (B G R X rows) whenever what the
-// instance shows differs from the pick: a pick, a new match's instance, a keyframe restore (it puts back the
-// keyframe's picture state: checked every frame and after each restore)
-const radioPics = new Map();
-let radioPicIds = 0;
-async function radioPicture(path) {
-  if (radioPics.has(path)) return radioPics.get(path);
-  const d = cache.get(path);
-  if (!d) return null;
-  const bmp = await createImageBitmap(new Blob([d], { type: 'image/jpeg' }));
-  const cv = document.createElement('canvas');
-  cv.width = bmp.width; cv.height = bmp.height;
-  const c = cv.getContext('2d', { willReadFrequently: true });
-  c.drawImage(bmp, 0, 0);
-  const rgba = new Uint32Array(c.getImageData(0, 0, bmp.width, bmp.height).data.buffer);
-  const p = { id: ++radioPicIds, w: bmp.width, h: bmp.height, rgba };
-  radioPics.set(path, p);
-  return p;
+// The stage: the pick's stage file into MEMFS (sharing the fetched buffer; a stage file MBAACC also ships is bg/bgNN.dat,
+// whose MEMFS copy may be the 1-byte probe placeholder) and sent to the game, which swaps stages between frames. Sent
+// whenever the game's wanted stage differs from the pick: a pick, a new match's instance, a keyframe restore (it puts
+// back the keyframe's: checked every frame and after each restore). Back to the match's music: the game expands the
+// match's stage again, from its file, which low-memory mode may have dropped (put back first; the game waits for it).
+const radioDatIds = new Map();
+const radioDatId = p => radioDatIds.get(p) || (radioDatIds.set(p, radioDatIds.size + 1), radioDatIds.size);
+function radioPut(s, p) {
+  const d = cache.get(p), FS = s.M.FS;
+  if (!d) return false;
+  let n = -1;
+  try { n = FS.stat('/game/' + p).size; } catch (e) {}
+  if (n !== d.length) fsPut(FS, '/game/' + p, d);
+  if (s.freed) s.freed.delete(p);
+  return true;
+}
+let radioOwnFetch = null;
+function radioOwnStage(s) {  // the match's stage file back in MEMFS, if it was dropped
+  const M = s.M, idx = M.HEAP32[0x54CE90 >> 2];  // g_BGLoadedStageIndex -> g_StageListEntries[idx] (char*)
+  if (idx < 0 || idx >= 100 || radioOwnFetch) return;
+  const at = M.HEAP32[(0x74FC08 >> 2) + idx];
+  if (!at) return;
+  let name = '';
+  for (let i = at; M.HEAPU8[i] && name.length < 64; i++) name += String.fromCharCode(M.HEAPU8[i]);
+  const p = `bg/${name.toLowerCase()}.dat`;
+  let n = -1;
+  try { n = M.FS.stat('/game/' + p).size; } catch (e) {}
+  if (n > 1 || !man.files[p]) return;
+  radioOwnFetch = fetchAll(man, [p], '', true).then(() => { if (session === s) radioPut(s, p); }).finally(() => { radioOwnFetch = null; });
 }
 function radioStageSync(s) {
   const M = s && s.M;
   if (!M || !M._viewer_radio_stage_id || s.glLost) return;
-  const p = radio && radio.pic && !HASH ? radio.pic : null, want = p ? p.id : 0;
+  const st = radio && radio.dat && !HASH ? radio : null, want = st ? radioDatId(st.dat) : 0;
+  if (!st && M._viewer_radio_stage_in()) radioOwnStage(s);
   if (M._viewer_radio_stage_id() === want) return;
-  if (!p) { M._viewer_radio_stage_on(0); return; }
-  const ptr = M._viewer_radio_stage_buf(p.w, p.h), pitch = M._viewer_radio_stage_pitch();
-  if (!ptr || (ptr & 3) || (pitch & 3)) return;
-  const H = new Uint32Array(M.HEAPU8.buffer), src = p.rgba;
-  for (let y = 0; y < p.h; y++) {
-    const o = (ptr + y * pitch) >> 2, i = y * p.w;
-    for (let x = 0; x < p.w; x++) {
-      const v = src[i + x];  // R G B A (little-endian) -> B G R X
-      H[o + x] = ((v & 0xFF) << 16) | (v & 0xFF00) | ((v >>> 16) & 0xFF) | 0xFF000000;
-    }
-  }
-  const pl = (oldRadio && oldRadio.place) || {};
-  M._viewer_radio_stage_place(pl.x0 ?? -512, pl.y0 ?? -560, pl.scale ?? 1, pl.par ?? 0.5);
-  M._viewer_radio_stage_on(p.id);
+  if (st && !radioPut(s, st.dat)) return;
+  if (st) st.lights.forEach(([pos, power], i) => M._viewer_radio_stage_light(i, pos, power));
+  M.ccall('viewer_radio_stage_want', null, ['string', 'number', 'number'], [st ? st.dat : '', want, st ? st.lights.length : 0]);
 }
 requestAnimationFrame(function radioStageLoop() { try { radioStageSync(session); } catch (e) {} requestAnimationFrame(radioStageLoop); });
 async function stageShow(s) {
@@ -2158,6 +2159,14 @@ function stepBy(n, pause = true) {
   return requestSeek(curFrame() + n);
 }
 window.__mbaaSession = () => session;  // tests
+// live chat (web/shell/chat.js), only on the chat page: the Worker adds <meta name="mbaa-chat"> to it (a local test page:
+// ?chat=1 on 127.0.0.1 / localhost); chat.js draws its icons with the player block's art and follows the watched match
+window.mbaaChatApi = { art: playersArt, iconCell, chara: CHARA, liveId: () => session && session.liveSrc ? session.liveSrc.id : null };
+if (document.querySelector('meta[name="mbaa-chat"]') || (/^(127\.0\.0\.1|localhost)$/.test(location.hostname) && Q.has('chat'))) {
+  const el = document.createElement('script');
+  el.src = (document.querySelector('meta[name="mbaa-chatjs"]') || { content: 'chat.js' }).content;
+  document.body.append(el);
+}
 window.mbaaViewer = { startItem: i => startItem(i), seek: requestSeek, step: stepBy, pause: setPaused, frame: () => session.M._viewer_frame(),
                       tl: () => session.tl, ui, pl, cacheSize: () => cache.size, cacheMap: () => cache, phone: PHONE, lowmem: LOWMEM, bgmStream: () => bgmStreamReady, audioState: () => [actx && actx.state, session && session.mute, session && session.bgmLog && session.bgmLog.length, ui.paused], bgmMap: () => bgmDecoded, clip: () => session && session.clip,
                       stats: () => { const t = session.tl; return { kfs: t.kfs.length, kfFrames: t.kfs.map(k => k.frame),
@@ -2181,6 +2190,10 @@ const DRAW_ORDER = [0, 6, 5, 1, 4, 3, 2];
 const ARROW = ['·', '↙', '↓', '↘', '←', '·', '→', '↖', '↑', '↗'];
 function drawOverlay() {
   const c = document.getElementById('overlay'), gc = document.getElementById('canvas');
+  // (exactly over the picture: in fullscreen the picture is not where a centred overlay would be once the controls
+  // column sits beside it)
+  const L = `${gc.offsetLeft}px`, T = `${gc.offsetTop}px`;
+  if (c.style.left !== L || c.style.top !== T) { c.style.left = L; c.style.top = T; }
   const dpr = window.devicePixelRatio || 1, w = Math.round(gc.clientWidth * dpr), h = Math.round(gc.clientHeight * dpr);
   if (c.width !== w || c.height !== h) { c.width = w; c.height = h; }
   const g = c.getContext('2d');
@@ -2268,12 +2281,33 @@ function drawMarks(t, max) {
   g.fillStyle = '#2c3350';
   g.fillRect(0, 0, cv.width * Math.min(1, t.simMax / max), cv.height);
   if (c) { g.fillStyle = 'rgba(80, 200, 255, 0.45)'; g.fillRect(cv.width * c.a / max, 0, Math.max(2, cv.width * (c.b - c.a) / max), cv.height); }
-  g.fillStyle = '#ffcc40'; g.font = `${Math.round(10 * dpr)}px system-ui, sans-serif`; g.textBaseline = 'top';
-  for (const [f, r] of t.marks) {
-    const x = Math.round(cv.width * f / max);
-    g.fillRect(x, 0, Math.max(1, dpr), cv.height);
-    g.fillText(`R${r + 1}`, x + 2 * dpr, 0);
+  // A live session (or any replay with several games) as games: a game starts at each round 1, every other game a
+  // lighter band, its number (G2, G3, ...) at its start; rounds as short ticks, labelled only where the label fits
+  // before the next mark (a long session's "R1 R2 R3 R1 R2 ..." ran together)
+  const xs = t.marks.map(([f]) => Math.round(cv.width * f / max)), H = cv.height, room = 22 * dpr;
+  const starts = t.marks.map(([, r], i) => r === 0 || i === 0);
+  const games = starts.filter(Boolean).length;
+  g.font = `${Math.round(10 * dpr)}px system-ui, sans-serif`; g.textBaseline = 'top';
+  if (games > 1) {
+    let n = 0;
+    t.marks.forEach(([f], i) => {
+      if (!starts[i]) return;
+      n++;
+      const x = i === 0 ? 0 : xs[i], end = xs.find((x2, j) => j > i && starts[j]) ?? Math.round(cv.width * Math.min(1, t.simMax / max));
+      if (n % 2 === 0) { g.fillStyle = 'rgba(255, 255, 255, 0.07)'; g.fillRect(x, 0, Math.max(0, end - x), H); }
+      g.fillStyle = '#ffe9a8';
+      g.fillRect(xs[i], 0, Math.max(1, 1.5 * dpr), H);
+      if (end - x >= room) { g.font = `600 ${Math.round(10 * dpr)}px system-ui, sans-serif`; g.fillText(`G${n}`, xs[i] + 3 * dpr, 1 * dpr); }
+    });
   }
+  g.font = `${Math.round(9 * dpr)}px system-ui, sans-serif`;
+  t.marks.forEach(([f, r], i) => {
+    if (games > 1 && starts[i]) return;
+    g.fillStyle = '#ffcc40';
+    g.fillRect(xs[i], games > 1 ? H * 0.45 : 0, Math.max(1, dpr), games > 1 ? H * 0.55 : H);
+    const next = i + 1 < xs.length ? xs[i + 1] : cv.width;
+    if (next - xs[i] >= room) g.fillText(`R${r + 1}`, xs[i] + 2 * dpr, games > 1 ? H * 0.42 : 0);
+  });
 }
 function controls() {
   const seek = document.getElementById('seek');
@@ -2940,6 +2974,7 @@ try { scaleMode = localStorage.getItem('mbaaScale') || 'auto'; } catch (e) {}
 const SIDE_W = 320 + 16;  // the controls panel beside the picture, with its gap
 const FS_SIDE = 212;  // fullscreen: the least room beside the picture for the controls column (with its gap)
 function fitStage() {
+  overlayDirty = true;  // (the picture moved or changed size: the overlay drawn again over it)
   const dpr = window.devicePixelRatio || 1, stage = document.querySelector('.stage'), ctl = document.getElementById('controls');
   const full = !!stage && stage.classList.contains('fs');
   const Wwin = full ? window.innerWidth : document.documentElement.clientWidth - 32;
