@@ -2194,7 +2194,13 @@ function stepBy(n, pause = true) {
 window.__mbaaSession = () => session;  // tests
 // live chat (web/shell/chat.js), only on the chat page: the Worker adds <meta name="mbaa-chat"> to it (a local test page:
 // ?chat=1 on 127.0.0.1 / localhost); chat.js draws its icons with the player block's art and follows the watched match
-window.mbaaChatApi = { art: playersArt, iconCell, chara: CHARA, liveId: () => session && session.liveSrc ? session.liveSrc.id : null };
+window.mbaaChatApi = { art: playersArt, iconCell, chara: CHARA, liveId: () => session && session.liveSrc ? session.liveSrc.id : null,
+  // the watched live match for chat.js's per-match channel and comment timeline: the list entry (id, match key), the feed's
+  // base, following live or not, the records fed (index -> .ccs record) and the stream frames still ahead of the picture
+  // (ahead null: not fed yet, or mid-seek; null: no live match)
+  live: () => { const s = session, L = s && s.liveSrc;
+    return L && s.M ? { info: L.info, base: LIVE, follow: !!s.liveFollow, recs: L.recs || null,
+                        ahead: L.recs && !s.seeking ? call(s, 'viewer_spectate_buffered') : null } : null; } };
 if (document.querySelector('meta[name="mbaa-chat"]') || (/^(127\.0\.0\.1|localhost)$/.test(location.hostname) && Q.has('chat'))) {
   const el = document.createElement('script');
   el.src = (document.querySelector('meta[name="mbaa-chatjs"]') || { content: 'chat.js' }).content;
