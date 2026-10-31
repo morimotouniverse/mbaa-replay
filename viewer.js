@@ -2019,7 +2019,7 @@ function controls() {
   const sc = document.getElementById('scale');
   sc.value = scaleMode;
   sc.onchange = () => { scaleMode = sc.value; try { localStorage.setItem('mbaaScale', scaleMode); } catch (e) {} fitStage(); sc.blur(); };
-  btn('full', toggleFullscreen);
+  btn('full', toggleFullscreen); btn('fsx', toggleFullscreen);
   document.getElementById('marks').addEventListener('click', e => {
     const s = session;
     if (!s || !s.tl) return;
@@ -2037,7 +2037,15 @@ function controls() {
   btn('plclear', () => { const cur = pl.items[pl.i]; pl.items = cur ? [cur] : []; pl.i = cur ? 0 : -1; renderPlaylist(); });
   // a click / tap on the picture: during the VS screen it skips it (as a button press does in the game), otherwise
   // it pauses / plays
-  document.getElementById('overlay').parentElement.addEventListener('pointerdown', e => {
+  const stageEl = document.getElementById('overlay').parentElement;
+  stageEl.addEventListener('pointermove', e => { if (stageEl.classList.contains('fs') && e.pointerType === 'mouse') fsWake(); });
+  stageEl.addEventListener('pointerdown', e => {
+    if (e.target.closest('.fsbar')) { fsWake(); return; }  // (the bar's own controls)
+    if (stageEl.classList.contains('fs')) {
+      const hidden = stageEl.classList.contains('idle');
+      fsWake();
+      if (hidden && e.pointerType !== 'mouse') return;  // a tap on a phone shows the bar first
+    }
     if (e.button > 0 || !session) return;
     if (actx && actx.state !== 'running') return;  // this click only turns sound on (the page-wide unlock handles it)
     togglePlay();
@@ -2096,7 +2104,7 @@ function controls() {
     else if (k === ']' || k === 'PageDown') jumpRound(1);
     else if (k === '{') setClip('a');
     else if (k === '}') setClip('b');
-    else if (k === 'Escape') { if (fx) fx.cancel = true; else if (rec) stopRecording(false); else if (!document.getElementById('help').hidden) toggleHelp(); else clearClip(); }
+    else if (k === 'Escape') { if (fx) fx.cancel = true; else if (rec) stopRecording(false); else if (!document.getElementById('help').hidden) toggleHelp(); else if (!document.fullscreenElement && document.querySelector('.stage.fs')) setFs(false); else clearClip(); }
     else if (k === 'l' || k === 'L') toggleLoop();
     else if (k === 'e' || k === 'E') exportVideo();
     else if (k === 'm' || k === 'M') toggleMute();
@@ -2661,9 +2669,9 @@ try { scaleMode = localStorage.getItem('mbaaScale') || 'auto'; } catch (e) {}
 const SIDE_W = 320 + 16;  // the controls panel beside the picture, with its gap
 function fitStage() {
   const dpr = window.devicePixelRatio || 1, stage = document.querySelector('.stage'), ctl = document.getElementById('controls');
-  const full = document.fullscreenElement === stage;
-  const W = full ? screen.width : document.documentElement.clientWidth - 32;
-  const H = full ? screen.height : window.innerHeight - 16;
+  const full = !!stage && stage.classList.contains('fs');
+  const W = full ? window.innerWidth : document.documentElement.clientWidth - 32;
+  const H = full ? window.innerHeight : window.innerHeight - 16;
   // controls below the picture take their stacked height; beside it, SIDE_W of width. Pick the layout with the larger picture.
   document.body.classList.remove('side');
   const below = full ? 0 : (ctl ? ctl.offsetHeight + 8 : 0);
@@ -2677,17 +2685,61 @@ function fitStage() {
   else {
     // high-density screens (phones): a game pixel is already 2+ device pixels, uneven rows are invisible there, and a
     // whole multiple would leave a small picture: fit the width instead
-    const k = dpr >= 2 && !full ? 0 : side ? kSide : kBelow;
-    w = k >= 1 ? 640 * k / dpr : Math.min(W, 960); label = k >= 1 ? `${k}x` : 'fit';
+    // (fullscreen on such a screen: the whole screen, as large as it fits)
+    const k = dpr >= 2 ? 0 : side ? kSide : kBelow;
+    w = k >= 1 ? 640 * k / dpr : full ? Math.min(W, H * 4 / 3) : Math.min(W, 960); label = k >= 1 ? `${k}x` : 'fit';
   }
   document.documentElement.style.setProperty('--w', `${Math.floor(w * 1000) / 1000}px`);
   if (stage) stage.dataset.scale = label;
 }
 addEventListener('resize', fitStage);
-document.addEventListener('fullscreenchange', fitStage);
+document.addEventListener('fullscreenchange', () => setFs(document.fullscreenElement === document.querySelector('.stage')));
+// Fullscreen: the stage (the Fullscreen API; a phone also turns to landscape), or where there is none for a page element
+// (iPhone) the stage over the whole window. The timeline and transport move into it as a bar over the picture's bottom,
+// hidden after FS_IDLE ms without a tap or a mouse move (kept while paused or seeking); a tap while it is hidden only
+// shows it.
+const FS_IDLE = 3000;
+let fsTimer = 0;
+function setFs(on) {
+  const stage = document.querySelector('.stage'), sec = document.getElementById('transportsec');
+  if (stage.classList.contains('fs') === on) return;
+  stage.classList.toggle('fs', on);
+  if (on) {
+    const bar = document.createElement('div');
+    bar.className = 'fsbar';
+    sec.before(Object.assign(document.createElement('div'), { id: 'transporthome', hidden: true }));
+    bar.append(sec);
+    stage.append(bar);
+    fsWake();
+  } else {
+    const home = document.getElementById('transporthome');
+    home.replaceWith(sec);
+    stage.querySelector('.fsbar').remove();
+    stage.classList.remove('idle');
+    clearTimeout(fsTimer);
+  }
+  marksKey = '';  // (the timeline's width changed: its marks are drawn again)
+  fitStage();
+}
+function fsWake() {
+  const stage = document.querySelector('.stage');
+  stage.classList.remove('idle');
+  clearTimeout(fsTimer);
+  fsTimer = setTimeout(function idle() {
+    if (ui.paused || seekDragging) { fsTimer = setTimeout(idle, FS_IDLE); return; }
+    stage.classList.add('idle');
+  }, FS_IDLE);
+}
 function toggleFullscreen() {
   const stage = document.querySelector('.stage');
-  if (document.fullscreenElement) document.exitFullscreen(); else stage.requestFullscreen().catch(() => {});
+  if (stage.classList.contains('fs')) {
+    if (document.fullscreenElement) document.exitFullscreen().catch(() => {}); else setFs(false);
+    return;
+  }
+  if (!stage.requestFullscreen) { setFs(true); return; }
+  stage.requestFullscreen({ navigationUI: 'hide' }).then(() => {
+    if (screen.orientation && screen.orientation.lock && matchMedia('(pointer: coarse)').matches) screen.orientation.lock('landscape').catch(() => {});
+  }, () => setFs(true));
 }
 matchMedia && addEventListener('load', fitStage);
 async function main() {

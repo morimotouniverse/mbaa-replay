@@ -32,14 +32,24 @@
   .stage { position: relative; width: var(--w); }
   canvas#canvas { display: block; width: 100%; aspect-ratio: 4 / 3; image-rendering: pixelated; background: #000; cursor: pointer;
                   box-shadow: 0 10px 40px rgba(0, 0, 0, .55); }
-  .stage:fullscreen { background: #000; display: flex; align-items: center; justify-content: center; width: 100%; }
-  .stage:fullscreen canvas#canvas { width: var(--w); }
-  .stage:fullscreen #overlay { inset: auto; width: var(--w); height: auto; aspect-ratio: 4 / 3; }
+  /* fullscreen (.fs: the Fullscreen API, or on an iPhone, which has none for a page element, the stage over the whole
+     window): the picture centred on black, the timeline and transport over its bottom (shown on a tap or a mouse move) */
+  .stage.fs { background: #000; display: flex; align-items: center; justify-content: center; width: 100%; height: 100%; }
+  .stage.fs:not(:fullscreen) { position: fixed; inset: 0; z-index: 100; height: 100dvh; }
+  .stage.fs canvas#canvas { width: var(--w); box-shadow: none; }
+  .stage.fs #overlay { inset: auto; width: var(--w); height: auto; aspect-ratio: 4 / 3; }
+  .fsbar { position: absolute; left: 0; right: 0; bottom: 0; padding: 18px max(12px, env(safe-area-inset-right)) max(10px, env(safe-area-inset-bottom)) max(12px, env(safe-area-inset-left));
+           background: linear-gradient(transparent, #000d 40%); transition: opacity .25s; }
+  .stage.fs.idle .fsbar { opacity: 0; pointer-events: none; }
+  .stage.fs.idle { cursor: none; }
+  .fsbar .transport button { min-width: 44px; min-height: 40px; }
+  .fsonly { display: none !important; }
+  .fsbar .fsonly { display: inline-flex !important; }
   #overlay { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; }
   /* while a match loads: the game's opening movie (muted) over the black picture */
   #loadvid { position: absolute; left: 0; top: 0; width: 100%; aspect-ratio: 4 / 3; object-fit: cover; background: #000; pointer-events: none; }
   #loadvid[hidden] { display: none; }
-  .stage:fullscreen #loadvid { inset: auto; left: auto; top: auto; width: var(--w); }
+  .stage.fs #loadvid { inset: auto; left: auto; top: auto; width: var(--w); }
   /* everything else is one panel: beside the picture when the window is wide (body.side), else below it */
   .main { display: flex; flex-direction: column; align-items: center; gap: 12px; margin: auto 0; }
   body.side .main { flex-direction: row; align-items: center; }
@@ -202,7 +212,7 @@
     <div id="status">loading…</div>
     <div id="stageblk" hidden><img class="view" alt=""><img class="name" alt=""><div class="trk" id="trk"></div></div>
   </div>
-  <div class="sec">
+  <div class="sec" id="transportsec">
     <div class="clock"><span id="time">0:00.0</span><span class="hint" id="dur"></span><span id="fc"></span></div>
     <div class="timeline"><canvas id="marks"></canvas><input id="seek" type="range" min="0" max="1" value="0" step="1" aria-label="seek"></div>
     <div class="row transport">
@@ -213,6 +223,7 @@
       <button id="fwd1" title="forward one frame (.)"><i class="i i-play"></i></button>
       <button id="fwd5" title="forward 5 s (Shift+Right)"><i class="i i-ffwd"></i></button>
       <button id="nextr" title="next round (])"><i class="i i-next"></i></button>
+      <button id="fsx" class="fsonly" title="leave fullscreen (F)"><i class="i i-x"></i></button>
     </div>
   </div>
   <div class="sec">
@@ -292,6 +303,6 @@
 </div>
 <script src="mbaa.js?v=80030ae75f69"></script>
 <script src="bgm_stream.js?v=407ac29e5c89"></script>
-<script src="viewer.js?v=2aa3512f2dad"></script>
+<script src="viewer.js?v=33dfc157e64c"></script>
 </body>
 </html>
