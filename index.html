@@ -129,6 +129,9 @@
   body.mob #chatsec .ctool > * { flex: none; }  body.mob #chatsec .ctool .cmore { margin-left: auto; }
   /* (the toolbar scrolls sideways when narrow: its colour popup is placed on the chat section, over the lines) */
   body.mob #chatsec { position: relative; }  body.mob #chatsec .ctool { position: static; }
+  /* (the chat column: the toolbar sits near the window's bottom, so the colour popup opens upward, over the lines; it
+     opened downward and its lower rows were cut off by the window) */
+  body.haschat #chatsec .cpop { top: auto; bottom: calc(100% + 4px); max-height: min(420px, 60vh); overflow-y: auto; }
   body.mob #chatsec .cpop { left: 0; right: 0; top: auto; bottom: 46px; max-height: 70%; overflow-y: auto; }
   body.mob.kbd #transportsec, body.mob.kbd #chatsec .ctool, body.mob.land.kbd #chatsec .chead { display: none; }
   /* chat on phones: 16px inputs (iOS zooms the page into a smaller one), the profile behind the menu (a full-screen panel
