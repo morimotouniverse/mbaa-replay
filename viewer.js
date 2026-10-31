@@ -1454,8 +1454,8 @@ const STREAK = [0x76FC14, 0x770EB4];  // g_P1ConsecutiveWinStreak, g_P2Consecuti
 const asciiName = n => /^[\x20-\x7e]*$/.test(n);
 // ?tune=1: a panel to fine-tune the banner live (main_browser.cpp BannerTune), also on replays with test names
 const TUNE = Q.get('tune') === '1';
-const bannerTune = { nameStep: 10, nameSize: 16, nameDy: 0, winsStep: 8, winsSize: 11, winsDy: -11, maxPx: 216, scrollFrames: 10,
-  gap: 5, streak: -1, pageFont: 13, testP1: '', testP2: '' };
+const bannerTune = { nameGap: -1, nameSize: 16, nameDy: 0, winsGap: -1, winsSize: 11, winsDy: -11, maxPx: 216, scrollSpeed: 40,
+  lapGap: 24, streak: -1, pageFont: 13, testP1: '', testP2: '' };
 function liveBanner(s) {
   const T = bannerTune;
   const live = ((s.liveSrc && s.liveSrc.info.names) || []).map(n => (n || '').trim());
@@ -1468,8 +1468,8 @@ function liveBanner(s) {
       const n = names[p], game = asciiName(n);
       s.M.ccall('viewer_banner_name', null, ['number', 'string', 'number'], [p, game ? n : '', n && !game ? 1 : 0]);
     }
-    call(s, 'viewer_banner_tune', T.nameStep, T.nameSize, T.nameDy, T.winsStep, T.winsSize, T.winsDy, T.maxPx, T.scrollFrames,
-      T.gap, T.streak);
+    call(s, 'viewer_banner_tune', T.nameGap, T.nameSize, T.nameDy, T.winsGap, T.winsSize, T.winsDy, T.maxPx, T.scrollSpeed,
+      T.lapGap, T.streak);
   }
   const W = document.getElementById('canvas').clientWidth, sc = W / 640;
   for (const p of [0, 1]) {
@@ -1484,14 +1484,15 @@ function liveBanner(s) {
       textAlign: 'center' });
     el.hidden = false;
     el.classList.toggle('scroll', span.offsetWidth > T.maxPx * sc);
+    span.style.animationDuration = `${(span.offsetWidth / sc + T.maxPx) / T.scrollSpeed}s`;  // (the game-drawn speed, px/s)
   }
 }
 function bannerTunePanel() {
   const T = bannerTune, box = document.createElement('div');
   box.id = 'tunepanel';
-  const nums = [['nameStep', 'name: letter advance', 4, 16], ['nameSize', 'name: glyph size', 6, 24], ['nameDy', 'name: y offset', -16, 16],
-    ['winsStep', 'wins: letter advance', 4, 16], ['winsSize', 'wins: glyph size', 6, 24], ['winsDy', 'wins: y above name', -30, 10],
-    ['maxPx', 'marquee past (px)', 60, 300], ['scrollFrames', 'marquee: frames per letter', 1, 30], ['gap', 'marquee: gap (spaces)', 0, 12],
+  const nums = [['nameGap', 'name: letter gap (px)', -6, 6], ['nameSize', 'name: glyph size', 6, 24], ['nameDy', 'name: y offset', -16, 16],
+    ['winsGap', 'wins: letter gap (px)', -6, 6], ['winsSize', 'wins: glyph size', 6, 24], ['winsDy', 'wins: y above name', -30, 10],
+    ['maxPx', 'marquee past (px)', 60, 300], ['scrollSpeed', 'marquee: speed (px/s)', 5, 120], ['lapGap', 'marquee: gap between laps (px)', 0, 80],
     ['streak', 'test streak (-1 = real)', -1, 20], ['pageFont', 'page-drawn name: font px', 8, 20]];
   box.innerHTML = '<b>banner tuning</b>' + nums.map(([k, l, lo, hi]) =>
     `<label>${l}<input type="range" min="${lo}" max="${hi}" step="1" data-k="${k}" value="${T[k]}"><output>${T[k]}</output></label>`).join('') +
