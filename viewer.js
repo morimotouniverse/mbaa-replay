@@ -42,6 +42,9 @@ const PHONE = matchMedia('(pointer: coarse)').matches && Math.min(screen.width, 
 const LOWMEM = Q.get('lowmem') !== null ? Q.get('lowmem') === '1' : PHONE;
 const KZ = Q.get('kz') !== '0';  // keyframe pages zlib-compressed (?kz=0: zero-word packing only)
 const KF_BUDGET = +(Q.get('kfmb') || (LOWMEM ? 40 : 450)) * 1e6;
+// the store textures the kept keyframes pin (kfTexBytes) have a budget of their own: over it, keyframes thin as over KF_BUDGET
+const KF_TEX_BUDGET = +(Q.get('kftexmb') || (LOWMEM ? 64 : 256)) * 1e6;
+const STORE_GC = Q.get('storegc') !== '0';  // texture store eviction (storeGc; ?storegc=0: off, every sealed texture kept for the match)
 
 const hex = h => new Uint8Array(h.match(/../g).map(x => parseInt(x, 16)));
 let cryptoKey;
@@ -518,7 +521,11 @@ function freshCanvas() {
   const old = document.getElementById('canvas');
   const c = old.cloneNode(false);
   old.replaceWith(c);
-  if (pipVideo) { pipSelfAt = performance.now(); pipVideo.srcObject = c.captureStream(60); pipVideo.play().catch(() => {}); }  // (picture in picture: the new canvas)
+  if (pipVideo) {  // (picture in picture: the new canvas; the old capture track stopped, else it kept the old canvas and its GL context)
+    pipSelfAt = performance.now();
+    if (pipVideo.srcObject) for (const tr of pipVideo.srcObject.getTracks()) tr.stop();
+    pipVideo.srcObject = c.captureStream(60); pipVideo.play().catch(() => {});
+  }
   // a phone frees a background page's GPU context (switching to another app and back): kept restorable, and the session
   // started again on a fresh instance (its textures, shaders and targets died with the context) where it was
   c.addEventListener('webglcontextlost', e => { e.preventDefault(); if (session) session.glLost = true; });
@@ -817,7 +824,8 @@ function timelineInit(s) {
   const M = s.M;
   kzM = M;
   const t = s.tl = { kfs: [], simMax: 0, end: null, marks: [], bytes: 0, lastKf: -1, seekMs: [],
-                     want: null, running: false, round: -1, scene: -1, est: repEstimate(s.rep) };
+                     want: null, running: false, round: -1, scene: -1, est: repEstimate(s.rep), M };
+  M.mbaaTexKfRef = new Map();  // (a reused instance: the last match's keyframes are gone with its timeline)
   M.mbaaFrame = f => {
     if (f > t.simMax) {
       t.simMax = f;
@@ -941,6 +949,40 @@ function pageHashes(M, top) {
   const n = Math.ceil(top / PAGE), p = M._viewer_page_hashes(top, PAGE);
   return new Int32Array(M.HEAPU8.buffer, p, n * 4);
 }
+// The GPU texture store keeps an entry while a live texture or a kept keyframe names it (web/host/browser/d3d9_gl.cpp
+// js_store_gc): each keyframe records the store keys sealed when it is taken (kf.tex: k0, k1, fmt triples) and counts
+// them per key while it is kept (M.mbaaTexKfRef); after a keyframe is added or dropped the entries neither names go.
+// Without it a long session (a live set) kept every texture it ever sealed (the GPU store grew for good).
+function kfTexAdd(t, kf) {
+  const M = t.M;
+  if (!M || !M._viewer_tex_mark) return;
+  M._viewer_tex_mark();
+  kf.tex = Int32Array.from(M.mbaaTexMark || []);  // (as the store keys spell them: EM_JS passes the u32 words as i32)
+  M.mbaaTexMark = null;
+  const ref = M.mbaaTexKfRef || (M.mbaaTexKfRef = new Map());
+  for (let i = 0; i + 2 < kf.tex.length; i += 3) { const k = kf.tex[i] + ':' + kf.tex[i + 1] + ':' + kf.tex[i + 2]; ref.set(k, (ref.get(k) || 0) + 1); }
+}
+function kfTexDrop(t, kf) {
+  const ref = t.M && t.M.mbaaTexKfRef;
+  if (!ref || !kf.tex) return;
+  for (let i = 0; i + 2 < kf.tex.length; i += 3) {
+    const k = kf.tex[i] + ':' + kf.tex[i + 1] + ':' + kf.tex[i + 2], n = (ref.get(k) || 0) - 1;
+    if (n > 0) ref.set(k, n); else ref.delete(k);
+  }
+  kf.tex = null;
+}
+// Bytes of the store entries the kept keyframes name (GPU textures and SYSTEMMEM data; perm and stale entries are kept
+// anyway, so not counted). A live set's keyframes span many games, each pinning that game's composed frames and images:
+// without a bound on these, thinning by page bytes alone kept a game's textures for every game it had a keyframe in.
+function kfTexBytes(t) {
+  const M = t.M, ref = M && M.mbaaTexKfRef, S = M && M.mbaaTexStore;
+  let n = 0;
+  if (ref && S) for (const k of ref.keys()) { const e = S.get(k); if (e && !e.perm && !e.stale) n += e.bytes || 0; }
+  return n;
+}
+function storeGc(t) {
+  if (STORE_GC && t.M && t.M._viewer_tex_store_gc && session && session.tl === t) t.storeGcN = (t.storeGcN || 0) + t.M._viewer_tex_store_gc();
+}
 // Keyframe: every page of the used memory [0, sbrk). A page whose hash equals the previous keyframe's is shared with
 // it, so a keyframe stores only its changed pages (packed, packPage; h = the page's hash). The hash output array is
 // scratch (null pages: never stored, never restored).
@@ -962,15 +1004,18 @@ function keyframe(s, f) {
     else { pages[i] = packPage(H, i * W, W); pages[i].h = [hs[j], hs[j + 1], hs[j + 2], hs[j + 3]]; t.bytes += pages[i].bytes; fresh++; }
     pageRef(t, pages[i], +1);
   }
-  t.kfs.splice(at, 0, { frame: f, pages, ms: performance.now() - t0, fresh });
+  const kf = { frame: f, pages, ms: performance.now() - t0, fresh };
+  kfTexAdd(t, kf);
+  t.kfs.splice(at, 0, kf);
   t.lastKf = t.kfs[t.kfs.length - 1].frame;
   thin(t);
+  storeGc(t);
 }
-// over the memory budget: drop every second keyframe (never the first, the newest or a pending one)
+// over the memory budget (keyframe pages, or the store textures they pin): drop every second keyframe (never the first, the newest or a pending one)
 function thin(t) {
-  if (t.bytes > KF_BUDGET && t.kfs.length > 4) {
+  if ((t.bytes > KF_BUDGET || (STORE_GC && kfTexBytes(t) > KF_TEX_BUDGET)) && t.kfs.length > 4) {
     const keep = t.kfs.filter((k, i) => i === 0 || i === t.kfs.length - 1 || i % 2 === 0 || k.pending);
-    for (const k of t.kfs) if (!keep.includes(k)) for (const p of k.pages) pageRef(t, p, -1);
+    for (const k of t.kfs) if (!keep.includes(k)) { for (const p of k.pages) pageRef(t, p, -1); kfTexDrop(t, k); }
     t.kfs = keep;
     t.thinned = (t.thinned || 0) + 1;
   }
@@ -1058,11 +1103,12 @@ function incTick(s, f) {
     if (c.bad || (n === c.tentative.length && !c.raw.length)) {
       if (c.bad) {  // a cold page changed around F: its content at F is unknown
         const at = t.kfs.indexOf(c.kf);
-        if (at >= 0) { t.kfs.splice(at, 1); for (const p of c.kf.pages) pageRef(t, p, -1); }
+        if (at >= 0) { t.kfs.splice(at, 1); for (const p of c.kf.pages) pageRef(t, p, -1); kfTexDrop(t, c.kf); }
         t.lastKf = t.kfs.length ? t.kfs[t.kfs.length - 1].frame : -1;
         t.incDropped = (t.incDropped || 0) + 1;
       } else { c.kf.pending = false; c.kf.ms = c.ms; thin(t); }
       t.inc = null;
+      storeGc(t);
       // every raw page has been packed or copied out: a commit buffer grown by a big commit (the one after the match
       // loads copies ~60 MB) is not kept for the rest of the match
       if (t.commitBuf && t.commitBuf.length > (4 << 20)) t.commitBuf = null;
@@ -1107,6 +1153,7 @@ function incCommit(s, f, c) {
   for (let i = 0; i < n; i++) pageRef(t, pages[i], +1);
   (t.commitParts || (t.commitParts = [])).push([now.length, Math.round(T1 - T0), Math.round(performance.now() - T1), fresh]);
   c.kf = { frame: f, pages, ms: 0, fresh, pending: true, inc: true };
+  kfTexAdd(t, c.kf);
   t.kfs.push(c.kf);
   t.lastKf = f;
   c.tentative = tentative; c.raw = raw; c.rawTotal = raw.length; c.cur = 0;
@@ -1173,7 +1220,7 @@ async function seekTo(s, T) {
   let kf = null;
   for (const k of t.kfs) if (k.frame < T) { if (!k.pending) kf = k; } else break;
   if (t.inc) {  // an incremental keyframe in progress: its passes assume the timeline goes on from here
-    if (t.inc.kf) { const at = t.kfs.indexOf(t.inc.kf); if (at >= 0) { t.kfs.splice(at, 1); for (const p of t.inc.kf.pages) pageRef(t, p, -1); } }
+    if (t.inc.kf) { const at = t.kfs.indexOf(t.inc.kf); if (at >= 0) { t.kfs.splice(at, 1); for (const p of t.inc.kf.pages) pageRef(t, p, -1); kfTexDrop(t, t.inc.kf); } }
     t.inc = null;
     t.lastKf = t.kfs.length ? t.kfs[t.kfs.length - 1].frame : -1;
   }
