@@ -1117,6 +1117,7 @@ function restore(s, kf) {
   }
   // the restored state-hash / audio row buffers hold the keyframe's leftovers
   if (HASH) { M.ccall('viewer_hash_take', 'string', [], []); M.ccall('viewer_audio_take', 'string', [], []); }
+  radioStageSync(s);  // (the keyframe's Raito Radio stage picture state: the pick's set again)
 }
 // Seek to frame T (the state after T steps; the picture is frame T's). Coalesced: while a seek runs only the latest
 // request waits, the ones in between are dropped (dragging the slider, holding the step key).
@@ -1222,6 +1223,8 @@ const LIVE = Q.get('liveUrl') || location.origin + location.pathname.replace(/\/
 // the feed exists only on the spectate path (the Worker gives that page <base href="/">) or where ?liveUrl= names one: the
 // public page has none to ask for
 const LIVE_FEED = !!(Q.get('liveUrl') || document.querySelector('base'));
+// the spectate page: named for what it shows from the first paint on (the replay page's heading until a match loads)
+if (document.querySelector('base')) { document.getElementById('title').textContent = 'MBAACC live'; document.title = 'MBAACC Live'; }
 const LIVE_BEHIND = 240;  // frames kept buffered (4 s)
 let liveSrc = null;  // {id, info, since}
 async function liveList() {
@@ -1328,7 +1331,9 @@ function playersShow(s) {
       drawMoon(row.querySelector('.moon'), m);
       const moon = m >= 0 && m <= 2 ? MOON_NAME[m] : m === 9 ? 'Eclipse' : '';  // (9: the bosses' moon)
       row.querySelector('.nm .t').textContent = names[p] || CHARA[c] || `Player ${p + 1}`;
-      row.querySelector('.ch .t').textContent = names[p] ? `${moon} ${CHARA[c] || ''}`.trim() : moon;
+      // (the moon is its icon: the line beside it is the character, or with no player name the moon's name)
+      row.querySelector('.ch .t').textContent = names[p] ? CHARA[c] || '' : moon;
+      row.querySelector('.ch').title = `${moon} ${CHARA[c] || ''}`.trim();
     });
     box.hidden = false;
     document.getElementById('title').hidden = true;
@@ -1359,60 +1364,173 @@ function playersAnimate(t) {
   requestAnimationFrame(playersAnimate);
 }
 requestAnimationFrame(playersAnimate);
-// The stage block and Melty radio (tools/web/stage_panel.py puts web/stage/* in the bundle): the stage's select-screen
-// preview and name plate, and the title of the music playing; the radio's pick replaces the match's music (replays and
-// live) until it is set back to the match's, kept per browser.
-let stagePanel = null, stageKey = '', radio = null;
+// The stage block and Raito Radio (tools/web/stage_panel.py puts web/stage/* in the bundle, tools/web/old_melty/
+// radio_bundle.py web/radio/*): the stage's select-screen preview and name plate, and the title of the music playing;
+// the radio's pick replaces the match's music (replays and live) until it is set back to the match's. Its game bar
+// switches the track list between MBAACC and the older games (Act Cadenza, Re-ACT, Melty Blood: their list, tracks and
+// stage pictures fetched only when picked); an older game's stage track also shows that game's stage behind the fight
+// (web/host/radio_stage.cpp, presentation only). Each tile links Raito's own upload of the song where there is one.
+let stagePanel = null, stageKey = '', radio = null, oldRadio = null, radioGame = 'aacc';
+const RADIO_GAMES = [['aacc', 'MBAACC'], ['ac', 'Act Cadenza'], ['re', 'Re-ACT'], ['mb', 'Melty Blood']];
 const trackOf = path => (path || '').replace(/^.*\//, '').replace(/\.\w+$/, '');
 async function stagePanelLoad() {
   if (!man.files['web/stage/panel.json']) return;
   await fetchAll(man, ['web/stage/panel.json'], '', true);
   stagePanel = JSON.parse(new TextDecoder().decode(cache.get('web/stage/panel.json')));
-  const grid = document.getElementById('radiogrid'), tog = document.getElementById('radiotog');
-  const art = {};  // track -> the first stage that plays it (its select-screen preview is the track's tile)
-  for (const [id, st] of Object.entries(stagePanel.stages)) if (st.track && !art[st.track] && st.art.includes('view')) art[st.track] = id;
-  const t = Object.entries(stagePanel.tracks).filter(([, x]) => x.loop);  // (a radio of looping tracks: no jingles, endings)
-  const tile = (f, title) => {
-    const b = document.createElement('button'), img = document.createElement('div'), cap = document.createElement('span');
-    b.className = 'tile'; b.dataset.f = f; b.title = title;
-    img.className = 'art';
-    if (!f || (art[f] === undefined && !stagePanel.tracks[f].art)) img.textContent = '\u266A';
-    else if (art[f] !== undefined) img.dataset.src = `web/stage/view_${String(art[f]).padStart(2, '0')}.png`;
-    else if (stagePanel.tracks[f].art) img.dataset.src = `web/stage/track_${f}.png`;  // (a screen's track: its art)
-    cap.textContent = title;
-    b.append(img, cap);
-    b.onclick = () => radioSet(f);
-    return b;
+  const grid = document.getElementById('radiogrid'), tog = document.getElementById('radiotog'), bar = document.getElementById('radiogames');
+  if (man.files['web/radio/old.json']) {
+    bar.replaceChildren(...RADIO_GAMES.map(([g, name]) => {
+      const b = document.createElement('button');
+      b.className = 'txt'; b.dataset.g = g; b.textContent = name;
+      b.onclick = () => radioShowGame(g).catch(e => console.warn('radio:', e));
+      return b;
+    }));
+  }
+  tog.onclick = () => {
+    grid.hidden = !grid.hidden; bar.hidden = grid.hidden || !bar.children.length;
+    if (!grid.hidden) { radioArt(); radioOldLoad().then(radioLinks).catch(() => {}); }
   };
-  grid.replaceChildren(tile('', 'Match music'), ...t.map(([f, x]) => tile(f, x.title)));
-  tog.onclick = () => { grid.hidden = !grid.hidden; if (!grid.hidden) radioArt(); };
   document.getElementById('radiosec').hidden = false;
+  await radioShowGame('aacc');
   radioSet('');
 }
-// the tiles' stage previews, fetched when the picker first opens
+// web/radio/old.json: the older games' radio (fetched when the picker first opens)
+let oldRadioP = null;
+function radioOldLoad() {
+  if (!man.files['web/radio/old.json']) return Promise.resolve(null);
+  return oldRadioP || (oldRadioP = fetchAll(man, ['web/radio/old.json'], '', true).then(() => {
+    oldRadio = JSON.parse(new TextDecoder().decode(cache.get('web/radio/old.json')));
+    oldRadio.byKey = {};
+    for (const g of oldRadio.games) for (const t of g.tracks) oldRadio.byKey[`${g.id}:${t.id}`] = Object.assign(t, { game: g.id });
+    return oldRadio;
+  }));
+}
+function radioTile(f, title, src, sub) {
+  const b = document.createElement('button'), img = document.createElement('div'), cap = document.createElement('span');
+  b.className = 'tile'; b.dataset.f = f; b.title = sub ? `${title} — ${sub}` : title;
+  img.className = 'art';
+  if (src) img.dataset.src = src; else img.textContent = '♪';
+  cap.textContent = title;
+  b.append(img, cap);
+  b.onclick = () => radioSet(f);
+  b.classList.toggle('on', f === radioPick);
+  return b;
+}
+// the song's upload on Raito's channel: a small link on the tile (a new tab; the tile itself is not picked)
+function radioLinks() {
+  for (const b of document.querySelectorAll('#radiogrid .tile')) {
+    const f = b.dataset.f, o = oldRadio && (f.includes(':') ? oldRadio.byKey[f] : null);
+    const url = o ? o.yt : oldRadio && oldRadio.aaccYt && oldRadio.aaccYt[f];
+    if (!url || b.querySelector('.yt')) continue;
+    const a = document.createElement('a');
+    a.className = 'yt'; a.href = url; a.target = '_blank'; a.rel = 'noopener';
+    a.title = 'Raito’s upload of this song on YouTube'; a.setAttribute('aria-label', a.title);
+    a.textContent = '▶';
+    a.onclick = e => e.stopPropagation();
+    b.append(a);
+  }
+}
+async function radioShowGame(g) {
+  if (g !== 'aacc' && !(await radioOldLoad())) g = 'aacc';
+  radioGame = g;
+  for (const b of document.querySelectorAll('#radiogames button')) b.classList.toggle('on', b.dataset.g === g);
+  const grid = document.getElementById('radiogrid');
+  if (g === 'aacc') {
+    const art = {};  // track -> the first stage that plays it (its select-screen preview is the track's tile)
+    for (const [id, st] of Object.entries(stagePanel.stages)) if (st.track && !art[st.track] && st.art.includes('view')) art[st.track] = id;
+    const t = Object.entries(stagePanel.tracks).filter(([, x]) => x.loop);  // (a radio of looping tracks: no jingles, endings)
+    const src = f => art[f] !== undefined ? `web/stage/view_${String(art[f]).padStart(2, '0')}.png`
+      : stagePanel.tracks[f].art ? `web/stage/track_${f}.png` : '';  // (a screen's track: its art)
+    grid.replaceChildren(radioTile('', 'Match music', ''), ...t.map(([f, x]) => radioTile(f, x.title, src(f))));
+  } else {
+    const game = oldRadio.games.find(x => x.id === g);
+    grid.replaceChildren(radioTile('', 'Match music', ''),
+      ...game.tracks.map(t => radioTile(`${g}:${t.id}`, t.title, t.tile || '', t.stageName || '')));
+  }
+  radioArtDone = false;
+  if (!grid.hidden) radioArt();
+  radioLinks();
+}
+// the tiles' pictures, fetched when the picker is open
 let radioArtDone = false;
 async function radioArt() {
   if (radioArtDone) return;
   radioArtDone = true;
-  const tiles = [...document.querySelectorAll('#radiogrid .art[data-src]')], path = e => e.dataset.src;
+  const tiles = [...document.querySelectorAll('#radiogrid .art[data-src]')].filter(e => !e.style.backgroundImage), path = e => e.dataset.src;
   await fetchAll(man, tiles.map(path), '', true);
   for (const e of tiles) {
     const d = cache.get(path(e));
-    if (d) e.style.backgroundImage = `url(${URL.createObjectURL(new Blob([d], { type: 'image/png' }))})`;
+    if (d) e.style.backgroundImage = `url(${URL.createObjectURL(new Blob([d], { type: /\.jpg$/.test(path(e)) ? 'image/jpeg' : 'image/png' }))})`;
   }
+}
+// a pick: '' (the match's music), an MBAACC track (bgmmeNN) or an older game's ('ac:01')
+function radioTrack(f) {
+  if (!f) return null;
+  if (!f.includes(':')) {
+    const t = stagePanel.tracks[f];
+    return t && { title: t.title, key: `bgm/${f}.opus`, fetch: withSiblings(man, [`bgm/${f}.ogg`]), loopPos: t.loopPos };
+  }
+  const t = oldRadio && oldRadio.byKey[f];
+  return t && { title: t.title, key: t.f, fetch: [t.f, ...(t.pic ? [t.pic, t.tile] : [])], loopPos: t.loopPos,
+                pic: t.pic, tile: t.tile, stageName: t.stageName,
+                game: (RADIO_GAMES.find(([g]) => g === t.game) || [])[1] };
 }
 let radioPick = '';
 async function radioSet(f) {
   radioPick = f;
-  const t = f && stagePanel.tracks[f];
+  const t = radioTrack(f);
   for (const b of document.querySelectorAll('#radiogrid .tile')) b.classList.toggle('on', b.dataset.f === f);
-  document.getElementById('radiotog').textContent = `\u266A ${t ? t.title : 'match music'}`;
-  if (t) await fetchAll(man, withSiblings(man, [`bgm/${f}.ogg`]), '', true);
+  document.getElementById('radiotog').textContent = `♪ ${t ? t.title : 'match music'}`;
+  if (t) await fetchAll(man, t.fetch, '', true);
+  const pic = t && t.pic ? await radioPicture(t.pic) : null;
   if (radioPick !== f) return;  // (picked again meanwhile)
-  radio = t ? { path: `/game/bgm/${f}.opus`, loopPos: t.loopPos, file: f } : null;
+  radio = t ? { path: `/game/${t.key}`, loopPos: t.loopPos, file: f, title: t.title, tile: t.tile, stageName: t.stageName,
+                game: t.game, pic } : null;
   if (session && session.radioChanged) session.radioChanged();
   stageKey = '';
+  radioStageSync(session);
+  if (ui.paused && session && session.tl) requestSeek(curFrame());  // (paused: the frame drawn again, with its stage)
 }
+// The stage picture: decoded once per picture into RGBA; put into the game's texture (B G R X rows) whenever what the
+// instance shows differs from the pick: a pick, a new match's instance, a keyframe restore (it puts back the
+// keyframe's picture state: checked every frame and after each restore)
+const radioPics = new Map();
+let radioPicIds = 0;
+async function radioPicture(path) {
+  if (radioPics.has(path)) return radioPics.get(path);
+  const d = cache.get(path);
+  if (!d) return null;
+  const bmp = await createImageBitmap(new Blob([d], { type: 'image/jpeg' }));
+  const cv = document.createElement('canvas');
+  cv.width = bmp.width; cv.height = bmp.height;
+  const c = cv.getContext('2d', { willReadFrequently: true });
+  c.drawImage(bmp, 0, 0);
+  const rgba = new Uint32Array(c.getImageData(0, 0, bmp.width, bmp.height).data.buffer);
+  const p = { id: ++radioPicIds, w: bmp.width, h: bmp.height, rgba };
+  radioPics.set(path, p);
+  return p;
+}
+function radioStageSync(s) {
+  const M = s && s.M;
+  if (!M || !M._viewer_radio_stage_id || s.glLost) return;
+  const p = radio && radio.pic && !HASH ? radio.pic : null, want = p ? p.id : 0;
+  if (M._viewer_radio_stage_id() === want) return;
+  if (!p) { M._viewer_radio_stage_on(0); return; }
+  const ptr = M._viewer_radio_stage_buf(p.w, p.h), pitch = M._viewer_radio_stage_pitch();
+  if (!ptr || (ptr & 3) || (pitch & 3)) return;
+  const H = new Uint32Array(M.HEAPU8.buffer), src = p.rgba;
+  for (let y = 0; y < p.h; y++) {
+    const o = (ptr + y * pitch) >> 2, i = y * p.w;
+    for (let x = 0; x < p.w; x++) {
+      const v = src[i + x];  // R G B A (little-endian) -> B G R X
+      H[o + x] = ((v & 0xFF) << 16) | (v & 0xFF00) | ((v >>> 16) & 0xFF) | 0xFF000000;
+    }
+  }
+  const pl = (oldRadio && oldRadio.place) || {};
+  M._viewer_radio_stage_place(pl.x0 ?? -512, pl.y0 ?? -560, pl.scale ?? 1, pl.par ?? 0.5);
+  M._viewer_radio_stage_on(p.id);
+}
+requestAnimationFrame(function radioStageLoop() { try { radioStageSync(session); } catch (e) {} requestAnimationFrame(radioStageLoop); });
 async function stageShow(s) {
   const box = document.getElementById('stageblk');
   if (!stagePanel || !s || !s.M) { box.hidden = true; return; }
@@ -1420,8 +1538,20 @@ async function stageShow(s) {
   const f = radio ? radio.file : trackOf(s.bgmNow) || (st && st.track), key = `${id}/${f}`;
   if (key === stageKey) return;
   stageKey = key;
-  const tr = stagePanel.tracks[f];
-  document.getElementById('trk').textContent = tr ? tr.title + (radio ? ' (radio)' : '') : '';
+  const tr = radio ? radio : stagePanel.tracks[f];
+  document.getElementById('trk').textContent = tr ? tr.title + (radio ? ` (radio${radio.game ? `, ${radio.game}` : ''})` : '') : '';
+  if (radio && radio.tile) {  // an older game's stage: its picture, its name for the plate
+    const view = box.querySelector('.view'), name = box.querySelector('.name'), d = cache.get(radio.tile);
+    if (view.dataset.src) URL.revokeObjectURL(view.dataset.src);
+    view.dataset.src = d ? URL.createObjectURL(new Blob([d], { type: 'image/jpeg' })) : '';
+    view.src = view.dataset.src; view.hidden = !d; view.title = radio.stageName || '';
+    if (name.dataset.src) URL.revokeObjectURL(name.dataset.src);
+    name.dataset.src = ''; name.removeAttribute('src'); name.hidden = true;
+    if (box.hidden) requestAnimationFrame(() => marquee(document.getElementById('players')));
+    box.hidden = false;
+    return;
+  }
+  box.querySelector('.view').title = '';
   if (!st) { box.hidden = true; return; }
   const n = String(id).padStart(2, '0'), paths = st.art.map(k => `web/stage/${k}_${n}.png`);
   await fetchAll(man, paths, '', true);
