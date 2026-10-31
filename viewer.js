@@ -1229,12 +1229,7 @@ function iconCell(c) {
   const base = CHARA[c] && CHARA[c].startsWith('B. ') ? +Object.keys(CHARA).find(k => CHARA[k] === CHARA[c].slice(3)) : -1;
   return cellOf(base);
 }
-// a character icon (canvas w x h, the cell's 48x64 scaled) and a moon mark (canvas, 56x56 scaled) from the select sheets
-function drawIcon(cv, c) {
-  const x = cv.getContext('2d'), cell = iconCell(c);
-  x.clearRect(0, 0, cv.width, cv.height);
-  if (plArt && cell >= 0) x.drawImage(plArt.icons, 48 * (cell % 10), (Math.floor(cell / 10) + 4) * 64, 48, 64, 0, 0, cv.width, cv.height);
-}
+// a moon mark (canvas, the 56x56 select-sheet cell scaled)
 function drawMoon(cv, m) {
   const x = cv.getContext('2d');
   x.clearRect(0, 0, cv.width, cv.height);
@@ -1275,17 +1270,24 @@ function playersShow(s) {
 }
 // the cursor frames' loop over the icons, at the select screen's rate (CharaSelectIcons_Update, CE 0x48BAB0: the next of
 // 10 frames every 2 game ticks)
+// one select-screen cell (64x64, scaled to the canvas): the character icon, side p's cursor frame f (of 10), its P1/P2 tag
+function selFrame(cv, cell, p, f) {
+  const c = cv.getContext('2d'), k = cv.width / 64, fr = 10 * p + f, tag = 20 + p;
+  c.clearRect(0, 0, cv.width, cv.height);
+  if (cell >= 0) c.drawImage(plArt.icons, 48 * (cell % 10), (Math.floor(cell / 10) + 4) * 64, 48, 64, 8 * k, 0, 48 * k, 64 * k);  // (centred in the frame, as CharaSelectIcons_Draw)
+  c.drawImage(plArt.cursor, (fr % 8) * 64, Math.floor(fr / 8) * 64, 64, 64, 0, 0, 64 * k, 64 * k);
+  c.drawImage(plArt.cursor, (tag % 8) * 64, Math.floor(tag / 8) * 64, 64, 64, 0, 0, 64 * k, 64 * k);
+}
 function playersAnimate(t) {
   const box = document.getElementById('players');
   if (!box.hidden && plArt) {
     const f = Math.floor(t * 60 / 2000) % 10;
-    box.querySelectorAll('.pl').forEach((row, p) => {
-      const c = row.querySelector('.ico').getContext('2d'), fr = 10 * p + f, tag = 20 + p, cell = plCells[p];
-      c.clearRect(0, 0, 64, 64);
-      if (cell >= 0) c.drawImage(plArt.icons, 48 * (cell % 10), (Math.floor(cell / 10) + 4) * 64, 48, 64, 8, 0, 48, 64);  // (centred in the frame, as CharaSelectIcons_Draw)
-      c.drawImage(plArt.cursor, (fr % 8) * 64, Math.floor(fr / 8) * 64, 64, 64, 0, 0, 64, 64);
-      c.drawImage(plArt.cursor, (tag % 8) * 64, Math.floor(tag / 8) * 64, 64, 64, 0, 0, 64, 64);
-    });
+    box.querySelectorAll('.pl').forEach((row, p) => selFrame(row.querySelector('.ico'), plCells[p], p, f));
+  }
+  // the live list's icons too (each side's cursor, as on the select screen)
+  if (plArt && !document.getElementById('livesec').hidden) {
+    const f = Math.floor(t * 60 / 2000) % 10;
+    for (const cv of document.querySelectorAll('#liveitems .lico')) selFrame(cv, +cv.dataset.cell, +cv.dataset.side, f);
   }
   requestAnimationFrame(playersAnimate);
 }
@@ -1391,10 +1393,13 @@ async function liveListShow() {
     // each side: the character's select icon and moon, then the player's name (no name: the character's)
     const side = p => {
       const c = m.chara && m.chara[p], mo = m.moon && m.moon[p], sp = el('span', 'side');
-      const ico = el('canvas', 'lico'); ico.width = 24; ico.height = 32;
+      const ico = el('canvas', 'lico'); ico.width = ico.height = 64;
+      ico.dataset.cell = iconCell(c); ico.dataset.side = p;
       const moon = el('canvas', 'lmoon'); moon.width = 14; moon.height = 14;
-      if (plArt && iconCell(c) >= 0) { drawIcon(ico, c); drawMoon(moon, mo); sp.append(ico, moon); }
-      sp.append(el('span', 'lnm', names[p] || CHARA[c] || `Player ${p + 1}`));
+      if (plArt && iconCell(c) >= 0) { selFrame(ico, iconCell(c), p, 0); drawMoon(moon, mo); sp.append(ico, moon); }
+      const nm = el('span', 'lnm');
+      nm.append(el('span', 't', names[p] || CHARA[c] || `Player ${p + 1}`));
+      sp.append(nm);
       sp.title = `${mo === 9 ? 'Eclipse' : MOON_NAME[mo] || ''} ${CHARA[c] || ''}`.trim();
       return sp;
     };
@@ -1405,6 +1410,14 @@ async function liveListShow() {
     return li;
   }));
   if (!l.some(m => liveSrc && liveSrc.id === m.id)) liveWatching(0);
+  // a name longer than its room scrolls to its end and back (a marquee), at ~25 px/s, resting at both ends
+  for (const nm of ol.querySelectorAll('.lnm')) {
+    const over = nm.firstChild.scrollWidth - nm.clientWidth;
+    if (over <= 2) continue;
+    nm.classList.add('mq');
+    nm.style.setProperty('--d', `${-over}px`);
+    nm.style.setProperty('--dur', `${(over / 25 / 0.7 + 0.5).toFixed(1)}s`);
+  }
   setTimeout(liveListShow, 15000);
 }
 // the received records by index (each the longest so far), kept outside the game's memory: a seek's keyframe restore

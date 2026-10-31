@@ -159,9 +159,13 @@
   #liveitems a { display: flex; align-items: center; gap: 6px; }
   #liveitems a::before { content: '\25CF'; color: var(--accent); font-size: 9px; flex: none; }
   #liveitems .side { display: flex; align-items: center; gap: 3px; min-width: 0; flex: 0 1 auto; }
-  #liveitems .lico { width: 18px; height: 24px; flex: none; }
+  #liveitems .lico { width: 28px; height: 28px; flex: none; margin: -2px 0; }
   #liveitems .lmoon { width: 12px; height: 12px; flex: none; }
-  #liveitems .lnm { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  #liveitems .lnm { overflow: hidden; white-space: nowrap; min-width: 0; }
+  #liveitems .lnm .t { display: inline-block; }
+  #liveitems .lnm.mq .t { animation: lmq var(--dur) ease-in-out infinite alternate; }
+  @keyframes lmq { 0%, 15% { transform: translateX(0); } 85%, 100% { transform: translateX(var(--d)); } }
+  @media (prefers-reduced-motion: reduce) { #liveitems .lnm.mq .t { animation: none; } #liveitems .lnm { text-overflow: ellipsis; } }
   #liveitems .lvs { font-size: 10px; color: var(--faint); letter-spacing: .08em; flex: none; }
   #liveitems .lview { margin-left: auto; padding-left: 6px; font-size: 11px; color: var(--muted); flex: none; }
   #players #watching { letter-spacing: normal; text-transform: none; }
@@ -288,6 +292,6 @@
 </div>
 <script src="mbaa.js?v=80030ae75f69"></script>
 <script src="bgm_stream.js?v=407ac29e5c89"></script>
-<script src="viewer.js?v=953544e9b32f"></script>
+<script src="viewer.js?v=2aa3512f2dad"></script>
 </body>
 </html>
