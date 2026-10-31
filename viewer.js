@@ -196,6 +196,10 @@ function withSiblings(man, paths) {
     if (man.files[f]) out.add(f);
     const opus = f.replace(/\.(wav|ogg)$/, '.opus');
     if (opus !== f && man.files[opus]) out.add(opus);
+    // a win quote's Ex version (ResultMenu_LoadWinQuoteData reads story/battle/<name>Ex_win.txt for a winner whose
+    // player record has the Ex flag: riesEX, necoEx); the asset plan has the plain one only
+    const ex = f.replace(/^(story\/battle\/.+)_win\.txt$/, '$1ex_win.txt');
+    if (ex !== f && man.files[ex]) out.add(ex);
   }
   return out;
 }
@@ -1815,6 +1819,7 @@ const CSS_SCENE = 20, CSS_OBJ = 0x773158, CSS_SLOT = 0x74D8E8, BATTLE_SLOT = 0x7
 function liveCssWatch(s) {
   const H = s.M.HEAP32, g = a => H[a >> 2];
   if (g(0x54EEE8) !== CSS_SCENE) { if (s.cssHeld) liveCssHold(s, false); s.cssKey = null; return; }
+  s.cssPassed = true;  // (the next game's load checks the select's picks against the stream's setup: liveLoaderGate)
   const done = g(CSS_OBJ + 0x3C) >= 4;
   // (the plan's chara keys are "<chara>:<moon>" only: a lookup by the bare id found none, so no pick was ever seen
   // and the next game's files came only at the loader gate, after the VS screen had read its cut-ins: missed)
@@ -1863,16 +1868,135 @@ function liveCssWatch(s) {
 // (liveCssWatch) usually have them in already.
 function liveLoaderGate(s) {
   const H = s.M.HEAP32, g = a => H[a >> 2];
+  // After a character select: the game's setup (the bridge's GameSetup for this game, as boot.rep's header) checked
+  // against our select's picks first (liveSetupCheck); not known yet: the load waits for it (liveSetupWait)
+  if (s.cssPassed) {
+    s.cssPassed = false;
+    // (the select's index + 1: the game index itself moves there only a frame after the load starts)
+    const game = call(s, 'viewer_spectate_next_game'), p = livePrepOf(s, game);
+    if (game >= 0 && (!p || !SETUP_WAIT)) { liveSetupWait(s, game); return false; }
+    if (p && !liveSetupCheck(s, p)) return false;
+  }
   const side = p => [g(BATTLE_SLOT + p * 0x2C + 8), Math.max(0, g(BATTLE_SLOT + p * 0x2C + 0x14))];
   const want = planFiles(man, { stage: g(STAGE_ID), p1: side(0), p2: side(1) });
   const need = [...want].filter(p => !liveHas(s, p));
   if (!need.length) return true;
+  if (need.every(p => cache.has(p))) { liveInstall(s, need); return true; }  // (prepared: liveNextPrep)
   console.log(`live: the game's load waits for ${need.length} files (stage ${g(STAGE_ID)})`);
   s.loadNeed = need; s.loadHeld = true; liveHoldApply(s);
   fetchAll(man, need, 'next game', true)
     .then(() => { if (session === s) liveInstall(s, need); })
     .catch(e => { console.warn('live: game files:', e); status(`live: the game's files did not load (${e.message})`); });
   return false;
+}
+// The next game of the stream, prepared in the background (liveNextPrep: its boot tape from the bridge, every file it
+// reads in the page's cache) as soon as the bridge knows its setup (the list's game, or asked for at our own load):
+// what the session checks its character select against (liveSetupCheck), and the session switched to when ours did not
+// get there (liveSwitch).
+const bootSetup = rep => {  // boot.rep's header (cc_live.mjs bootRep): the stage and both sides' chara / moon / palette
+  const dv = new DataView(rep.buffer, rep.byteOffset, rep.byteLength), i = o => dv.getInt32(o, true);
+  return { stage: i(0x28), chara: [i(0x40), i(0x50)], moon: [i(0x44), i(0x54)], color: [i(0x48), i(0x58)] };
+};
+const livePrepOf = (s, game) => { const p = s.liveSrc.preps && s.liveSrc.preps.get(game); return p && p.ready ? p : null; };
+function liveNextPrep(s, game, entry = null) {
+  const L = s.liveSrc, preps = L.preps || (L.preps = new Map());
+  if (preps.has(game)) return preps.get(game).done;
+  for (const g of preps.keys()) if (g < game - 40) preps.delete(g);  // (old games' tapes)
+  const p = { game, ready: false };
+  preps.set(game, p);
+  p.done = (async () => {
+    const r = await liveFetch(`${LIVE}/live/${L.id}/boot.rep?game=${game}`);
+    if (!r.ok) throw new Error(`HTTP ${r.status}`);
+    p.rep = new Uint8Array(await r.arrayBuffer());
+    p.setup = bootSetup(p.rep);
+    // (the list entry: names, settings, the streak the bridge has for it; else the session's own with this setup)
+    p.info = Object.assign({}, entry && entry.game === game ? entry : L.info, p.setup, { game });
+    if (!(entry && entry.game === game)) p.info.streak = null;
+    p.want = wantFor(p.rep);
+    if (p.want) { for (const f of liveCssFiles(man)) p.want.add(f); await fetchAll(man, p.want, 'next game', true); }
+    p.ready = true;
+    console.log(`live: game ${game} prepared (P1 ${p.setup.chara[0]}:${p.setup.moon[0]} P2 ${p.setup.chara[1]}:${p.setup.moon[1]} stage ${p.setup.stage})`);
+    return p;
+  })().catch(e => { if (preps.get(game) === p) preps.delete(game); throw e; });
+  p.done.catch(() => {});
+  return p.done;
+}
+// our load after a character select (liveLoaderGate) against the stream's setup of that game: the same characters and
+// moons: the stage and palettes set to the stream's (our select's stage pick, a random roll, and the palette step are
+// not all followed yet: artifacts/cc_spectate/css_unported.txt) and the game goes on. Other characters or moons: it did
+// not follow the players' select: the prepared session takes over (false: the load stays held)
+const STAGE_BGM = 0x76E653;  // g_StageBgmId (s8; BattleLoop_StartFightAndRestoreBGM plays it)
+const LIVE_TEST_SWITCH = Q.get('liveTestSwitch') === '1';  // (test: every check fails, the switch path runs)
+function liveSetupCheck(s, p) {
+  const H = s.M.HEAP32, slot = (q, o) => (BATTLE_SLOT + q * 0x2C + o) >> 2, S = p.setup;
+  const ours = [0, 1].map(q => [H[slot(q, 8)], H[slot(q, 0x14)]]);
+  if (ours.some(([c, m], q) => c !== S.chara[q] || m !== S.moon[q]) || LIVE_TEST_SWITCH) {
+    console.warn(`live: our character select picked ${JSON.stringify(ours)}, the players ${JSON.stringify([0, 1].map(q => [S.chara[q], S.moon[q]]))}: switching to game ${p.game}`);
+    s.loadHeld = true; s.loadNeed = []; liveHoldApply(s);
+    liveSwitch(s, p);
+    return false;
+  }
+  if (H[STAGE_ID >> 2] !== S.stage || ours.some((x, q) => H[slot(q, 4)] !== S.color[q]))
+    console.log(`live: game ${p.game}: stage ${H[STAGE_ID >> 2]} -> ${S.stage}, palettes ${H[slot(0, 4)]},${H[slot(1, 4)]} -> ${S.color}`);
+  // (the battle music: g_StageBgmId, the stage's own unless a pick set another (a replay's playback sets it to the
+  // stage id): with the stage when it was our stage's, else our select left the bgm of a stage that isn't loaded)
+  if ((s.M.HEAPU8[STAGE_BGM] << 24 >> 24) === H[STAGE_ID >> 2]) s.M.HEAPU8[STAGE_BGM] = S.stage & 255;
+  H[STAGE_ID >> 2] = S.stage;
+  for (const q of [0, 1]) H[slot(q, 4)] = S.color[q];
+  return true;
+}
+// the setup not known at our load yet (the bridge asks the host for it as the players' game starts): the load waits,
+// asked again each second (a host's load and the probe can take ~7 s); none after SETUP_WAIT ms: our own picks, checked
+// again once it comes (liveLateCheck)
+const SETUP_WAIT = Q.get('liveTestLate') === '1' ? 0 : 20000;  // (test: no wait, the late check runs)
+async function liveSetupWait(s, game) {
+  s.loadHeld = true; s.loadNeed = []; liveHoldApply(s);
+  const t0 = performance.now();
+  let p = null;
+  while (session === s && !p && performance.now() - t0 < SETUP_WAIT) {
+    p = await liveNextPrep(s, game).catch(() => null);
+    if (!p) await new Promise(r => setTimeout(r, 1000));
+  }
+  if (session !== s) return;
+  if (p && !liveSetupCheck(s, p)) return;
+  if (!p) console.warn(`live: no setup for game ${game} after ${SETUP_WAIT / 1000} s: our own picks`);
+  // (the files of the game as it will load now: in the cache from the preparation, else fetched)
+  const side = q => [s.M.HEAP32[(BATTLE_SLOT + q * 0x2C + 8) >> 2], Math.max(0, s.M.HEAP32[(BATTLE_SLOT + q * 0x2C + 0x14) >> 2])];
+  const need = [...planFiles(man, { stage: s.M.HEAP32[STAGE_ID >> 2], p1: side(0), p2: side(1) })].filter(f => !liveHas(s, f));
+  if (need.some(f => !cache.has(f))) await fetchAll(man, need, 'next game', true).catch(e => console.warn('live: game files:', e));
+  if (session !== s) return;
+  liveInstall(s, need);
+  s.loadHeld = false; liveHoldApply(s);
+  if (!p) liveLateCheck(s, game);
+}
+// the setup came later than our load (the bridge's probe slow or retried): our game against it once it is there; any
+// difference (characters, moons, palettes, stage): the prepared session of that game, so a select we did not follow
+// only ever shows on the select screen, never in the game (asked each second for a minute)
+async function liveLateCheck(s, game) {
+  const t0 = performance.now();
+  let p = null;
+  while (session === s && !p && performance.now() - t0 < 60000) {
+    p = await liveNextPrep(s, game).catch(() => null);
+    if (!p) await new Promise(r => setTimeout(r, 1000));
+  }
+  if (!p || session !== s) return;
+  const H = s.M.HEAP32, slot = (q, o) => H[(BATTLE_SLOT + q * 0x2C + o) >> 2], S = p.setup;
+  const same = H[STAGE_ID >> 2] === S.stage && [0, 1].every(q => slot(q, 8) === S.chara[q] && slot(q, 0x14) === S.moon[q] && slot(q, 4) === S.color[q]);
+  console.log(`live: game ${game}'s setup came after our load: ${same ? 'the same' : 'different: switching'}`);
+  if (!same) liveSwitch(s, p);
+}
+// the players' next game on a new session (prepared: its files in the cache, the instance reused): the picture stays on
+// our last frame (no loading movie) until the new one draws. The win streaks go on from ours where the bridge has none.
+async function liveSwitch(s, p) {
+  if (s.switching || session !== s) return;
+  s.switching = true;
+  const info = p.info;
+  if (!info.streak && s.streakKnown) info.streak = STREAK.map(a => s.M.HEAP32[a >> 2]);
+  console.log(`live: on to game ${p.game} (a new session)`);
+  status('live: on to the next game');
+  liveSrc = { id: s.liveSrc.id, info, since: info.game };
+  window.__mbaaRepUrl = null;
+  await start(new File([p.rep], `LIVE ${(info.names || []).map(n => (n || '').trim()).join(' vs ')}`), true);
 }
 // Live: the players' names on the game's versus banner, instead of CHALLENGER (the streak above them, smaller): drawn
 // by the game in its ASCII font (viewer_banner_name: main_browser.cpp banner_draw, a marquee past 20 characters); a
@@ -2093,7 +2217,9 @@ function liveBegin(s) {  // play(): after viewer_play
     const over = call(s, 'viewer_ended') || L.next;
     const dry = s.liveFollow && ahead < 15 && performance.now() - (L.dataAt ?? (L.dataAt = performance.now())) > 6000;
     // (following, the list is also read every 5 s for a game the session has not reached: below)
-    if ((over || dry || s.liveFollow) && performance.now() - (L.listAt || -1e9) > (over ? 1000 : 5000)) {
+    // (every second outside a battle: the result menu, a character select, a load, where the next game's setup comes)
+    const listEvery = over || s.M.HEAP32[0x54EEE8 >> 2] !== 1 ? 1000 : 5000;
+    if ((over || dry || s.liveFollow) && performance.now() - (L.listAt || -1e9) > listEvery) {
       L.listAt = performance.now();
       try {
         const l = await liveList(), now = l.find(m => m.id === L.id);
@@ -2110,16 +2236,30 @@ function liveBegin(s) {  // play(): after viewer_play
           return;
         }
         else if (now.game !== L.info.game) {
-          // the session goes on into the players' next game itself (retry menu, character select, loading); a newer game
-          // on the list it has not reached 30 s after the list showed it means it stopped following them (a phase it
-          // cannot play: the character select is partly ported, artifacts/cc_spectate/css_unported.txt): that game, from
-          // its start (else the page sat on the result menu for good, "0.0 s behind", the stream flowing past it)
+          // the session goes on into the players' next game itself (retry menu, character select, loading; after a
+          // character select its load checks the picks against the stream's setup: liveLoaderGate). A newer game on the
+          // list it has not reached: prepared in the background at once (liveNextPrep), and switched to (liveSwitch) when
+          // the session is not getting there: still at the result / retry menu or the win quote 5 s after the list
+          // showed it (a rematch's menu takes ~1-2 s after the choice), or not there by the time its frames to it have played (+3 s). (Before: a fresh start 30 s after
+          // the list showed it, the page sitting on the result menu or the select meanwhile.)
           const g0 = call(s, 'viewer_spectate_game'), g = g0 >= 0 ? g0 : L.info.game;  // (-1: still the first)
-          if (L.seenGame !== now.game) { L.seenGame = now.game; L.seenGameAt = performance.now(); }
-          const lost = liveJump() && g < now.game && performance.now() - L.seenGameAt > 30000;  // ("jump to live" off: behind on purpose)
-          if (lost && s.liveFollow && !over && !dry)
-            console.warn(`live: the list is on game ${now.game} for 30 s, this session still on ${g}: joining it`);
-          if (s.liveFollow && (over || dry || lost)) return startLive(L.id);
+          const behind = g < now.game, scene = s.M.HEAP32[0x54EEE8 >> 2], t = performance.now();
+          if (L.seenGame !== now.game) { L.seenGame = now.game; L.seenGameAt = t; L.seenAhead = ahead; L.stuckAt = null; }
+          if (behind && s.liveFollow) liveNextPrep(s, now.game, now).catch(e => console.warn(`live: game ${now.game} not prepared:`, e.message));
+          const p = behind ? livePrepOf(s, now.game) : null;
+          const stuckScene = behind && (call(s, 'viewer_spectate_in_retry') || scene === SCENE_WIN);
+          if (!stuckScene) L.stuckAt = null; else if (L.stuckAt == null) L.stuckAt = t;
+          const lost = liveJump() && behind && ((stuckScene && t - L.stuckAt > 5000) || t - L.seenGameAt > 1000 * (L.seenAhead / 60 + 3));
+          if (lost && s.liveFollow && !over && !dry && !L.lostSaid) {
+            L.lostSaid = true;
+            console.warn(`live: the list is on game ${now.game}, this session still on ${g} (scene ${scene}): ${p ? 'switching' : 'preparing it'}`);
+          }
+          // (a quiet stream on the game the session is on is the players at its result menu, not an end: nothing to
+          // start; restarting that game there replayed it from its start on every long result screen)
+          if (s.liveFollow && (over || (dry && behind) || lost)) {
+            if (p) return liveSwitch(s, p);
+            if (!lost || t - L.seenGameAt > 30000) return startLive(L.id);  // (not prepared in 30 s: the plain start)
+          }
           if (!s.liveFollow) {
             L.next = true;  // (DVR: stays on this game; LIVE goes to the current one)
             status('live: watching back; the next game is on (LIVE to join it)');
@@ -2167,7 +2307,7 @@ function liveBegin(s) {  // play(): after viewer_play
       // buffer (its floor: not a burst), two game frames per drawn frame until caught up
       const ff = !hold && Math.min(ahead, floor) > LIVE_BEHIND + 60;
       if (ff !== !!s.liveFF) { s.liveFF = ff; call(s, 'viewer_speed', ff ? 2 : ui.speed); }
-      if (s.cssHeld) status('live: loading the next game');
+      if (s.cssHeld || s.loadHeld) status('live: loading the next game');
       else status(hold ? `live: waiting for the stream (${(ahead / 60).toFixed(1)} s buffered)`
                   : `live: ${(ahead / 60).toFixed(1)} s behind the players` + (ff ? ' (catching up)' : ''));
     } else if (!s.seeking) {
@@ -2675,8 +2815,8 @@ function loading(on) {
     v.hidden = false; v.play().catch(() => {});
   } else if (!v.hidden) { v.hidden = true; v.pause(); }
 }
-async function start(file) {
-  loading(true);
+async function start(file, quiet = false) {
+  if (!quiet) loading(true);  // (quiet: a live switch, the last game's picture stays until the next one draws)
   // a pick on the radio lasts for its match: the next one (a switch, a playlist's next, a live game) has its own music
   if (radioPick) radioSet('');
   if (ensureAudio()) actx.resume();  // (after a drop or file pick: the page has had its gesture)
