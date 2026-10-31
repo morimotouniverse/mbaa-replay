@@ -320,7 +320,7 @@ function volInit() {
   const setVol = () => { if (outGain) outGain.gain.value = volGain(); try { localStorage.setItem('mbaaVolCe', vol.value); } catch (e) {} };
   vol.value = 100;
   try { const v = localStorage.getItem('mbaaVolCe'); if (v !== null) vol.value = v; } catch (e) {}
-  vol.oninput = () => { setVol(); vol.style.setProperty('--p', `${vol.value}%`); document.querySelector('#mute .i').className = `i ${+vol.value ? 'i-sound' : 'i-mute'}`; };
+  vol.oninput = () => { setVol(); if (typeof pipFollow === 'function') pipFollow(); vol.style.setProperty('--p', `${vol.value}%`); document.querySelector('#mute .i').className = `i ${+vol.value ? 'i-sound' : 'i-mute'}`; };
   vol.oninput();
 }
 // The game's DirectSound buffers as WebAudio voices (web/host/browser/audio_web.cpp, sound_sets.cpp). Channel = sound
@@ -518,7 +518,7 @@ function freshCanvas() {
   const old = document.getElementById('canvas');
   const c = old.cloneNode(false);
   old.replaceWith(c);
-  if (pipVideo) { pipVideo.srcObject = c.captureStream(60); pipVideo.play().catch(() => {}); }  // (picture in picture: the new canvas)
+  if (pipVideo) { pipSelfAt = performance.now(); pipVideo.srcObject = c.captureStream(60); pipVideo.play().catch(() => {}); }  // (picture in picture: the new canvas)
   // a phone frees a background page's GPU context (switching to another app and back): kept restorable, and the session
   // started again on a fresh instance (its textures, shaders and targets died with the context) where it was
   c.addEventListener('webglcontextlost', e => { e.preventDefault(); if (session) session.glLost = true; });
@@ -560,9 +560,33 @@ function pipSource() {
   pipVideo = document.createElement('video');
   pipVideo.id = 'pipv'; pipVideo.muted = true; pipVideo.playsInline = true; pipVideo.autoPictureInPicture = true;
   pipVideo.srcObject = document.getElementById('canvas').captureStream(60);
+  pipSelfAt = performance.now();
   pipVideo.addEventListener('leavepictureinpicture', () => { if (document.visibilityState === 'hidden') bgTick(true); });
+  // the window's own controls (Firefox draws volume, mute and play / pause; the video has no sound of its own): the
+  // page's volume slider and pause follow them, and they follow the page (pipFollow)
+  pipVideo.addEventListener('volumechange', () => {
+    const vol = document.getElementById('vol'), want = pipVideo.muted ? 0 : Math.round(pipVideo.volume * 100);
+    if (pipUser() && want !== +vol.value) { vol.value = want; vol.oninput(); }
+  });
+  for (const ev of ['play', 'pause']) pipVideo.addEventListener(ev, () => {
+    if (pipUser() && session && ui.paused !== pipVideo.paused) setPaused(pipVideo.paused);
+  });
   document.body.append(pipVideo);
   return pipVideo;
+}
+// an event from the video is the viewer's when it comes from the window's controls: in the window (Firefox has no API to
+// tell: any), and not the echo of a change the page just made
+let pipSelfAt = -1e9;
+const pipUser = () => (document.pictureInPictureElement === pipVideo || !document.pictureInPictureEnabled)
+                      && performance.now() - pipSelfAt > 250;
+function pipFollow() {
+  const v = pipVideo;
+  if (!v || (document.pictureInPictureElement !== v && document.pictureInPictureEnabled)) return;
+  pipSelfAt = performance.now();
+  const n = +document.getElementById('vol').value;
+  v.volume = n / 100;
+  v.muted = n === 0;
+  if (ui.paused !== v.paused) { if (ui.paused) v.pause(); else v.play().catch(() => {}); }
 }
 async function togglePip() {
   if (!document.pictureInPictureEnabled) return;
@@ -572,12 +596,15 @@ async function togglePip() {
     const v = pipSource();
     if (v.paused) v.play().catch(() => {});
     await v.requestPictureInPicture();
+    pipFollow();
   } catch (e) { status(`picture in picture: ${e.message}`); }
 }
 if (document.pictureInPictureEnabled) {
   document.getElementById('pip').hidden = false;
   // (Chrome: the page asks to pop out when it is left while playing)
   try { navigator.mediaSession.setActionHandler('enterpictureinpicture', () => togglePip()); } catch (e) {}
+  // (Chrome's window: play / pause buttons)
+  try { navigator.mediaSession.setActionHandler('play', () => setPaused(false)); navigator.mediaSession.setActionHandler('pause', () => setPaused(true)); } catch (e) {}
   // (the stream plays from the start, silent, so a tap or an automatic pop-out finds it ready)
   pipSource().play().catch(() => addEventListener('pointerdown', () => pipSource().play().catch(() => {}), { once: true }));
 }
@@ -2109,6 +2136,7 @@ function togglePlay() {
 }
 function setPaused(p) {
   ui.paused = p;
+  pipFollow();
   if (p && session && session.liveSrc && session.liveFollow) liveFollow(session, false);
   document.querySelector('#pause .i').className = `i ${p ? 'i-play' : 'i-pause'}`;
   const s = session;
