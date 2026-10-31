@@ -18,6 +18,22 @@
 // sender's colour unless their commands name another. A match channel's comments are played on the match's own timeline
 // instead (the timeline section): at the stream frame they were made at, through seeks, pauses and DVR, as Niconico
 // plays a video's comments; the same toggle turns them off (remembered, on by default).
+//
+// Signing in and moderation (tools/chat/ergo/ircd.yaml, tools/chat/meltybot.mjs): guests read every channel and its
+// history; speaking needs an account (channel mode +M). The account is the user's PovertyCaster community account,
+// signed in with Discord through the page's auth endpoint (<page dir>/auth/, the Worker: tools/chat/chat_auth_routes.mjs;
+// ?chatAuth= on a local test page): GET <auth>/token -> 200 {token, name, provider} (signed in: a short-lived token,
+// fetched again for each connection, sent as SASL PLAIN authcid "token"), 401 {signin, provider} (a guest: "Sign in
+// with Discord to chat"), 409 {need: "name", suggest} (no community account yet: the panel asks for a name, POST
+// <auth>/create {name}), 403 {denied} (banned), anything else (no sign-in on this server: chat as before). POST
+// <auth>/name {name} renames, POST <auth>/logout signs out. Signed in, the nick is the account, "<Name>-<tag>" (Ergo
+// force-nick-equals-account; tools/chat/ergo/chat_auth.py), shown as "Name#tag" for a message whose account tag is that
+// nick (+mbaa/name carries the exact display name, used when it maps to the nick); colour / character / moon as before.
+// Only the bot creates channels: a JOIN refused with 403 (or a channel the bot is not in) sends it "open <channel>" and
+// joins again. REDACT (draft/message-redaction: the bot's filter, a mod, or the sender deleting their own line) removes
+// the line from the panel, the overlay and the timeline; Ergo deletes it from the history too. Channel operators (the bot,
+// mods) and a signed-in sender get a delete button on a line. A guest's nick is checked with the slur filter here too
+// (a copy of tools/web/name_filter.mjs's lists, below; the bot renames one that gets through).
 (() => {
   'use strict';
   const api = window.mbaaChatApi;
@@ -26,6 +42,8 @@
   const LOCAL = /^(127\.0\.0\.1|localhost)$/.test(location.hostname);
   const WS_URL = (LOCAL && Q.get('chatUrl')) ||
     location.origin.replace(/^http/, 'ws') + location.pathname.replace(/\/[^/]*$/, '') + '/irc';
+  const AUTH_URL = (LOCAL && Q.get('chatAuth')) || location.pathname.replace(/\/[^/]*$/, '') + '/auth';
+  const BOT = 'MeltyBot';  // (the moderation bot's nick = its account, meltybot; IRC nicks compare case-insensitively)
   const GENERAL = '#melty', HISTORY = 50, MAXLEN = 300, MAXLINES = 300;
   // a match channel's history: from its start (CHATHISTORY AFTER an early time), PAGE lines a request (Ergo's
   // chathistory-maxmessages; its CHATHISTORY= token lowers it), the next page after the last msgid
@@ -37,6 +55,21 @@
     set(k, v) { try { localStorage.setItem(k, JSON.stringify(v)); } catch (e) {} },
   };
 
+  // ---- the name filter (a copy of tools/web/name_filter.mjs nameOk: keep the lists in sync; mod_e2e_test.py checks) ----
+  const LEET = { '0': 'o', '1': 'i', '!': 'i', '|': 'i', '3': 'e', '4': 'a', '@': 'a', '5': 's', '$': 's', '7': 't', '+': 't', '9': 'g', '6': 'g', '8': 'b' };
+  const fold = t => String(t || '').normalize('NFKD').replace(/[\u0300-\u036f]/g, '').toLowerCase().replace(/[0-9!|@$+]/g, c => LEET[c] || c);
+  const pat = w => w.split('').map(c => `${c}+`).join('');
+  const SUB = ['nigger', 'nigga', 'niglet', 'negroid', 'faggot', 'fagot', 'retard', 'tranny', 'trannie', 'kike', 'wetback', 'beaner',
+    'chingchong', 'shemale', 'hitler', 'siegheil', 'gaschamber', 'killallblacks', 'killalljews', 'pedophile', 'paedophile']
+    .map(w => new RegExp(pat(w)));
+  const WORD = ['fag', 'fags', 'spic', 'spics', 'chink', 'chinks', 'gook', 'gooks', 'coon', 'coons', 'dyke', 'dykes', 'paki',
+    'pakis', 'kys', 'nazi', 'nazis', 'rape', 'raped', 'rapist', 'jigaboo', 'zipperhead'].map(w => new RegExp(`^${pat(w)}$`));
+  function nameOk(name) {
+    const f = fold(name), letters = f.replace(/[^a-z]/g, '');
+    if (SUB.some(r => r.test(letters))) return false;
+    return ![letters, ...f.split(/[^a-z]+/)].some(w => w && WORD.some(r => r.test(w)));
+  }
+
   // ---- profile ----
   const NICK_RE = /^[A-Za-z_\[\]\\^{}|`][A-Za-z0-9_\-\[\]\\^{}|`]{0,23}$/;
   const randNick = () => 'viewer' + Math.floor(1000 + Math.random() * 9000);
@@ -44,7 +77,7 @@
   const PRESETS = ['#e04a5a', '#ff9a3c', '#ffd84a', '#7ee05a', '#40c0ff', '#7a8cff', '#c878e6', '#ff7ac8', '#e8e8f0'];
   const prof = Object.assign({ nick: randNick(), color: PRESETS[Math.floor(Math.random() * PRESETS.length)], chara: 17, moon: 1 },
     store.get('mbaa-chat-profile', {}));
-  if (!NICK_RE.test(prof.nick)) prof.nick = randNick();
+  if (!NICK_RE.test(prof.nick) || !nameOk(prof.nick)) prof.nick = randNick();
   if (!COLOR_RE.test(prof.color)) prof.color = PRESETS[0];
   const saveProf = () => store.set('mbaa-chat-profile', prof);
   // the characters with a select-screen icon (no boss versions), in the select screen's order
@@ -144,6 +177,18 @@
   #chatsec .cpop button.sw2[aria-pressed=true] { border-color: #fff; background-clip: padding-box; }
   #chatsec .cpop button.mine { width: auto; border-radius: 999px; padding: 0 8px 0 4px; gap: 4px; color: var(--fg); border: 1px solid var(--line); height: 24px; }
   #chatsec .cpop input[type=color] { width: 28px; height: 24px; }
+  #chatsec .cauth { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; font-size: 11px; color: var(--muted); }
+  #chatsec .cauth[hidden] { display: none; }
+  #chatsec .cauth a.signin { display: inline-flex; align-items: center; gap: 6px; padding: 5px 10px; border-radius: 8px; background: #5865f2; color: #fff;
+                             text-decoration: none; font-weight: 700; font-size: 12px; }
+  #chatsec .cauth button.signout { background: none; border: none; color: var(--faint); text-decoration: underline; cursor: pointer; font: inherit; padding: 0; }
+  #chatsec .cform[hidden] { display: none; }
+  #chatsec .cauth form.cname { display: flex; gap: 6px; width: 100%; }
+  #chatsec .cauth form.cname input { flex: 1 1 auto; min-width: 0; background: var(--raise); color: var(--fg); border: 1px solid var(--line); border-radius: 8px; padding: 4px 8px; font: inherit; }
+  #chatsec .cauth .cerr { color: #ff8080; width: 100%; }
+  #chatlog li .cdel { margin-left: auto; flex: none; background: none; border: none; color: var(--faint); cursor: pointer; font-size: 12px; line-height: 1;
+                      padding: 0 2px; opacity: 0; }
+  #chatlog li:hover .cdel, #chatlog li .cdel:focus-visible { opacity: 1; }
   #chatover { position: absolute; left: 0; top: 0; width: 100%; height: 100%; overflow: hidden; pointer-events: none; z-index: 1; }
   #chatover canvas { position: absolute; top: 0; height: 100%; }
   `;
@@ -178,6 +223,7 @@
         <div class="row"><span class="lbl">any colour</span><input type="color" class="ccustom" aria-label="any colour"></div>
       </div>
     </div>
+    <div class="cauth" hidden></div>
     <form class="cform" autocomplete="off"><input id="chatcmd" type="text" maxlength="60" spellcheck="false" placeholder="commands"
       title="Niconico commands for your comments on the picture, e.g. ue / shita (top / bottom, 3 s), big / small, a colour (red, pink, orange, yellow, green, cyan, blue, purple, white, black, white2, red2, …, or #rrggbb). Empty: scrolls, medium, your colour."><input id="chatin" type="text" maxlength="${MAXLEN}" placeholder="say something…" enterkeyhint="send">
       <button type="submit" class="txt">send</button></form>
@@ -242,7 +288,9 @@
   }
   $('#chatnick').onchange = e => {
     const n = e.target.value.trim();
+    if (irc.account) { e.target.value = irc.nick; sys('signed in: your nick is your account'); return; }
     if (!NICK_RE.test(n)) { e.target.value = prof.nick; sys('nick: letters, digits, _ - [ ] { } | ^ ` (not starting with a digit or -), up to 24'); return; }
+    if (!nameOk(n)) { e.target.value = prof.nick; sys('that nick is not allowed'); return; }
     prof.nick = n; saveProf(); profShow();
     if (irc.registered && n !== irc.nick) irc.send(`NICK ${n}`);
   };
@@ -254,7 +302,8 @@
   const key = n => n.toLowerCase();
   function chan(name) {
     let c = chans.get(key(name));
-    if (!c) chans.set(key(name), c = { name, lines: [], names: new Set(), joined: false, histDone: false, seen: new Set() });
+    if (!c) chans.set(key(name), c = { name, lines: [], names: new Set(), ops: new Set(), joined: false, histDone: false, seen: new Set(),
+                                       tries: 0, retryAt: 0 });
     return c;
   }
   function tabs() {
@@ -282,6 +331,17 @@
     nk.textContent = l.action ? `* ${l.nick}` : l.nick;
     body.append(tm, nk, document.createTextNode(l.text));
     li.append(body);
+    if (l.msgid) {
+      li.dataset.msgid = l.msgid;
+      // (channel operators: any line; a signed-in sender: their own; Ergo checks either way)
+      const c = l.chan && chans.get(key(l.chan));
+      if (c && (c.ops.has(key(irc.nick)) || (l.self && irc.account))) {
+        const b = document.createElement('button');
+        b.type = 'button'; b.className = 'cdel'; b.textContent = '×'; b.title = 'delete this message'; b.setAttribute('aria-label', 'delete this message');
+        b.onclick = () => { irc.send(`REDACT ${c.name} ${l.msgid}`); b.disabled = true; };
+        li.append(b);
+      }
+    }
     return li;
   }
   function render() {
@@ -291,6 +351,7 @@
   }
   function addLine(name, l) {
     const c = chan(name);
+    l.chan = c.name;
     if (l.msgid) { if (c.seen.has(l.msgid)) return; c.seen.add(l.msgid); }
     if (!l.sys && isMatch(name)) tlAdd(l);
     // (history arrives oldest first, before any live line of that channel: kept in time order)
@@ -308,6 +369,21 @@
   let renderPend = 0;  // (a match's whole history arrives line by line: one redraw for the lot)
   const renderSoon = () => { if (!renderPend) renderPend = setTimeout(() => { renderPend = 0; render(); }, 0); };
   const sys = (text, name) => addLine(name || shown, { sys: true, text, time: new Date() });
+  // a deleted message (REDACT): out of the panel, the overlay and the timeline (its msgid stays seen: history won't bring
+  // it back, and Ergo has deleted it from the history anyway)
+  function unsay(name, msgid) {
+    const c = chans.get(key(name));
+    if (!c || !msgid) return;
+    c.seen.add(msgid);
+    const i = c.lines.findIndex(l => l.msgid === msgid);
+    if (i >= 0) { c.lines[i].gone = true; c.lines.splice(i, 1); }
+    if (key(name) === key(shown)) { const li = logEl.querySelector(`li[data-msgid="${CSS.escape(msgid)}"]`); if (li) li.remove(); }
+    const n0 = nico.list.length;
+    nico.list = nico.list.filter(x => x.msgid !== msgid);
+    if (nico.list.length !== n0 && nico.inst) nicoBuild();
+    const e = tl.entries.find(x => x.l.msgid === msgid);
+    if (e) { tl.entries = tl.entries.filter(x => x !== e); if (e.raw && tl.inst) { tlBuild(); tl.vpos = -1; } }
+  }
 
   // ---- the overlay: Niconico's own comment layout ----
   // Drawn by niconicomments 0.4.1 (MIT, xpadev-net; vendor/niconicomments-0.4.1.js, self-hosted, loaded on the first
@@ -475,13 +551,13 @@
   async function danmaku(l) {
     if (!overOn.checked || document.visibilityState === 'hidden') return;
     try { await nicoLoad(); } catch (e) { return; }
-    if (!overOn.checked || document.visibilityState === 'hidden') return;
+    if (l.gone || !overOn.checked || document.visibilityState === 'hidden') return;
     pin();
     if (!nico.inst) { nico.t0 = performance.now(); nico.list = []; if (!nicoBuild()) return; }
     const { raw, fixed } = nicoRaw(l, vposNow());
     // (gone: naka by its timeline's end, vpos + 300 + 125; fixed after 300)
     const end = raw.vpos + (fixed ? 300 : 425) + 10;
-    nico.list.push({ raw, end });
+    nico.list.push({ raw, end, msgid: l.msgid });
     nico.end = Math.max(nico.end, end);
     if (nico.list.length > 200) nicoBuild(); else nico.inst.addComments(raw);
     if (!nico.raf) nico.raf = requestAnimationFrame(nicoFrame);
@@ -635,8 +711,103 @@
   setInterval(() => { if (matchChan && tl.entries.length) { tlPlace(); tlKick(); } }, 1000);
 
   // ---- IRC ----
-  const irc = { ws: null, registered: false, nick: prof.nick, caps: new Set(), batches: new Map(), retry: 0, lastSend: 0 };
-  const WANT = ['message-tags', 'server-time', 'echo-message', 'batch', 'draft/chathistory', 'chathistory'];
+  const irc = { ws: null, registered: false, nick: prof.nick, caps: new Set(), batches: new Map(), retry: 0, lastSend: 0, account: null };
+  const WANT = ['message-tags', 'server-time', 'echo-message', 'batch', 'draft/chathistory', 'chathistory', 'draft/message-redaction',
+    'multi-prefix', 'sasl', 'account-tag'];
+  // a signed-in sender's name: "<Name>-0042" (+ a letter on a clash) -> "Name#0042"; +mbaa/name's exact display name
+  // when it maps to that nick (chat_auth.py safe())
+  const safeName = n => String(n).replace(/[^A-Za-z0-9_]/g, '_').replace(/^_+|_+$/g, '').slice(0, 19) || 'user';
+  function shownNick(nick, account, tagName) {
+    const mm = account && key(account) === key(nick) ? /^(.+)-(\d{4})[a-z]?$/.exec(nick) : null;
+    if (!mm) return nick;
+    const t = /^(.{1,64})#(\d{4})$/.exec(tagName || '');
+    return t && t[2] === mm[2] && key(safeName(t[1])) === key(mm[1]) ? tagName : `${mm[1]}#${mm[2]}`;
+  }
+
+  // ---- signing in (the auth endpoint: see the top) ----
+  const auth = { state: 'unknown', token: null, name: null, provider: null, signin: null, suggest: '', err: '' };
+  const authEl = $('.cauth'), formEl = $('.cform');
+  async function authFetch() {
+    try {
+      const r = await fetch(`${AUTH_URL}/token`, { cache: 'no-store', credentials: 'same-origin' });
+      const j = [200, 401, 403, 409].includes(r.status) ? await r.json().catch(() => ({})) : null;
+      if (r.status === 200 && j && j.token) Object.assign(auth, { state: 'signed', token: j.token, name: j.name || null, provider: j.provider || null });
+      else if (r.status === 401 && j && j.signin) Object.assign(auth, { state: 'guest', token: null, signin: j.signin, provider: j.provider || null });
+      else if (r.status === 409 && j && j.need === 'name') Object.assign(auth, { state: 'name', token: null, suggest: j.suggest || '' });
+      else if (r.status === 403 && j && j.denied) Object.assign(auth, { state: 'denied', token: null });
+      else Object.assign(auth, { state: 'none', token: null });
+    } catch (e) { Object.assign(auth, { state: 'none', token: null }); }
+    authShow();
+  }
+  function authShow() {
+    authEl.replaceChildren();
+    const signedIn = !!irc.account;
+    if (signedIn) {
+      const t = document.createElement('span');
+      t.textContent = `signed in as ${shownNick(irc.account, irc.account, auth.name)}${auth.provider ? ` (with ${auth.provider})` : ''}`;
+      const b = document.createElement('button'); b.type = 'button'; b.className = 'signout'; b.textContent = 'sign out';
+      b.onclick = async () => {
+        try { await fetch(`${AUTH_URL}/logout`, { method: 'POST', credentials: 'same-origin' }); } catch (e) {}
+        Object.assign(auth, { state: 'unknown', token: null });
+        if (irc.ws) irc.ws.close();  // (reconnects as a guest)
+      };
+      authEl.append(t, b);
+      const rn = document.createElement('button'); rn.type = 'button'; rn.className = 'signout'; rn.textContent = 'change name';
+      rn.onclick = () => { auth.renaming = true; authShow(); };
+      authEl.append(rn);
+      if (auth.renaming) nameForm('name', irc.account.replace(/-\d{4}[a-z]?$/, ''), 'rename');
+    } else if (auth.state === 'name') {
+      const t = document.createElement('span'); t.textContent = 'Pick your name (your PovertyCaster account, the same one the launcher uses):';
+      authEl.append(t);
+      nameForm('create', auth.suggest, 'create account');
+    } else if (auth.state === 'denied') {
+      const t = document.createElement('span'); t.textContent = 'This account may not chat.'; authEl.append(t);
+    } else if (auth.state === 'guest' || (auth.state === 'signed' && irc.registered)) {
+      const a = document.createElement('a'); a.className = 'signin';
+      const ret = location.pathname + location.search;
+      a.href = auth.signin ? auth.signin + (auth.signin.includes('?') ? '&' : '?') + 'return=' + encodeURIComponent(ret) : '#';
+      a.textContent = `Sign in${auth.provider ? ` with ${auth.provider}` : ''} to chat`;
+      authEl.append(a);
+      const n = document.createElement('span'); n.textContent = 'guests can read'; authEl.append(n);
+    }
+    if (auth.err) { const e = document.createElement('span'); e.className = 'cerr'; e.textContent = auth.err; authEl.append(e); }
+    authEl.hidden = !authEl.childElementCount;
+    // a guest on a server with sign-in: no input (channels are +M); without sign-in (auth 'none'): as before
+    formEl.hidden = !signedIn && auth.state !== 'none' && auth.state !== 'unknown';
+    $('#chatnick').disabled = signedIn;
+    if (signedIn) { $('.mynick').textContent = shownNick(irc.account, irc.account, auth.name); $('#chatnick').value = irc.account; }
+  }
+  // a name box: create the community account (POST <auth>/create) or rename it (<auth>/name); then a fresh connection
+  function nameForm(what, value, label) {
+    const f = document.createElement('form'); f.className = 'cname';
+    const i = document.createElement('input'); i.type = 'text'; i.maxLength = 32; i.value = value || ''; i.placeholder = 'name'; i.spellcheck = false;
+    const b = document.createElement('button'); b.type = 'submit'; b.className = 'txt'; b.textContent = label;
+    f.append(i, b);
+    f.onsubmit = async e => {
+      e.preventDefault();
+      const name = i.value.trim();
+      if (!name) return;
+      if (!nameOk(name)) { auth.err = 'that name is not allowed'; authShow(); return; }
+      b.disabled = true;
+      let r = null, j = {};
+      try { r = await fetch(`${AUTH_URL}/${what}`, { method: 'POST', credentials: 'same-origin', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name }) }); j = await r.json().catch(() => ({})); } catch (e2) {}
+      if (!r || r.status !== 200) {
+        auth.err = { bad_name: 'that name is not allowed (letters, digits, a few symbols; not too long)', name_taken: 'that name is taken' }[j.error] || (j.detail || j.error || 'could not save the name');
+        authShow(); return;
+      }
+      auth.err = ''; auth.renaming = false;
+      if (irc.ws) irc.ws.close(); else start();  // (reconnects signed in, with the new name)
+    };
+    authEl.append(f);
+  }
+  // the bot opens a channel we may not create (403) or is not in yet; we join again shortly
+  function askOpen(c) {
+    const now = Date.now();
+    if (now < c.retryAt) return;
+    c.retryAt = now + Math.min(15000, 1500 * 2 ** Math.min(c.tries++, 4));
+    irc.send(`PRIVMSG ${BOT} :open ${c.name}`);
+    setTimeout(() => { if (!c.joined && irc.registered) irc.send(`JOIN ${c.name}`); }, 1200);
+  }
   irc.send = line => { if (irc.ws && irc.ws.readyState === 1) irc.ws.send(line); };
   function state(t) { stateEl.textContent = t ? `· ${t}` : ''; }
   const unesc = v => v.replace(/\\(.)/g, (_, c) => ({ ':': ';', s: ' ', '\\': '\\', r: '\r', n: '\n' })[c] ?? c);
@@ -658,6 +829,7 @@
     try { ws = new WebSocket(WS_URL, ['text.ircv3.net']); } catch (e) { state('offline'); return later(); }
     irc.ws = ws; irc.registered = false; irc.caps.clear(); irc.batches.clear();
     ws.onopen = () => {
+      irc.account = null;
       irc.send('CAP LS 302');
       irc.nick = prof.nick;
       irc.send(`NICK ${irc.nick}`);
@@ -670,11 +842,14 @@
       if (irc.ws !== ws) return;
       irc.ws = null; irc.registered = false;
       for (const c of chans.values()) { c.joined = false; c.names.clear(); }
+      irc.account = null; authShow();
       tabs(); state('offline, retrying'); later();
     };
     ws.onerror = () => {};
   }
-  function later() { const d = Math.min(30000, 1500 * 2 ** irc.retry++); setTimeout(connect, d + Math.random() * 1000); }
+  function later() { const d = Math.min(30000, 1500 * 2 ** irc.retry++); setTimeout(start, d + Math.random() * 1000); }
+  // each connection: a fresh sign-in token first (short-lived), then the socket
+  async function start() { await authFetch(); connect(); }
   function join(name) { const c = chan(name); if (irc.registered && !c.joined) irc.send(`JOIN ${name}`); }
   function on(m) {
     const p = m.params;
@@ -690,14 +865,29 @@
             irc.caps.clear();
             if (want.length) irc.send(`CAP REQ :${want.join(' ')}`); else irc.send('CAP END');
           }
-        } else if (sub === 'ACK') { for (const c of (p[2] || '').split(' ')) if (c) irc.caps.add(c); irc.send('CAP END'); }
+        } else if (sub === 'ACK') {
+          for (const c of (p[2] || '').split(' ')) if (c) irc.caps.add(c);
+          if (irc.caps.has('sasl') && auth.token) irc.send('AUTHENTICATE PLAIN'); else irc.send('CAP END');
+        }
         else if (sub === 'NAK') irc.send('CAP END');
         return;
       }
+      case 'AUTHENTICATE':
+        if (p[0] === '+' && auth.token) {
+          const b = btoa(String.fromCharCode(...new TextEncoder().encode(`\0token\0${auth.token}`)));
+          for (let i = 0; i < b.length; i += 400) irc.send(`AUTHENTICATE ${b.slice(i, i + 400)}`);
+          if (b.length % 400 === 0) irc.send('AUTHENTICATE +');
+        }
+        return;
+      case '900': irc.account = p[2] || null; return;  // (logged in as <account>)
+      case '903': irc.send('CAP END'); return;
+      case '902': case '904': case '905': case '906': case '908':
+        if (m.cmd !== '908') { sys('sign-in failed: chatting as a guest (reload to try again)'); auth.token = null; irc.send('CAP END'); }
+        return;
       case '001':
         irc.registered = true; irc.retry = 0; irc.nick = p[0];
         if (irc.nick !== prof.nick) sys(`connected as ${irc.nick}`);
-        state('');
+        state(''); authShow();
         join(GENERAL); if (matchChan) join(matchChan);
         return;
       case '432': case '433': {  // nick taken / not allowed
@@ -714,16 +904,47 @@
       }
       case 'JOIN': {
         const c = chan(p[0]);
-        if (m.nick === irc.nick) c.joined = true;
+        if (m.nick === irc.nick) { c.joined = true; c.tries = 0; c.retryAt = 0; c.ops.clear(); }
         c.names.add(m.nick); tabs();
         return;
       }
-      case 'PART': { const c = chan(p[0]); c.names.delete(m.nick); if (m.nick === irc.nick) { c.joined = false; c.names.clear(); } tabs(); return; }
+      case 'PART': { const c = chan(p[0]); c.names.delete(m.nick); c.ops.delete(key(m.nick)); if (m.nick === irc.nick) { c.joined = false; c.names.clear(); } tabs(); return; }
       case 'KICK': { const c = chan(p[0]); c.names.delete(p[1]); if (p[1] === irc.nick) { c.joined = false; c.names.clear(); sys(`kicked from ${p[0]}`, p[0]); } tabs(); return; }
       case 'QUIT': for (const c of chans.values()) c.names.delete(m.nick); tabs(); return;
-      case '353': { const c = chan(p[2]); for (const n of (p[3] || '').split(' ')) if (n) c.names.add(n.replace(/^[~&@%+]+/, '')); return; }
+      case '353': {
+        const c = chan(p[2]);
+        for (const n of (p[3] || '').split(' ')) {
+          if (!n) continue;
+          const pre = n.match(/^[~&@%+]*/)[0], nk = n.slice(pre.length).split('!')[0];
+          c.names.add(nk);
+          if (/[~&@%]/.test(pre)) c.ops.add(key(nk)); else c.ops.delete(key(nk));
+        }
+        return;
+      }
+      case 'MODE': {  // (operator status: who gets delete buttons)
+        const c = p[0][0] === '#' ? chans.get(key(p[0])) : null;
+        if (!c) return;
+        let add = true, ai = 2, mine = false;
+        for (const ch of p[1] || '') {
+          if (ch === '+' || ch === '-') { add = ch === '+'; continue; }
+          if ('qaohv'.includes(ch)) {
+            const nk = p[ai++] || '';
+            if ('qaoh'.includes(ch)) { if (add) c.ops.add(key(nk)); else c.ops.delete(key(nk)); if (key(nk) === key(irc.nick)) mine = true; }
+          } else if ('beIkf'.includes(ch) || (ch === 'l' && add)) ai++;
+        }
+        if (mine && key(c.name) === key(shown)) render();
+        return;
+      }
+      case 'REDACT': unsay(p[0], p[1]); return;
+      case '403': {  // (only the bot creates channels: ask it to open ours)
+        const c = chans.get(key(p[1] || ''));
+        if (c && !c.joined && (key(c.name) === key(GENERAL) || isMatch(c.name))) askOpen(c);
+        else sys(clean(p[p.length - 1] || 'no such channel'));
+        return;
+      }
       case '366': {
         const c = chan(p[1]); tabs();
+        if (!c.names.has(BOT) && ![...c.names].some(n => key(n) === key(BOT))) { c.retryAt = 0; irc.send(`PRIVMSG ${BOT} :open ${c.name}`); }
         if (!c.histDone && (irc.caps.has('draft/chathistory') || irc.caps.has('chathistory'))) {
           c.histDone = true;
           // a per-match channel (#m-<match key>): everything, oldest first, for its timeline; else the latest lines
@@ -748,19 +969,32 @@
       case '005':  // (CHATHISTORY=<n>: the most lines a request returns)
         for (const t of p) { const m2 = /^CHATHISTORY=(\d+)$/.exec(t); if (m2 && +m2[1] > 0) PAGE = Math.min(PAGE, +m2[1]); }
         return;
+      case 'TAGMSG': {  // (the bot's live-server notice, +mbaa/notice: shown to who is here now; Ergo keeps no TAGMSG history)
+        const nt = m.tags['+mbaa/notice'];
+        if (nt && key(m.nick) === key(BOT) && p[0] && p[0][0] === '#') sys(clean(nt).slice(0, 200), p[0]);
+        return;
+      }
       case 'PRIVMSG': case 'NOTICE': {
         const target = p[0], text0 = p[1] || '';
         const bt = m.tags.batch && irc.batches.get(m.tags.batch);
         if (bt) { bt.n++; if (m.tags.msgid) bt.last = m.tags.msgid; }
         if (m.nick === 'HistServ') return;  // (history's join / part events, as messages for clients without event-playback)
-        if (target[0] !== '#') { if (m.cmd === 'NOTICE' && !m.nick.includes('.')) return; if (m.cmd === 'NOTICE') sys(clean(text0)); return; }
+        if (target[0] !== '#') {
+          if (key(m.nick) === key(BOT)) {  // (the bot: "opened #chan" -> join it now; anything else is for us to read)
+            const o = /^opened (#\S+)$/.exec(text0);
+            if (o) { const c = chans.get(key(o[1])); if (c && !c.joined) irc.send(`JOIN ${c.name}`); return; }
+            if (m.cmd === 'NOTICE') sys(clean(text0));
+            return;
+          }
+          if (m.cmd === 'NOTICE' && !m.nick.includes('.')) return; if (m.cmd === 'NOTICE') sys(clean(text0)); return;
+        }
         let text = text0, action = false;
         if (text.startsWith('\x01')) { if (!text.startsWith('\x01ACTION ')) return; action = true; text = text.slice(8).replace(/\x01$/, ''); }
         const t = m.tags, hist = !!(bt && /chathistory/.test(bt.type));
         const at = /^\d{1,9}\.\d{1,7}$/.test(t['+mbaa/at'] || '') ? t['+mbaa/at'].split('.').map(Number) : null;
         const chara = /^\d{1,2}$/.test(t['+mbaa/chara'] || '') ? +t['+mbaa/chara'] : -1;
         const moon = /^[0-2]$/.test(t['+mbaa/moon'] || '') ? +t['+mbaa/moon'] : -1;
-        addLine(target, { nick: m.nick, text: clean(text), action, hist, self: m.nick === irc.nick, msgid: t.msgid,
+        addLine(target, { nick: shownNick(m.nick, t.account, clean(t['+mbaa/name'] || '')), text: clean(text), action, hist, self: m.nick === irc.nick, msgid: t.msgid,
                           time: t.time ? new Date(t.time) : new Date(), color: COLOR_RE.test(t['+mbaa/color'] || '') ? t['+mbaa/color'] : null,
                           chara: validChara(chara) ? chara : -1, moon, cmd: nicoCmds(t['+mbaa/cmd']).join(' '), at });
         return;
@@ -788,11 +1022,11 @@
     const cmd = nicoCmds(cmdIn.value).join(' ');
     // in the match's channel: where our picture is in its stream (the comment's place on the match's timeline)
     const pic = isMatch(shown) ? nowOf(api.live()) : null, at = pic && pic.pos ? pic.pos : null;
-    const tags = irc.caps.has('message-tags') ? `@+mbaa/color=${prof.color};+mbaa/chara=${prof.chara};+mbaa/moon=${prof.moon}${cmd ? `;+mbaa/cmd=${cmd.replace(/ /g, '\\s')}` : ''}${at ? `;+mbaa/at=${at[0]}.${at[1]}` : ''} ` : '';
+    const tags = irc.caps.has('message-tags') ? `@+mbaa/color=${prof.color};+mbaa/chara=${prof.chara};+mbaa/moon=${prof.moon}${cmd ? `;+mbaa/cmd=${cmd.replace(/ /g, '\\s')}` : ''}${at ? `;+mbaa/at=${at[0]}.${at[1]}` : ''}${irc.account && auth.name ? `;+mbaa/name=${auth.name.replace(/\\/g, '\\\\').replace(/;/g, '\\:').replace(/ /g, '\\s')}` : ''} ` : '';
     irc.send(`${tags}PRIVMSG ${shown} :${text}`);
     if (!irc.caps.has('echo-message')) {
       const action = text.startsWith('\x01ACTION ');
-      addLine(shown, { nick: irc.nick, text: action ? text.slice(8, -1) : text, action, self: true, time: new Date(),
+      addLine(shown, { nick: shownNick(irc.nick, irc.account, auth.name), text: action ? text.slice(8, -1) : text, action, self: true, time: new Date(),
                        color: prof.color, chara: prof.chara, moon: prof.moon, cmd, at });
     }
   }
@@ -820,6 +1054,6 @@
   }, 1000);
 
   tabs(); render();
-  connect();
-  window.mbaaChat = { irc, chans, prof, danmaku, say, nico, tl, clockPos, localOf, posOf, nowOf, feed: raw => on(parse(raw)), show: name => { chan(name); shown = name; tabs(); render(); }, status: () => ({ connected: irc.registered, nick: irc.nick, caps: [...irc.caps], shown, matchChan }) };  // (tests)
+  start();
+  window.mbaaChat = { irc, auth, nameOk, chans, prof, danmaku, say, nico, tl, clockPos, localOf, posOf, nowOf, feed: raw => on(parse(raw)), show: name => { chan(name); shown = name; tabs(); render(); }, status: () => ({ connected: irc.registered, nick: irc.nick, caps: [...irc.caps], shown, matchChan }) };  // (tests)
 })();
