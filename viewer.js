@@ -1218,6 +1218,30 @@ async function liveCatchUp(s, n) {
 // placed as CharaSelectIcons_Draw does (the icon cell from the game's chara -> cell table). The characters come from the
 // battle slots, so a game after a character select shows its new picks.
 const ICON_CELL = 0x5519F8, BSLOT = 0x74D838, MOON_X = [112, 0, 224], MOON_NAME = ['Crescent', 'Full', 'Half'];
+// the select screen's icon cell per character id (MBAA.exe .data ICON_CELL, ids 0..51; -1: none), for drawing before
+// a game has booted (the live list)
+const ICON_CELLS = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 33, 16, 17, 18, 19, -1, 20, 21, -1, 23, -1, -1, 22,
+                    24, 25, 26, 27, 28, 31, 32, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, 34];
+// a character's icon cell; the boss versions have none: their base character's (B. Aoko -> Aoko)
+function iconCell(c) {
+  const cellOf = id => ICON_CELLS[id] ?? -1;
+  if (cellOf(c) >= 0) return cellOf(c);
+  const base = CHARA[c] && CHARA[c].startsWith('B. ') ? +Object.keys(CHARA).find(k => CHARA[k] === CHARA[c].slice(3)) : -1;
+  return cellOf(base);
+}
+// a character icon (canvas w x h, the cell's 48x64 scaled) and a moon mark (canvas, 56x56 scaled) from the select sheets
+function drawIcon(cv, c) {
+  const x = cv.getContext('2d'), cell = iconCell(c);
+  x.clearRect(0, 0, cv.width, cv.height);
+  if (plArt && cell >= 0) x.drawImage(plArt.icons, 48 * (cell % 10), (Math.floor(cell / 10) + 4) * 64, 48, 64, 0, 0, cv.width, cv.height);
+}
+function drawMoon(cv, m) {
+  const x = cv.getContext('2d');
+  x.clearRect(0, 0, cv.width, cv.height);
+  if (plArt && m >= 0 && m <= 2) x.drawImage(plArt.cursor, MOON_X[m], 288, 56, 56, 0, 0, cv.width, cv.height);
+}
+// this tab's random id, sent with live record requests: the feed counts the tabs watching each match (nothing else)
+const VIEWER = Array.from(crypto.getRandomValues(new Uint8Array(12)), b => 'abcdefghijklmnopqrstuvwxyz0123456789'[b % 36]).join('');
 let plArt = null, plKey = '', plCells = [-1, -1];
 async function playersArt() {
   if (plArt) return plArt;
@@ -1239,13 +1263,8 @@ function playersShow(s) {
     plKey = key;
     sides.forEach(([c, m], p) => {
       const row = rows[p];
-      // the boss versions have no select-screen cell: their base character's icon (B. Aoko -> Aoko)
-      const base = CHARA[c] && CHARA[c].startsWith('B. ') ? +Object.keys(CHARA).find(k => CHARA[k] === CHARA[c].slice(3)) : c;
-      const cellOf = id => id >= 0 && id <= 100 ? H[(ICON_CELL + 4 * id) >> 2] : -1;
-      plCells[p] = cellOf(c) >= 0 ? cellOf(c) : cellOf(base);
-      const mo = row.querySelector('.moon').getContext('2d');
-      mo.clearRect(0, 0, 56, 56);
-      if (m >= 0 && m <= 2) mo.drawImage(plArt.cursor, MOON_X[m], 288, 56, 56, 0, 0, 56, 56);
+      plCells[p] = iconCell(c);
+      drawMoon(row.querySelector('.moon'), m);
       const moon = m >= 0 && m <= 2 ? MOON_NAME[m] : m === 9 ? 'Eclipse' : '';  // (9: the bosses' moon)
       row.querySelector('.nm').textContent = names[p] || CHARA[c] || `Player ${p + 1}`;
       row.querySelector('.ch span').textContent = names[p] ? `${moon} ${CHARA[c] || ''}`.trim() : moon;
@@ -1349,22 +1368,43 @@ setInterval(() => {
   stageShow(session).catch(() => {});
   playersArt().then(() => playersShow(session)).catch(() => {});
 }, 500);
+// the watched match's viewer count (the live list's, every 15 s), on the players panel's VS line
+function liveWatching(n) {
+  const e = document.getElementById('watching');
+  if (e) e.textContent = n ? `· ${n} watching` : '';
+}
 // the panel's "live now" list (refreshed every 15 s; hidden while nothing is live or the feed is unreachable)
 async function liveListShow() {
   const sec = document.getElementById('livesec'), ol = document.getElementById('liveitems');
   if (!LIVE_FEED) { sec.hidden = true; return; }
   let l = [];
   try { l = await liveList(); } catch (e) {}
+  try { await playersArt(); } catch (e) {}
   sec.hidden = !l.length;
+  const el = (tag, cls, txt) => { const e = document.createElement(tag); if (cls) e.className = cls; if (txt != null) e.textContent = txt; return e; };
   ol.replaceChildren(...l.map(m => {
     const li = document.createElement('li'), a = document.createElement('a');
     // (the page's <base> is the site root on the live path: a bare ?live= would leave it)
     a.href = `${location.pathname}?live=${m.id}` + (Q.get('liveUrl') ? `&liveUrl=${encodeURIComponent(Q.get('liveUrl'))}` : '');
-    a.textContent = m.matchup || m.names.map(n => n.trim()).join(' vs ');
-    if (liveSrc && liveSrc.id === m.id) li.className = 'cur';
+    const names = (m.names || []).map(n => (n || '').trim());
+    a.title = m.matchup || names.join(' vs ');
+    // each side: the character's select icon and moon, then the player's name (no name: the character's)
+    const side = p => {
+      const c = m.chara && m.chara[p], mo = m.moon && m.moon[p], sp = el('span', 'side');
+      const ico = el('canvas', 'lico'); ico.width = 24; ico.height = 32;
+      const moon = el('canvas', 'lmoon'); moon.width = 14; moon.height = 14;
+      if (plArt && iconCell(c) >= 0) { drawIcon(ico, c); drawMoon(moon, mo); sp.append(ico, moon); }
+      sp.append(el('span', 'lnm', names[p] || CHARA[c] || `Player ${p + 1}`));
+      sp.title = `${mo === 9 ? 'Eclipse' : MOON_NAME[mo] || ''} ${CHARA[c] || ''}`.trim();
+      return sp;
+    };
+    a.append(side(0), el('span', 'lvs', 'vs'), side(1));
+    if (m.viewers) a.append(el('span', 'lview', `${m.viewers} watching`));
+    if (liveSrc && liveSrc.id === m.id) { li.className = 'cur'; liveWatching(m.viewers); }
     li.append(a);
     return li;
   }));
+  if (!l.some(m => liveSrc && liveSrc.id === m.id)) liveWatching(0);
   setTimeout(liveListShow, 15000);
 }
 // the received records by index (each the longest so far), kept outside the game's memory: a seek's keyframe restore
@@ -1640,7 +1680,7 @@ function liveBegin(s) {  // play(): after viewer_play
   const poll = async () => {
     if (session !== s) return;
     try {
-      const r = await fetch(`${LIVE}/live/${L.id}/rec?from=${L.info.game}&since=${L.since}`, { cache: 'no-store' });
+      const r = await fetch(`${LIVE}/live/${L.id}/rec?from=${L.info.game}&since=${L.since}&v=${VIEWER}`, { cache: 'no-store' });
       if (r.ok) {
         const b = new Uint8Array(await r.arrayBuffer());
         if (b.length && session === s) {
