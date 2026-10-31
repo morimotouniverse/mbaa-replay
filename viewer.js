@@ -1398,7 +1398,8 @@ requestAnimationFrame(playersAnimate);
 // the radio's pick replaces the match's music (replays and live) until it is set back to the match's. Its game bar
 // switches the track list between MBAACC and the older games (Act Cadenza, Re-ACT, Melty Blood: their list, tracks and
 // stage files fetched only when picked); an older game's stage track also runs that game's own stage file in the
-// game's background engine in place of the match's stage (web/host/radio_stage.cpp; the fight is untouched). Each
+// game's background engine in place of the match's stage, and an MBAACC track loads its own MBAACC stage as the game
+// loads one (web/host/radio_stage.cpp; the fight is untouched). Each
 // tile links Raito's own upload of the song where there is one.
 let stagePanel = null, stageKey = '', radio = null, oldRadio = null, radioGame = 'aacc';
 const RADIO_GAMES = [['aacc', 'MBAACC'], ['ac', 'Act Cadenza'], ['re', 'Re-ACT'], ['mb', 'Melty Blood']];
@@ -1494,11 +1495,17 @@ async function radioArt() {
   }
 }
 // a pick: '' (the match's music), an MBAACC track (bgmmeNN) or an older game's ('ac:01')
+// an MBAACC track's stages (panel.json: the stages whose BGM it is), the tile's (the first with a preview) first
+function radioTrackStages(f) {
+  const ids = Object.entries(stagePanel.stages).filter(([, st]) => st.track === f).map(([id, st]) => [+id, st.art.includes('view')]);
+  return [...ids.filter(x => x[1]), ...ids.filter(x => !x[1])].map(x => x[0]);
+}
 function radioTrack(f) {
   if (!f) return null;
   if (!f.includes(':')) {
     const t = stagePanel.tracks[f];
-    return t && { title: t.title, key: `bgm/${f}.opus`, fetch: withSiblings(man, [`bgm/${f}.ogg`]), loopPos: t.loopPos };
+    return t && { title: t.title, key: `bgm/${f}.opus`, fetch: withSiblings(man, [`bgm/${f}.ogg`]), loopPos: t.loopPos,
+                  stages: radioTrackStages(f) };
   }
   const t = oldRadio && oldRadio.byKey[f];
   return t && { title: t.title, key: t.f, fetch: [t.f, ...(t.dat ? [t.dat] : []), ...(t.tile ? [t.tile] : [])], loopPos: t.loopPos,
@@ -1514,7 +1521,7 @@ async function radioSet(f) {
   if (t) await fetchAll(man, t.fetch, '', true);
   if (radioPick !== f) return;  // (picked again meanwhile)
   radio = t ? { path: `/game/${t.key}`, loopPos: t.loopPos, file: f, title: t.title, tile: t.tile, stageName: t.stageName,
-                game: t.game, dat: t.dat && cache.has(t.dat) ? t.dat : '', lights: t.lights } : null;
+                game: t.game, dat: t.dat && cache.has(t.dat) ? t.dat : '', lights: t.lights, stages: t.stages || null } : null;
   if (session && session.radioChanged) session.radioChanged();
   stageKey = '';
   radioStageSync(session);
@@ -1537,26 +1544,52 @@ function radioPut(s, p) {
   return true;
 }
 let radioOwnFetch = null;
-function radioOwnStage(s) {  // the match's stage file back in MEMFS, if it was dropped
-  const M = s.M, idx = M.HEAP32[0x54CE90 >> 2];  // g_BGLoadedStageIndex -> g_StageListEntries[idx] (char*)
-  if (idx < 0 || idx >= 100 || radioOwnFetch) return;
-  const at = M.HEAP32[(0x74FC08 >> 2) + idx];
-  if (!at) return;
-  let name = '';
-  for (let i = at; M.HEAPU8[i] && name.length < 64; i++) name += String.fromCharCode(M.HEAPU8[i]);
-  const p = `bg/${name.toLowerCase()}.dat`;
-  let n = -1;
-  try { n = M.FS.stat('/game/' + p).size; } catch (e) {}
-  if (n > 1 || !man.files[p]) return;
-  radioOwnFetch = fetchAll(man, [p], '', true).then(() => { if (session === s) radioPut(s, p); }).finally(() => { radioOwnFetch = null; });
+// an MBAACC stage's files, as a match on it loads them (asset plan: bg/bgNN.dat, its Info.txt, DXT5 table, lights;
+// its drop object image), without its BGM
+function radioStageFiles(id) {
+  const p = man.plan;
+  if (!p || !p.stage) return [];
+  return [...withSiblings(man, [...p.stage.map(t => fmt(t, id, 0)), ...((p.stage_files || {})[id] || [])])].filter(f => !/^bgm\//.test(f));
+}
+const memfsSize = (M, p) => { try { return M.FS.stat('/game/' + p).size; } catch (e) { return -1; } };
+function radioOwnStage(s) {  // the match's stage files back in MEMFS, if they were dropped
+  const M = s.M, idx = M._viewer_radio_stage_match ? M._viewer_radio_stage_match() : M.HEAP32[0x54CE90 >> 2];  // (g_BGLoadedStageIndex)
+  if (idx <= 0 || idx >= 100 || radioOwnFetch) return;
+  const need = radioStageFiles(idx).filter(p => memfsSize(M, p) <= 1);
+  if (!need.length) return;
+  radioOwnFetch = fetchAll(man, need, '', true).then(() => { if (session === s) for (const p of need) radioPut(s, p); })
+    .finally(() => { radioOwnFetch = null; });
+}
+// an MBAACC pick's stage files into MEMFS (all at once, the .dat with them: the game waits for the .dat); false while
+// they are being fetched
+let radioStageFetch = null, radioStageBad = 0;
+function radioFilesIn(s, id) {
+  const files = radioStageFiles(id), miss = files.filter(p => !cache.has(p));
+  if (miss.length) {
+    if (!radioStageFetch && radioStageBad !== id)
+      radioStageFetch = fetchAll(man, miss, '', true).catch(e => { radioStageBad = id; console.warn('radio: stage files:', e); })
+        .finally(() => { radioStageFetch = null; });
+    return false;
+  }
+  for (const p of files) radioPut(s, p);
+  return true;
 }
 function radioStageSync(s) {
   const M = s && s.M;
   if (!M || !M._viewer_radio_stage_id || s.glLost) return;
-  const st = radio && radio.dat && !HASH ? radio : null, want = st ? radioDatId(st.dat) : 0;
-  if (!st && M._viewer_radio_stage_in()) radioOwnStage(s);
+  const st = radio && radio.dat && !HASH ? radio : null;
+  // an MBAACC track: its stage (the match's own when it is one of the track's: nothing to swap)
+  let stage = 0;
+  if (!st && radio && radio.stages && radio.stages.length && !HASH && M._viewer_radio_stage_want_stage) {
+    const own = M._viewer_radio_stage_match();
+    stage = radio.stages.includes(own) ? 0 : radio.stages[0];
+  }
+  if (radio) radio.stageNow = stage;
+  const want = st ? radioDatId(st.dat) : stage ? radioDatId(`stage:${stage}`) : 0;
+  if (!want && M._viewer_radio_stage_in()) radioOwnStage(s);
   if (M._viewer_radio_stage_id() === want) return;
   if (st && !radioPut(s, st.dat)) return;
+  if (stage) { if (radioFilesIn(s, stage)) M._viewer_radio_stage_want_stage(stage, want); return; }
   if (st) st.lights.forEach(([pos, power], i) => M._viewer_radio_stage_light(i, pos, power));
   M.ccall('viewer_radio_stage_want', null, ['string', 'number', 'number'], [st ? st.dat : '', want, st ? st.lights.length : 0]);
 }
@@ -1564,7 +1597,7 @@ requestAnimationFrame(function radioStageLoop() { try { radioStageSync(session);
 async function stageShow(s) {
   const box = document.getElementById('stageblk');
   if (!stagePanel || !s || !s.M) { box.hidden = true; return; }
-  const id = s.M.HEAP32[STAGE_ID >> 2], st = stagePanel.stages[id];
+  const id = radio && radio.stageNow ? radio.stageNow : s.M.HEAP32[STAGE_ID >> 2], st = stagePanel.stages[id];  // (an MBAACC pick's stage)
   const f = radio ? radio.file : trackOf(s.bgmNow) || (st && st.track), key = `${id}/${f}`;
   if (key === stageKey) return;
   stageKey = key;
