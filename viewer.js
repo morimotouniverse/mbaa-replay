@@ -518,8 +518,33 @@ function freshCanvas() {
   const old = document.getElementById('canvas');
   const c = old.cloneNode(false);
   old.replaceWith(c);
+  // a phone frees a background page's GPU context (switching to another app and back): kept restorable, and the session
+  // started again on a fresh instance (its textures, shaders and targets died with the context) where it was
+  c.addEventListener('webglcontextlost', e => { e.preventDefault(); if (session) session.glLost = true; });
+  c.addEventListener('webglcontextrestored', () => glRecover());
   return c;
 }
+// the picture's GL context was lost: a new instance (no reuse: the old one's GL names are dead) at the same frame, or for
+// a live match the live game again
+async function glRecover() {
+  const s = session;
+  if (!s || !s.glLost || s.glRecovering || document.visibilityState === 'hidden') return;
+  s.glRecovering = true;
+  status('the browser freed the picture in the background: restoring…');
+  try { s.M.ccall('viewer_stop', null, [], []); } catch (e) {}
+  s.boot = null;
+  // (low-memory mode dropped the files the match had read, the exe among them: a new instance needs them all again)
+  const want = withSiblings(man, new Set([...(s.want || []), ...(s.freed || []), ...(s.M.mbaaBootOpened || [])]));
+  await fetchAll(man, want, 'restoring the picture');
+  if (s.liveSrc) return startLive(s.liveSrc.id);
+  return play(s.rep, s.name, curFrame(), s.want ? new Set([...s.want, ...want]) : null);
+}
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState !== 'visible') return;
+  // (a browser that never sends webglcontextrestored: the session is started again once the page is back)
+  setTimeout(glRecover, 1000);
+  if (actx && actx.state !== 'running' && actx.state !== 'closed') actx.resume().catch(() => {});
+});
 // Boot snapshot: the used memory right after viewer_boot (pages packed like keyframes). The next match of a playlist
 // restores it into the same instance (one wasm instance, one GL context and one copy of the shared files for the whole
 // playlist; a new instance per match ran a phone out of memory). Memory above the boot heap is zeroed as in a fresh
