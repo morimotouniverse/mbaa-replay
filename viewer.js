@@ -1350,6 +1350,11 @@ async function startLive(id) {
   let info;
   try { info = (await liveList()).find(m => m.id === id); } catch (e) { status(`live feed unreachable: ${e.message}`); return liveRetry(id); }
   if (!info) { status('that match is not live any more'); return liveNet.recent() ? liveRetry(id) : undefined; }
+  // the same match again (a fallback start): the streaks go on from the session's where the bridge has none for the game
+  // (its game over: not mid-battle of an older one)
+  const prev = session;
+  if (!info.streak && prev && prev.M && prev.liveSrc && prev.liveSrc.id === id && prev.streakKnown && prev.M.HEAP32[0x54EEE8 >> 2] !== 1)
+    info.streak = STREAK.map(a => prev.M.HEAP32[a >> 2]);
   liveSrc = { id, info, since: info.game };
   const r = await liveFetch(`${LIVE}/live/${id}/boot.rep?game=${info.game}`).catch(() => null);
   if (!r || !r.ok) { status(`live match: ${r ? `HTTP ${r.status}` : 'unreachable'}`); return !r || r.status >= 500 ? liveRetry(id) : undefined; }
@@ -1921,6 +1926,11 @@ function liveNextPrep(s, game, entry = null) {
   p.done.catch(() => {});
   return p.done;
 }
+// the session's game (its battle slots and stage) has this setup: characters, moons, palettes, stage
+function liveSameSetup(s, S) {
+  const H = s.M.HEAP32, slot = (q, o) => H[(BATTLE_SLOT + q * 0x2C + o) >> 2];
+  return H[STAGE_ID >> 2] === S.stage && [0, 1].every(q => slot(q, 8) === S.chara[q] && slot(q, 0x14) === S.moon[q] && slot(q, 4) === S.color[q]);
+}
 // our load after a character select (liveLoaderGate) against the stream's setup of that game: the same characters and
 // moons: the stage and palettes set to the stream's (our select's stage pick, a random roll, and the palette step are
 // not all followed yet: artifacts/cc_spectate/css_unported.txt) and the game goes on. Other characters or moons: it did
@@ -2183,7 +2193,9 @@ function liveBegin(s) {  // play(): after viewer_play
   const poll = async () => {
     if (session !== s) return;
     try {
-      const r = await liveFetch(`${LIVE}/live/${L.id}/rec?from=${L.info.game}&since=${L.since}&v=${VIEWER}`);
+      const r = await liveFetch(`${LIVE}/live/${L.id}/rec?from=${L.info.game}&since=${L.since}&v=${VIEWER}`,
+        AbortSignal.timeout ? { signal: AbortSignal.timeout(5000) } : undefined);
+      if (!r.ok) L.failAt = performance.now();
       if (r.ok) {
         const b = new Uint8Array(await r.arrayBuffer());
         // (every answer repeats the newest index whole: new data = a later index or a longer answer, else the stream is
@@ -2198,9 +2210,16 @@ function liveBegin(s) {  // play(): after viewer_play
           L.since = liveLastIndex(b);
         }
       }
-    } catch (e) { console.warn('live feed:', e); }
+    } catch (e) { L.failAt = performance.now(); console.warn('live feed:', e); }
     if (session !== s) return;
     let ahead = call(s, 'viewer_spectate_buffered');
+    // how long the feed has been up and brought nothing new (a failed or timed-out request starts it again: an outage
+    // is not the stream going quiet. Was: one 10 s hung request read as "the stream is dry", and with the next game
+    // not prepared yet the session was restarted from the list, the streak lost: real1 t=1857)
+    const quietFor = performance.now() - Math.max(L.dataAt ?? (L.dataAt = performance.now()), L.failAt ?? -1e9);
+    // a Skippable index whose frames ran out, the feed up and quiet 3 s: the players at the result screen (its last
+    // frames and the retry menu come with their choice): the game goes on to the win quote (spectate.cpp spectate_ready)
+    const quietSkip = call(s, 'viewer_spectate_quiet', s.liveFollow && ahead < 15 && quietFor > 3000 ? 1 : 0) === 1 && quietFor > 3000;
     if (s.tl && !s.seeking) s.tl.est = s.M._viewer_frame() + ahead;  // the timeline reaches the newest frame received
     // the buffer's floor over the last LIVE_WIN polls: what the catch-up decisions go by. The stream is bursty: each
     // poll brings ~60 frames at once, and at every round end the host's stream runs ahead (its KO / win pose: ~1.2 s of
@@ -2215,10 +2234,12 @@ function liveBegin(s) {  // play(): after viewer_play
     // the game is over (or, following live, its stream has gone quiet: the players left at the win quote, which CCCaster's
     // spectators never see end): the match's next game, another match when this one has left the list, or wait
     const over = call(s, 'viewer_ended') || L.next;
-    const dry = s.liveFollow && ahead < 15 && performance.now() - (L.dataAt ?? (L.dataAt = performance.now())) > 6000;
+    const dry = s.liveFollow && ahead < 15 && quietFor > 6000;
     // (following, the list is also read every 5 s for a game the session has not reached: below)
     // (every second outside a battle: the result menu, a character select, a load, where the next game's setup comes)
-    const listEvery = over || s.M.HEAP32[0x54EEE8 >> 2] !== 1 ? 1000 : 5000;
+    // (2 s: each viewer's requests are the feed's 1/s plus this; the list is not rate limited, but every request is a
+    // Worker request)
+    const listEvery = over || s.M.HEAP32[0x54EEE8 >> 2] !== 1 ? 2000 : 5000;
     if ((over || dry || s.liveFollow) && performance.now() - (L.listAt || -1e9) > listEvery) {
       L.listAt = performance.now();
       try {
@@ -2228,8 +2249,10 @@ function liveBegin(s) {  // play(): after viewer_play
           // play; or the feed was just down: the restarted bridge re-joins its hosts)
         } else if (now && (over || dry) && now.index < L.since && liveNet.recent()) {
           return startLive(L.id);  // (after a restart: the bridge's new capture of the match, numbered from its own join)
-        } else if (!now) {
-          const next = s.liveFollow && liveNextMatch(l);
+        } else if (!now || (now.silent > 8 && ahead < 15)) {
+          // (the list's silent: seconds since the host last sent anything, keep-alives included, when the bridge gives
+          // it: the host gone, the match over, ~30 s before its capture closes and it leaves the list)
+          const next = s.liveFollow && liveNextMatch(l.filter(m => !(m.silent > 8)));
           if (!next) { status('the match has ended'); return; }
           status(`the match has ended: on to ${next.matchup || (next.names || []).join(' vs ')}`);
           setTimeout(() => { if (session === s) startLive(next.id); }, 2500);
@@ -2244,21 +2267,34 @@ function liveBegin(s) {  // play(): after viewer_play
           // the list showed it, the page sitting on the result menu or the select meanwhile.)
           const g0 = call(s, 'viewer_spectate_game'), g = g0 >= 0 ? g0 : L.info.game;  // (-1: still the first)
           const behind = g < now.game, scene = s.M.HEAP32[0x54EEE8 >> 2], t = performance.now();
-          if (L.seenGame !== now.game) { L.seenGame = now.game; L.seenGameAt = t; L.seenAhead = ahead; L.stuckAt = null; }
+          if (L.seenGame !== now.game) { L.seenGame = now.game; L.seenGameAt = t; L.haveAt = null; L.stuckAt = null; L.lostSaid = false; }
+          // the stream as received has the new game (its Loading index): from then on the session should be getting there
+          if (L.haveAt == null && L.since >= now.game) { L.haveAt = t; L.haveAhead = ahead; }
           if (behind && s.liveFollow) liveNextPrep(s, now.game, now).catch(e => console.warn(`live: game ${now.game} not prepared:`, e.message));
           const p = behind ? livePrepOf(s, now.game) : null;
           const stuckScene = behind && (call(s, 'viewer_spectate_in_retry') || scene === SCENE_WIN);
           if (!stuckScene) L.stuckAt = null; else if (L.stuckAt == null) L.stuckAt = t;
-          const lost = liveJump() && behind && ((stuckScene && t - L.stuckAt > 5000) || t - L.seenGameAt > 1000 * (L.seenAhead / 60 + 3));
-          if (lost && s.liveFollow && !over && !dry && !L.lostSaid) {
+          // LOST: our game did not follow a stream it has: the new game's records received, and the session still at the
+          // result / retry menu or the win quote 5 s after both, or not in it by the time those frames played (+3 s). Keyed on
+          // the records received, not on the list (the list is ahead of a feed that stalled: real1 t=1857)
+          const H = L.haveAt;
+          const lost = liveJump() && behind && H != null &&
+            ((stuckScene && t - Math.max(L.stuckAt, H) > 5000) || t - H > 1000 * (L.haveAhead / 60 + 3));
+          // a rematch (the players' setup unchanged) is followed by the session itself, never switched: only once it has
+          // ended (the end of a replayed stream)
+          // (not at a character select or the load after one: there the picks decide, and the load checks them)
+          const same = p && scene !== 20 && call(s, 'viewer_spectate_next_game') === g0 && liveSameSetup(s, p.setup);
+          if (lost && s.liveFollow && !over && !L.lostSaid) {
             L.lostSaid = true;
-            console.warn(`live: the list is on game ${now.game}, this session still on ${g} (scene ${scene}): ${p ? 'switching' : 'preparing it'}`);
+            console.warn(`live: the list is on game ${now.game}, this session still on ${g} (scene ${scene}): ` +
+              (same ? 'the same setup: waiting for it' : p ? 'switching' : 'preparing it'));
           }
           // (a quiet stream on the game the session is on is the players at its result menu, not an end: nothing to
           // start; restarting that game there replayed it from its start on every long result screen)
-          if (s.liveFollow && (over || (dry && behind) || lost)) {
+          if (s.liveFollow && (over || ((dry && behind || lost) && !same))) {
             if (p) return liveSwitch(s, p);
-            if (!lost || t - L.seenGameAt > 30000) return startLive(L.id);  // (not prepared in 30 s: the plain start)
+            // (no prepared game: the plain start, once the session is over, or 30 s after the list showed the game)
+            if (over || t - L.seenGameAt > 30000) return startLive(L.id);
           }
           if (!s.liveFollow) {
             L.next = true;  // (DVR: stays on this game; LIVE goes to the current one)
@@ -2300,7 +2336,7 @@ function liveBegin(s) {  // play(): after viewer_play
       }
       // (not at the retry menu: it has no stream frames to count, the players' choice comes when they make it, and
       // CCCaster's spectator never waits there: the game shows the win quote meanwhile)
-      const hold = !call(s, 'viewer_spectate_in_retry') && (ahead < 15 || (s.liveHeld && ahead < 120));
+      const hold = !call(s, 'viewer_spectate_in_retry') && !quietSkip && (ahead < 15 || (s.liveHeld && ahead < 120));
       s.liveHeld = hold;
       call(s, 'viewer_pause', hold || ui.paused || s.seeking ? 1 : 0);
       // up to the jump (or without it): CCCaster's spectateFastFwd, more than 60 frames (2 x NUM_INPUTS) over the kept
