@@ -181,7 +181,7 @@
   #liveitems a:hover { background: #ffffff0c; }  #liveitems li.cur a { background: #e04a5a22; }
   #liveitems a { display: flex; align-items: center; gap: 6px; }
   #liveitems a::before { content: '\25CF'; color: var(--accent); font-size: 9px; flex: none; }
-  #liveitems .side { display: flex; align-items: center; gap: 3px; min-width: 0; flex: 0 1 auto; }
+  #liveitems .side { display: flex; align-items: center; gap: 3px; min-width: 0; flex: 1 1 0; }  /* (equal halves: a long name scrolls in its own) */
   #liveitems .lico { width: 28px; height: 28px; flex: none; margin: -2px 0; }
   #liveitems .lmoon { width: 12px; height: 12px; flex: none; }
   #liveitems .lnm { overflow: hidden; white-space: nowrap; min-width: 0; }
@@ -190,8 +190,11 @@
   @keyframes lmq { 0%, 15% { transform: translateX(0); } 85%, 100% { transform: translateX(var(--d)); } }
   @media (prefers-reduced-motion: reduce) { #liveitems .lnm.mq .t { animation: none; } #liveitems .lnm { text-overflow: ellipsis; } }
   #liveitems .lvs { font-size: 10px; color: var(--faint); letter-spacing: .08em; flex: none; }
-  #liveitems .lview { margin-left: auto; padding-left: 6px; font-size: 11px; color: var(--muted); flex: none; }
-  #players #watching { letter-spacing: normal; text-transform: none; }
+  #liveitems .lview, #watching { display: inline-flex; align-items: center; gap: 3px; padding: 1px 6px; border-radius: 999px; flex: none;
+                                 background: #e04a5a26; color: #ff9aa5; font-size: 11px; font-weight: 600; letter-spacing: normal; line-height: 16px; }
+  #watching:empty { display: none; }
+  .i-eye { --m: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath d='M12 5C6.5 5 2.4 9.2 1 12c1.4 2.8 5.5 7 11 7s9.6-4.2 11-7c-1.4-2.8-5.5-7-11-7zm0 11.5a4.5 4.5 0 1 1 0-9 4.5 4.5 0 0 1 0 9zm0-2.2a2.3 2.3 0 1 0 0-4.6 2.3 2.3 0 0 0 0 4.6z'/%3E%3C/svg%3E"); }
+  #players #watching { margin-left: 6px; vertical-align: 1px; }
   #plitems li.cur { background: #e04a5a22; }  #plitems li.cur::before { content: '\25B6'; color: var(--accent); }
   #plitems li .nm { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   #plitems li .dt { color: var(--faint); font-size: 10.5px; white-space: nowrap; }
@@ -316,6 +319,6 @@
 </div>
 <script src="mbaa.js?v=80030ae75f69"></script>
 <script src="bgm_stream.js?v=407ac29e5c89"></script>
-<script src="viewer.js?v=4353e7b4bb44"></script>
+<script src="viewer.js?v=ed41adc7d63e"></script>
 </body>
 </html>

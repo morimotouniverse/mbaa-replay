@@ -1373,7 +1373,9 @@ setInterval(() => {
 // the watched match's viewer count (the live list's, every 15 s), on the players panel's VS line
 function liveWatching(n) {
   const e = document.getElementById('watching');
-  if (e) e.textContent = n ? `· ${n} watching` : '';
+  if (!e) return;
+  e.title = n ? `${n} watching` : '';
+  e.replaceChildren(...(n ? [Object.assign(document.createElement('i'), { className: 'i i-eye' }), String(n)] : []));
 }
 // the panel's "live now" list (refreshed every 15 s; hidden while nothing is live or the feed is unreachable)
 async function liveListShow() {
@@ -1404,7 +1406,12 @@ async function liveListShow() {
       return sp;
     };
     a.append(side(0), el('span', 'lvs', 'vs'), side(1));
-    if (m.viewers) a.append(el('span', 'lview', `${m.viewers} watching`));
+    if (m.viewers) {
+      const v = el('span', 'lview');
+      v.title = `${m.viewers} watching`;
+      v.append(el('i', 'i i-eye'), String(m.viewers));
+      a.append(v);
+    }
     if (liveSrc && liveSrc.id === m.id) { li.className = 'cur'; liveWatching(m.viewers); }
     li.append(a);
     return li;
