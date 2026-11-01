@@ -1345,6 +1345,10 @@ function liveRetry(id) {  // startLive could not reach the feed: again, unless a
   if (session && !session.liveSrc) return;
   setTimeout(() => { if (!session || session.liveSrc) startLive(id); }, Math.max(2000, liveNet.delay()));
 }
+// a match whose host is still connected but nothing has been played for 5 min (the list's age: seconds since its capture
+// last grew; the players left CCCaster open on the result menu, a lobby bot still lists the host): idle, listed last
+// and dimmed, never followed or moved to
+const LIVE_IDLE = 300, liveIdle = m => m.age > LIVE_IDLE, liveGone = m => m.silent > 8 || liveIdle(m);
 async function liveList() {
   const r = await liveFetch(`${LIVE}/live/list`);
   if (!r.ok) throw new Error(`HTTP ${r.status}`);
@@ -1841,13 +1845,16 @@ async function liveListShow() {
   // a row whose players haven't changed is kept as it is (a rebuild would restart its names' scrolling mid-way)
   const old = new Map([...ol.children].map(li => [li.dataset.key, li]));
   const badge = (v, n) => { v.title = n ? `${n} watching` : ''; v.replaceChildren(...(n ? [el('i', 'i i-eye'), String(n)] : [])); };
+  l = [...l.filter(m => !liveIdle(m)), ...l.filter(liveIdle)];
+  const idleTip = m => liveIdle(m) ? `idle: nothing played for ${Math.round(m.age / 60)} min (the host is still open)` : '';
   ol.replaceChildren(...l.map(m => {
-    const key = JSON.stringify([m.id, m.names, m.chara, m.moon, !!plArt]);
+    const key = JSON.stringify([m.id, m.names, m.chara, m.moon, !!plArt, liveIdle(m)]);
     let li = old.get(key);
     if (li) {
       badge(li.querySelector('.lview'), m.viewers);
-      li.className = liveSrc && liveSrc.id === m.id ? 'cur' : '';
-      if (li.className) liveWatching(m.viewers);
+      li.className = [liveSrc && liveSrc.id === m.id ? 'cur' : '', liveIdle(m) ? 'idle' : ''].join(' ').trim();
+      if (liveIdle(m)) li.querySelector('a').title = idleTip(m);
+      if (liveSrc && liveSrc.id === m.id) liveWatching(m.viewers);
       return li;
     }
     li = document.createElement('li'); li.dataset.key = key;
@@ -1855,7 +1862,7 @@ async function liveListShow() {
     // (the page's <base> is the site root on the live path: a bare ?live= would leave it)
     a.href = `${location.pathname}?live=${m.id}` + (Q.get('liveUrl') ? `&liveUrl=${encodeURIComponent(Q.get('liveUrl'))}` : '');
     const names = (m.names || []).map(n => (n || '').trim());
-    a.title = m.matchup || names.join(' vs ');
+    a.title = idleTip(m) || m.matchup || names.join(' vs ');
     // each side: the character's select icon and moon, then the player's name (no name: the character's)
     const side = p => {
       const c = m.chara && m.chara[p], mo = m.moon && m.moon[p], sp = el('span', 'side');
@@ -1872,6 +1879,7 @@ async function liveListShow() {
     const v = el('span', 'lview'); badge(v, m.viewers);
     a.append(side(0), el('span', 'lvs', 'vs'), side(1), v);
     if (liveSrc && liveSrc.id === m.id) { li.className = 'cur'; liveWatching(m.viewers); }
+    if (liveIdle(m)) li.classList.add('idle');
     li.append(a);
     return li;
   }));
@@ -2352,10 +2360,10 @@ function liveBegin(s) {  // play(): after viewer_play
           // play; or the feed was just down: the restarted bridge re-joins its hosts)
         } else if (now && (over || dry) && now.index < L.since && liveNet.recent()) {
           return startLive(L.id);  // (after a restart: the bridge's new capture of the match, numbered from its own join)
-        } else if (!now || (now.silent > 8 && ahead < 15)) {
+        } else if (!now || (liveGone(now) && ahead < 15)) {
           // (the list's silent: seconds since the host last sent anything, keep-alives included, when the bridge gives
-          // it: the host gone, the match over, ~30 s before its capture closes and it leaves the list)
-          const next = s.liveFollow && liveNextMatch(l.filter(m => !(m.silent > 8)));
+          // it: the host gone, the match over, ~30 s before its capture closes and it leaves the list; or idle: liveIdle)
+          const next = s.liveFollow && liveNextMatch(l.filter(m => !liveGone(m)));
           if (!next) {
             if (!s.liveFollow) { status('the match has ended'); return; }
             // nothing else live: keep looking (every 10 s) and go to the first match that starts
@@ -2364,7 +2372,7 @@ function liveBegin(s) {  // play(): after viewer_play
               if (session !== s) return;
               const m = liveNextMatch(await liveList().catch(() => []));
               if (session !== s) return;
-              if (m && !(m.silent > 8)) { status(`a match is live: on to ${m.matchup || (m.names || []).join(' vs ')}`); startLive(m.id); }
+              if (m && !liveGone(m)) { status(`a match is live: on to ${m.matchup || (m.names || []).join(' vs ')}`); startLive(m.id); }
               else setTimeout(wait, 10000);
             };
             setTimeout(wait, 10000);
@@ -2490,7 +2498,7 @@ function liveBegin(s) {  // play(): after viewer_play
 // after a match leaves the list: one with either of its players (a new set of theirs), else the most watched
 function liveNextMatch(l) {
   const L = liveSrc, names = new Set((L.info.names || []).map(n => (n || '').trim().toLowerCase()).filter(Boolean));
-  const others = l.filter(m => m.id !== L.id);
+  const others = l.filter(m => m.id !== L.id && !liveGone(m));
   return others.find(m => (m.names || []).some(n => names.has((n || '').trim().toLowerCase())))
       || others.sort((a, b) => (b.viewers || 0) - (a.viewers || 0))[0] || null;
 }
