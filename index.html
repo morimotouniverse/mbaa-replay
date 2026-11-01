@@ -45,6 +45,10 @@
      picture on a small screen: up to 1180 px, so the bar stays one row) */
   .stage.fs:not(.sidebar) .fsbar { left: 50%; right: auto; width: max(var(--w), min(100%, 1180px)); transform: translateX(-50%); box-sizing: border-box;
                                    padding: 40px 16px 12px; background: linear-gradient(transparent, #000a 35%, #000e); }
+  .stage.fs:not(.sidebar) .fsbar { --fk: 1; width: calc(max(var(--w), min(100%, 1180px)) / var(--fk));
+                                   transform: translateX(-50%) scale(var(--fk)); transform-origin: 50% 100%; }
+  @media (min-height: 1300px) { .stage.fs:not(.sidebar) .fsbar { --fk: 1.3; } }
+  @media (min-height: 1900px) { .stage.fs:not(.sidebar) .fsbar { --fk: 1.8; } }
   .fsbar #transportsec { width: 100%; padding: 0; }
   .fsbar #time { font-size: 22px; }  .fsbar :is(#dur, #fc) { font-size: 13px; color: #c8c8d8; }
   .fsbar .tbar button:not(#pause) { min-height: 36px; }
@@ -138,32 +142,34 @@
   .tbar .i { width: 18px; height: 18px; vertical-align: 0; }
   .tbar .sk { font: 650 12px/1 system-ui, -apple-system, "Segoe UI", sans-serif; font-variant-numeric: tabular-nums; color: #cfcfe0; padding: 0 4px; }
   .tbar .rl { font: 800 10px/1 system-ui, sans-serif; margin-left: 1px; opacity: .85; }
-  /* narrow: timeline / clock .. right / seek / view + clip */
+  /* narrow: timeline / clock .. right / seek (centred) / view + clip (centred). (Each group by its id: one specificity,
+     so the wide rules below override the narrow ones in full.) */
   body:not(.mob) #transportsec .timeline { order: 0; }
-  body:not(.mob) .tbar .clock { order: 1; }  body:not(.mob) #tright { order: 2; }
+  body:not(.mob) .tbar .clock { order: 1; }
+  body:not(.mob) #tright { order: 2; margin-left: 0; border-left: 0; padding-left: 0; }
   body:not(.mob) .tbar > :is(#chattog, #menub) { order: 3; }
-  body:not(.mob) .tbar .tbreak { order: 4; }  body:not(.mob) .tg-seek { order: 5; margin: 0 auto; }
+  body:not(.mob) .tbar .tbreak { order: 4; }
+  body:not(.mob) #tseek { order: 5; margin: 0 auto; border-left: 0; padding-left: 0; }
   body:not(.mob) .tbar .tbreak.tb2 { order: 6; }
-  body:not(.mob) .tg-view { order: 7; margin-left: auto; }  body:not(.mob) #tclip { order: 8; margin-right: auto; }
-  body:not(.mob) :is(.tg-seek, .tg-view, #tright).sep { border-left: 0; margin-left: auto; padding-left: 0; }
-  body:not(.mob) #tright.sep { margin-left: 0; }
-  /* wide: clock | timeline / seek | view | clip | right */
+  body:not(.mob) #tview { order: 7; margin-left: auto; border-left: 0; padding-left: 0; }
+  body:not(.mob) #tclip { order: 8; margin-right: auto; }
+  /* wide: clock | timeline / seek | view | clip ........ right */
   @container tp (min-width: 980px) {
     body:not(.mob) .tbar .clock { order: 0; margin-right: 0; padding-right: 14px; }
     body:not(.mob) #transportsec .timeline { order: 1; flex: 1 1 0; }
     body:not(.mob) .tbar .tbreak { order: 2; }  body:not(.mob) .tbar .tbreak.tb2 { display: none; }
-    body:not(.mob) .tg-seek { order: 3; margin: 0; }
-    body:not(.mob) .tg-view { order: 4; margin-left: 0; }  body:not(.mob) #tclip { order: 5; margin-right: 0; }
-    body:not(.mob) #tright { order: 6; }  body:not(.mob) .tbar > :is(#chattog, #menub) { order: 7; }
-    body:not(.mob) :is(.tg-view, #tclip).sep { border-left: 1px solid var(--line); margin-left: 10px; padding-left: 10px; }
-    body:not(.mob) #tright.sep { margin-left: auto; }
+    body:not(.mob) #tseek { order: 3; margin: 0; }
+    body:not(.mob) #tview { order: 4; margin-left: 10px; border-left: 1px solid var(--line); padding-left: 10px; }
+    body:not(.mob) #tclip { order: 5; margin: 0 0 0 10px; padding-left: 10px; }
+    body:not(.mob) #tright { order: 6; margin-left: auto; }
+    body:not(.mob) .tbar > :is(#chattog, #menub) { order: 7; }
   }
   /* very narrow desktop window: each line centred */
   @container tp (max-width: 600px) {
     body:not(.mob) .tbar .clock { flex-basis: 100%; justify-content: center; margin: 0; padding: 0; }
     body:not(.mob) #tright { margin: 0 auto; }
     body:not(.mob) .tbar button { min-width: 26px; padding: 0 3px; }
-    body:not(.mob) .tg-seek { gap: 0; }  body:not(.mob) #pause { margin: 0 3px; }
+    body:not(.mob) #tseek { gap: 0; }  body:not(.mob) #pause { margin: 0 3px; }
   }
   /* the view toggles: always-visible chips, lit when on (viewer.js syncChips: the checkboxes stay the state) */
   .tbar .vchip { min-width: 0; height: 26px; padding: 0 9px; border-radius: 999px; background: var(--raise);
@@ -569,7 +575,7 @@
     <div class="timeline"><canvas id="marks"></canvas><input id="seek" type="range" min="0" max="1" value="0" step="1" aria-label="seek"></div>
     <div class="tbar">
       <div class="clock"><span id="time">0:00.0</span><span class="hint" id="dur"></span><span id="fc"></span><button id="livebtn" class="livebtn" title="Back to live, ~4 s behind the players (L)" hidden>LIVE</button></div>
-      <span class="tg tg-seek sep">
+      <span class="tg tg-seek sep" id="tseek">
         <button id="tostart" class="deskonly" data-act="start" title="Start (Home)"><i class="i i-prev"></i></button>
         <button id="prevr" title="Previous round ([ or Page Up)"><i class="i i-rewind"></i><span class="rl">R</span></button>
         <button id="back5" class="sk deskonly" data-act="back5" title="Back 5 s (Shift+&larr;)">&minus;5s</button>
@@ -582,7 +588,7 @@
         <button id="nextr" title="Next round (] or Page Down)"><span class="rl">R</span><i class="i i-ffwd"></i></button>
         <button id="toend" class="deskonly" data-act="end" title="End (End)"><i class="i i-next"></i></button>
       </span>
-      <span class="tg tg-view sep">
+      <span class="tg tg-view sep" id="tview">
         <span class="hbwrap"><button class="vchip" data-flip="boxes" title="Hitboxes (H)" aria-pressed="false">HB</button>
           <span class="hblegend" role="tooltip"><span class="hbkey" style="--c:#30e030">hurt</span><span class="hbkey" style="--c:#ff2828">attack</span><span class="hbkey" style="--c:#ffe020">clash</span><span class="hbkey" style="--c:#40a0ff">shield</span><span class="hbkey" style="--c:#d8d8d8">collision</span><span class="hbkey" style="--c:#c878e6">special</span></span></span>
         <button class="vchip" data-flip="inputs" title="Input display (I)" aria-pressed="false">IN</button>
