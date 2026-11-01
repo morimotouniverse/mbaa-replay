@@ -355,6 +355,8 @@
   #chatcol > #livesec #liveitems { max-height: min(150px, 24vh); }
   body.mob #chatcol > #livesec #liveitems { max-height: 28vh; }
   body.mob.kbd #chatcol > #livesec { display: none; }
+  #front { position: absolute; left: 0; top: 0; pointer-events: none; z-index: 1; image-rendering: pixelated; }
+  #front[hidden] { display: none; }
   #chatover { position: absolute; left: 0; top: 0; width: 100%; height: 100%; overflow: hidden; pointer-events: none; z-index: 1; }
   #chatover .dmstage { position: absolute; left: 0; top: 0; width: 1920px; height: 1080px; transform-origin: 0 0; contain: strict; }
   #chatover .dm { position: absolute; left: 0; top: 0; white-space: pre; line-height: 1.25; padding: 0 6px 0.12em; will-change: transform;
@@ -611,6 +613,22 @@
   over.id = 'chatover';
   const stage = document.querySelector('.stage');
   stage.insertBefore(over, document.getElementById('banner0') || null);
+  // comments behind the fighters: the renderer (web/host/browser/d3d9_gl.cpp front_present) draws the picture's
+  // characters and effects alone, this canvas above the comments shows them; the full picture stays on #canvas below.
+  // On while comments show on the picture (and the viewer's "behind fighters" switch, on by default, is on)
+  const front = document.createElement('canvas');
+  front.id = 'front'; front.width = 640; front.height = 480; front.hidden = true; front.setAttribute('aria-hidden', 'true');
+  over.after(front);
+  const fctx = front.getContext('2d');
+  let behind = store.get('mbaa-chat-behind', true);
+  window.mbaaFrontWant = () => behind && !over.hidden && !!over.querySelector('.dm, .cswell');
+  window.mbaaFrontCopy = on => {
+    if (!on) { if (!front.hidden) { fctx.clearRect(0, 0, 640, 480); front.hidden = true; } return; }
+    const cv = document.getElementById('canvas');  // (viewer.js replaces it on a GL context change)
+    fctx.clearRect(0, 0, 640, 480);
+    if (cv) fctx.drawImage(cv, 0, 0, 640, 480);
+    if (front.hidden) front.hidden = false;
+  };
   // spread: a comment keeps its row for this many seconds more after it would have freed it, so slow chat still fans out
   // down the picture instead of every line taking the top row (dmPlace). Site-wide, set by the moderators: the bot sends
   // the value (TAGMSG +mbaa/spread=<s>) to each viewer as they join and to every channel when it changes; 1 s until then.
@@ -1630,6 +1648,11 @@
     const o = document.createElement('output'); const show = () => { o.textContent = +r.value === 0 ? 'none' : `${r.value}%`; }; show();
     r.addEventListener('input', () => { emoAmt = +r.value / 100; show(); try { localStorage.setItem('mbaa-chat-emoji-amt', String(emoAmt)); } catch (e) {} });
     lab.append(r, o); tool.append(lab); }
+  // comments behind the fighters (this browser): the characters and their effects pass in front of the text
+  { const lab = document.createElement('label'); lab.className = 'cspread cbehind'; lab.title = 'the characters and their effects pass in front of the comments (this browser only)';
+    const cb = document.createElement('input'); cb.type = 'checkbox'; cb.checked = behind;
+    cb.addEventListener('change', () => { behind = cb.checked; store.set('mbaa-chat-behind', behind); if (!behind) window.mbaaFrontCopy(0); cb.blur(); });
+    lab.append(cb, ' comments behind fighters'); tool.append(lab); }
   function toolOpen(on) {
     tool.hidden = !on; nicoBtn.setAttribute('aria-expanded', String(on));
     if (on) { emoOpen(false); mentionClose(); popPlace(tool, 260); tool.style.maxHeight = ''; } else popOpen(false);
@@ -1869,6 +1892,8 @@
     const L = `${gameCv.offsetLeft}px`, T = `${gameCv.offsetTop}px`, W = `${gameCv.offsetWidth}px`, H = `${gameCv.offsetHeight}px`;
     const st = over.style;
     if (st.left !== L || st.top !== T || st.width !== W || st.height !== H) Object.assign(st, { left: L, top: T, width: W, height: H });
+    const fs = front.style;
+    if (fs.left !== L || fs.top !== T || fs.width !== W || fs.height !== H) Object.assign(fs, { left: L, top: T, width: W, height: H });
   }
   // ---- the match's comment timeline ----
   // Every comment of the watched match's channel (its whole history, fetched on joining; then each new one) gets a
