@@ -203,7 +203,9 @@
                       padding: 0 2px; opacity: 0; }
   #chatlog li:hover .cdel, #chatlog li .cdel:focus-visible { opacity: 1; }
   #chatover { position: absolute; left: 0; top: 0; width: 100%; height: 100%; overflow: hidden; pointer-events: none; z-index: 1; }
-  #chatover canvas { position: absolute; top: 0; height: 100%; }
+  #chatover .dmstage { position: absolute; left: 0; top: 0; width: 1920px; height: 1080px; transform-origin: 0 0; contain: strict; }
+  #chatover .dm { position: absolute; left: 0; top: 0; white-space: pre; line-height: 1; padding-top: 4px; will-change: transform;
+                  paint-order: stroke fill; -webkit-text-stroke: 7px rgba(0, 0, 0, .4); }
   `;
   document.head.append(css);
 
@@ -213,7 +215,7 @@
     <div class="chead"><span class="lbl">chat</span><span class="ctabs"></span>
       <label class="tog" title="new comments cross the game picture (Nico Nico style)"><input id="chatover_on" type="checkbox"> on picture</label>
       <select id="chatspread" title="spread: how long a comment keeps its row on the picture, so comments a little apart still fan out to new rows (tight: Niconico's own)" aria-label="comment spread">
-        <option value="0">tight</option><option value="1">spread 1 s</option><option value="2">spread 2 s</option><option value="3">spread max</option></select></div>
+        <option value="0">tight</option><option value="1">spread 1 s</option><option value="2">spread 2 s</option><option value="4">spread 4 s</option></select></div>
     <ol id="chatlog" aria-live="polite"></ol>
     <div class="ctool" role="toolbar" aria-label="how your comments look on the picture (Niconico commands)">
       <span class="cseg" data-k="pos">
@@ -285,20 +287,19 @@
   over.id = 'chatover';
   const stage = document.querySelector('.stage');
   stage.insertBefore(over, document.getElementById('banner0') || null);
-  // spread (#chatspread, remembered): a comment keeps its row for this many seconds more after its tail has passed, so
-  // slow chat still fans out down the picture instead of every line taking the top row (niconicomments' collisionPadding,
-  // in its 1920-wide stage units: a naka comment moves ~400 of them per second)
+  // spread (#chatspread, remembered): a comment keeps its row for this many seconds more after it would have freed it, so
+  // slow chat still fans out down the picture instead of every line taking the top row (dmPlace)
   const spreadSel = $('#chatspread');
   spreadSel.value = String(store.get('mbaa-nico-spread', 1));
   if (!spreadSel.value) spreadSel.value = '1';
-  const nicoOpts = () => ({ format: 'formatted', mode: 'html5', config: { collisionPadding: Math.min(1024, 5 + 400 * +spreadSel.value) } });  // (the library's limit: 1024, ~2.3 s)
-  spreadSel.onchange = () => { store.set('mbaa-nico-spread', +spreadSel.value); if (nico.inst) nicoBuild(); if (tl.inst) tlBuild(); spreadSel.blur(); };
+  const spreadOf = () => +spreadSel.value || 0;
+  spreadSel.onchange = () => { store.set('mbaa-nico-spread', +spreadSel.value); tlRelayout(); spreadSel.blur(); };
   const overOn = $('#chatover_on');
   overOn.checked = store.get('mbaa-chat-over', true);
   over.hidden = !overOn.checked;
   overOn.onchange = () => {
     store.set('mbaa-chat-over', overOn.checked); over.hidden = !overOn.checked;
-    if (!overOn.checked) { nicoReset(); tlDrop(); } else tlKick();
+    if (!overOn.checked) { dmClear(nico); tlDrop(); } else tlKick();
     overOn.blur();
   };
 
@@ -431,11 +432,9 @@
     const i = c.lines.findIndex(l => l.msgid === msgid);
     if (i >= 0) { c.lines[i].gone = true; c.lines.splice(i, 1); }
     if (key(name) === key(shown)) { const li = logEl.querySelector(`li[data-msgid="${CSS.escape(msgid)}"]`); if (li) li.remove(); }
-    const n0 = nico.list.length;
-    nico.list = nico.list.filter(x => x.msgid !== msgid);
-    if (nico.list.length !== n0 && nico.inst) nicoBuild();
+    for (const c of nico.list.filter(x => x.msgid === msgid)) dmRemove(nico, c);
     const e = tl.entries.find(x => x.l.msgid === msgid);
-    if (e) { tl.entries = tl.entries.filter(x => x !== e); if (e.raw && tl.inst) { tlBuild(); tl.vpos = -1; } }
+    if (e) { tl.entries = tl.entries.filter(x => x !== e); if (e.c) tlRelayout(); }
   }
 
   // ---- the overlay: Niconico's own comment layout ----
@@ -447,10 +446,6 @@
   // ue / shita fixed 3 s, black outline, Nico's colour names. Our picture is 4:3: the canvas is the 16:9 stage at the
   // picture's height, centred, so the picture shows the stage's 4:3 middle (240..1680, the same area a 4:3 video fills
   // in the official 16:9 player; comments enter at its right edge).
-  // Live comments: the overlay keeps its own clock (vpos = hundredths of a second since it was built) and adds each
-  // comment as it arrives (addComments), naka at now + 1 s (the stage's 1 s lead-in: it enters as it arrives), fixed
-  // ones at now; drawn on rAF while any is on screen, the instance dropped once all have left.
-  const NICO_SRC = 'vendor/niconicomments-0.4.1.js?v=0.4.1';
   const NICO_COLORS = ['white', 'red', 'pink', 'orange', 'yellow', 'green', 'cyan', 'blue', 'purple', 'black', 'white2',
     'niconicowhite', 'red2', 'truered', 'pink2', 'orange2', 'passionorange', 'yellow2', 'madyellow', 'green2', 'elementalgreen',
     'cyan2', 'blue2', 'marinblue', 'purple2', 'nobleviolet', 'black2'];
@@ -536,17 +531,123 @@
   cmdIn.addEventListener('input', toolShow);
   toolHook = toolShow;
   toolShow();
-  const nico = { lib: null, loading: null, inst: null, cv: null, t0: 0, list: [], id: 0, end: 0, raf: 0, size: '' };
-  const vposNow = () => Math.round((performance.now() - nico.t0) / 10);
-  function nicoLoad() {
-    if (nico.lib || nico.loading) return nico.loading;
-    return nico.loading = new Promise((res, rej) => {
-      const e = document.createElement('script'); e.src = NICO_SRC;
-      e.onload = () => { nico.lib = window.NiconiComments; res(); };
-      e.onerror = () => { nico.loading = null; rej(new Error('niconicomments did not load')); };
-      document.head.append(e);
-    });
+  // ---- the overlay's renderer (danmaku) ----
+  // Our own Niconico (html5) renderer, built so the overlay costs the game nothing: each comment is one DOM element whose
+  // text is rasterised once, when it appears, and moved by the compositor (a Web Animations transform: no script, canvas
+  // clear or second GL context per frame; niconicomments, used before, redrew a full-stage WebGL canvas from script every
+  // frame and made each comment's text image on the main thread, which cost the game frames).
+  // Geometry is Niconico's 1920 x 1080 stage (niconicomments' html5 config): a 16:9 box over the picture, scaled to it.
+  // A naka comment enters at x 1725 (draw padding 195 + range 1530) and moves (1530 + 0.95 w) units per 4 s; ue / shita
+  // stay 3 s, centred (shrunk to fit 1530, or 1920 with "full"). Sizes: html5 font 18 / 27 / 39 on the 384-high stage
+  // (x 1920/683), rows of 1080 / 21, 13.1, 8.4 lines. Outline: black at 0.4 (white for black text).
+  // Rows (dmPlace): Niconico's rule, the topmost row where the comment meets no other on screen with it; none free: a
+  // row picked at random (seeded by the comment, so a relayout gives the same). spread: a comment holds its row that many
+  // seconds longer. Placement depends only on the comments and their times, so the timeline lays out the same after a seek.
+  const DM_SIZE = { small: [51, 51], medium: [76, 82], big: [110, 129] };  // [font px, row height], stage units
+  const DM_FONT = { defont: [600, 'Arial, "MS PGothic", "Hiragino Kaku Gothic ProN", "Noto Sans CJK JP", sans-serif'],
+    gothic: [400, '"MS PGothic", "Hiragino Kaku Gothic ProN", "Noto Sans CJK JP", sans-serif'],
+    mincho: [400, '"MS PMincho", "Hiragino Mincho ProN", "Noto Serif CJK JP", serif'] };
+  const DM_COLOR = { white: '#FFFFFF', red: '#FF0000', pink: '#FF8080', orange: '#FFC000', yellow: '#FFFF00', green: '#00FF00',
+    cyan: '#00FFFF', blue: '#0000FF', purple: '#C000FF', black: '#000000', white2: '#CCCC99', niconicowhite: '#CCCC99',
+    red2: '#CC0033', truered: '#CC0033', pink2: '#FF33CC', orange2: '#FF6600', passionorange: '#FF6600', yellow2: '#999900',
+    madyellow: '#999900', green2: '#00CC66', elementalgreen: '#00CC66', cyan2: '#00CCCC', blue2: '#3399FF', marinblue: '#3399FF',
+    purple2: '#6633CC', nobleviolet: '#6633CC', black2: '#666666' };
+  // On the picture a comment is at most Niconico's own 75 characters (the chat keeps the whole line)
+  const NICO_MAX = 75, NICO_ON_SCREEN = 60;
+  const nicoClip = t => { const a = Array.from(t); return a.length > NICO_MAX ? a.slice(0, NICO_MAX - 1).join('') + '…' : t; };
+  const measure = document.createElement('canvas').getContext('2d');
+  // a comment's look and timing; t: when it enters, in seconds on its stage's clock
+  function dmMake(l, t) {
+    const cmds = nicoCmds(l.cmd);
+    const loc = cmds.find(c => c === 'ue' || c === 'shita') || 'naka';
+    const size = cmds.find(c => DM_SIZE[c]) || 'medium', font = cmds.find(c => DM_FONT[c]) || 'defont';
+    // (Niconico takes the first colour given; none: the sender's profile colour)
+    const col = cmds.map(c => DM_COLOR[c] || (COLOR_RE.test(c) ? c : null)).find(Boolean) || (l.color ? readableHex(l.color) : '#FFFFFF');
+    const text = nicoClip(l.action ? `${disp(l.nick)} ${l.text}` : l.text);
+    const [px, row] = DM_SIZE[size], [wt, fam] = DM_FONT[font], css = `${wt} ${px}px ${fam}`;
+    measure.font = css;
+    const w = Math.ceil(measure.measureText(text).width) + 8;  // (+ the outline)
+    let seed = 0; for (const ch of (l.msgid || text) + t) seed = (seed * 31 + ch.charCodeAt(0)) >>> 0;
+    const c = { msgid: l.msgid, text, loc, css, col, w, h: row, t, y: 0, scale: 1, seed, el: null, anim: null };
+    if (loc === 'naka') { c.v = (1530 + 0.95 * w) / 4; c.life = (1725 + w) / c.v; }
+    else { c.life = 3; const max = cmds.includes('full') ? 1920 : 1530; if (w > max) c.scale = max / w; }
+    return c;
   }
+  const dmX = (c, dt) => c.loc === 'naka' ? 1725 - c.v * dt : (1920 - c.w * c.scale) / 2;
+  // do a (placed earlier) and c meet on screen in the same row band? (a holds its row spread s longer)
+  function dmMeet(a, c, spread) {
+    if (a.loc !== c.loc) return false;
+    const s0 = Math.max(a.t, c.t), s1 = Math.min(a.t + a.life + spread, c.t + c.life);
+    if (s0 >= s1) return false;
+    if (c.loc !== 'naka') return true;
+    const pad = 5 + spread * a.v;
+    const rel = T => dmX(c, T - c.t) - dmX(a, T - a.t);
+    const r0 = rel(s0), r1 = rel(s1);
+    return Math.min(r0, r1) <= a.w + pad && Math.max(r0, r1) >= -(c.w + 5);
+  }
+  function dmPlace(placed, c, spread) {
+    const near = placed.filter(a => dmMeet(a, c, spread));
+    const up = c.loc !== 'shita';
+    let y = up ? 0 : 1080 - c.h, moved = true, n = 0;
+    while (moved && n++ < 200) {
+      moved = false;
+      for (const a of near) if (y < a.y + a.h && a.y < y + c.h) { y = up ? a.y + a.h : a.y - c.h; moved = true; }
+    }
+    if (y < 0 || y + c.h > 1080) y = Math.floor((c.seed % 1000) / 1000 * Math.max(0, 1080 - c.h));  // (full: a random row)
+    c.y = y;
+  }
+  // a stage: a 16:9 box of 1920 x 1080 units over the picture
+  function dmStage(cls) {
+    const box = document.createElement('div'); box.className = `dmstage ${cls}`;
+    over.append(box);
+    return { box, list: [] };
+  }
+  function dmFit(st) {
+    const w = over.clientWidth, h = over.clientHeight;
+    if (!w || !h) return false;
+    const k = h / 1080, key = `${w}x${h}`;
+    if (st.fit !== key) { st.fit = key; st.box.style.transform = `translate(${((w - h * 16 / 9) / 2).toFixed(2)}px, 0) scale(${k.toFixed(5)})`; }
+    return true;
+  }
+  function dmEl(st, c) {
+    const e = document.createElement('div');
+    e.className = 'dm'; e.textContent = c.text;
+    e.style.font = c.css; e.style.color = c.col;
+    if (c.col.toUpperCase() === '#000000') e.style.webkitTextStrokeColor = 'rgba(255,255,255,.4)';
+    st.box.append(e);
+    return c.el = e;
+  }
+  const dmXf = (c, dt) => `translate(${dmX(c, dt).toFixed(1)}px, ${c.y}px)${c.scale !== 1 ? ` scale(${c.scale.toFixed(4)})` : ''}`;
+  function dmRemove(st, c) {
+    if (c.anim) { c.anim.cancel(); c.anim = null; }
+    if (c.el) { c.el.remove(); c.el = null; }
+    const i = st.list.indexOf(c); if (i >= 0) st.list.splice(i, 1);
+  }
+  function dmClear(st) { for (const c of [...st.list]) dmRemove(st, c); }
+
+  // Live comments (nico): on the wall clock, each entering as it arrives; the compositor runs it to the end
+  const nico = dmStage('dmlive');
+  const wallNow = () => performance.now() / 1000;
+  function danmaku(l) {
+    if (!overOn.checked || document.visibilityState === 'hidden' || l.gone) return;
+    pin();
+    if (!dmFit(nico)) return;
+    const now = wallNow(), spread = spreadOf();
+    for (const a of [...nico.list]) if (a.t + a.life + spread < now) dmRemove(nico, a);
+    // (a crowded picture: past NICO_ON_SCREEN at once a new comment stays in the chat only)
+    if (nico.list.filter(a => a.t + a.life > now).length >= NICO_ON_SCREEN) return;
+    const c = dmMake(l, now);
+    dmPlace(nico.list, c, spread);
+    nico.list.push(c);
+    const e = dmEl(nico, c);
+    c.anim = e.animate([{ transform: dmXf(c, 0) }, { transform: dmXf(c, c.life) }], { duration: c.life * 1000, easing: 'linear', fill: 'both' });
+    c.anim.onfinish = () => { if (c.el) { c.el.remove(); c.el = null; } c.anim = null; };
+  }
+  // the overlay follows the picture's box (pin) on any layout change, not per frame
+  { const ro = new ResizeObserver(() => { pin(); dmFit(nico); if (tl.st) dmFit(tl.st); tl.T = -1; tlKick(); });
+    ro.observe(over); ro.observe(stage);
+    document.addEventListener('fullscreenchange', () => { pin(); dmFit(nico); }); }
+
   // exactly over the picture (as viewer.js pins #overlay: in fullscreen the picture is not where a centred box would be)
   function pin() {
     const gameCv = document.getElementById('canvas');  // (looked up each time: viewer.js replaces it on a GL context change)
@@ -555,80 +656,6 @@
     const st = over.style;
     if (st.left !== L || st.top !== T || st.width !== W || st.height !== H) Object.assign(st, { left: L, top: T, width: W, height: H });
   }
-  function nicoReset() {
-    if (nico.raf) cancelAnimationFrame(nico.raf);
-    nico.raf = 0;
-    if (nico.inst) try { nico.inst.destroy(); } catch (e) {}
-    nico.inst = null; nico.list = []; nico.q = []; nico.size = ''; nico.end = 0;
-    if (nico.cv) { nico.cv.remove(); nico.cv = null; }
-  }
-  // (re)built for the overlay's size: the stage's layout is in its own 1920x1080 units, so a rebuild with the same
-  // comments (same order, same vpos) lays them out the same; the comments that have left are dropped then
-  function nicoBuild() {
-    const w = over.clientWidth, h = over.clientHeight, dpr = Math.min(2, window.devicePixelRatio || 1);
-    if (!w || !h) return false;
-    const now = vposNow();
-    nico.list = nico.list.filter(c => c.end > now);
-    nico.q = [];  // (the build takes every listed comment, the queued ones too)
-    if (nico.inst) try { nico.inst.destroy(); } catch (e) {}
-    // (a fresh canvas each build: the library takes a WebGL2 context on it, and a second instance on a canvas that already
-    // has one swaps in a canvas of its own, which nicoReset would then never remove)
-    const cv = document.createElement('canvas');
-    if (nico.cv) nico.cv.replaceWith(cv); else over.append(cv);
-    nico.cv = cv;
-    const cw = h * 16 / 9;
-    nico.cv.width = Math.round(cw * dpr); nico.cv.height = Math.round(h * dpr);
-    nico.cv.style.width = `${cw}px`; nico.cv.style.left = `${(w - cw) / 2}px`;
-    nico.inst = new nico.lib(nico.cv, nico.list.map(c => c.raw), nicoOpts());
-    nico.size = `${w}x${h}@${dpr}`;
-    return true;
-  }
-  function nicoFrame() {
-    nico.raf = 0;
-    if (!nico.inst || over.hidden) return;
-    pin();
-    const dpr = Math.min(2, window.devicePixelRatio || 1);
-    if (`${over.clientWidth}x${over.clientHeight}@${dpr}` !== nico.size && !nicoBuild()) return;
-    const now = vposNow();
-    if (now > nico.end) { nicoReset(); return; }  // (all gone: the next comment starts a fresh stage)
-    if (nico.q && nico.q.length) {
-      const raw = nico.q.shift();
-      // (a crowded picture: past NICO_ON_SCREEN comments at once a new one stays in the chat only, so the overlay's
-      // cost stays bounded; a rebuild to drop the oldest would remake every comment's image)
-      const live = nico.list.filter(c => c.end > now).length;
-      if (live > NICO_ON_SCREEN) nico.list = nico.list.filter(c => c.raw !== raw); else nico.inst.addComments(raw);
-    }
-    nico.inst.drawCanvas(now);
-    nico.raf = requestAnimationFrame(nicoFrame);
-  }
-  // a comment for niconicomments at time t (vpos units): naka at t + 1 s (the stage's 1 s lead-in: it enters at t),
-  // ue / shita at t; the sender's own commands first (Nico takes the first colour given), the profile colour as the default
-  function nicoRaw(l, t) {
-    const cmds = nicoCmds(l.cmd), fixed = cmds.includes('ue') || cmds.includes('shita');
-    const mail = l.color ? [...cmds, readableHex(l.color)] : cmds;
-    return { fixed, raw: { id: ++nico.id, vpos: fixed ? t : t + 100, content: nicoClip(l.action ? `${disp(l.nick)} ${l.text}` : l.text), mail,
-      owner: false, premium: true, date: Math.floor(l.time.getTime() / 1000), user_id: 0, layer: -1, is_my_post: !!l.self } };
-  }
-  // On the picture a comment is at most Niconico's own 75 characters (the chat keeps the whole line): a 300-character
-  // line is a ~12000 px wide text image to draw and upload, which a burst of them turned into dropped game frames
-  const NICO_MAX = 75, NICO_ON_SCREEN = 60;
-  const nicoClip = t => { const a = Array.from(t); return a.length > NICO_MAX ? a.slice(0, NICO_MAX - 1).join('') + '…' : t; };
-  async function danmaku(l) {
-    if (!overOn.checked || document.visibilityState === 'hidden') return;
-    try { await nicoLoad(); } catch (e) { return; }
-    if (l.gone || !overOn.checked || document.visibilityState === 'hidden') return;
-    pin();
-    if (!nico.inst) { nico.t0 = performance.now(); nico.list = []; if (!nicoBuild()) return; }
-    const { raw, fixed } = nicoRaw(l, vposNow());
-    // (gone: naka by its timeline's end, vpos + 300 + 125; fixed after 300)
-    const end = raw.vpos + (fixed ? 300 : 425) + 10;
-    nico.list.push({ raw, end, msgid: l.msgid });
-    nico.end = Math.max(nico.end, end);
-    // (added from the frame loop, one per frame: a burst's text images are made over several frames, not in one)
-    (nico.q || (nico.q = [])).push(raw);
-    if (!nico.raf) nico.raf = requestAnimationFrame(nicoFrame);
-  }
-
   // ---- the match's comment timeline ----
   // Every comment of the watched match's channel (its whole history, fetched on joining; then each new one) gets a
   // STREAM POSITION: [index, frame] of the host's netplay session (CCCaster's IndexedFrame: the same for every viewer,
@@ -643,11 +670,10 @@
   // The overlay plays the timeline at the picture's own position: local frame = stream frames from the first record fed
   // (viewer.js L.recs; frames: the record's u32 at 240) to the picture's (all fed less viewer_spectate_buffered), vpos =
   // local frame / 60 s. So pausing holds the comments, a seek or a DVR rewind shows the ones made there, a catch-up runs
-  // through them (niconicomments draws any vpos: it is a timeline renderer). A comment that arrives while following live
+  // through them (each comment is placed at its time and drawn wherever the picture's time puts it). A comment that arrives while following live
   // from someone whose picture was behind ours is moved up to our position (shown now, as a live comment; kept there).
   const LIVE_BEHIND = 240, AT_LAG = 700, CLOCK_EVERY = 15000;
-  const tl = { chan: null, entries: [], clock: null, clockAt: -1e9, clockBusy: false, inst: null, cv: null, size: '',
-               recs: null, raf: 0, vpos: -1, placed: 0 };
+  const tl = { chan: null, entries: [], clock: null, clockAt: -1e9, clockBusy: false, st: null, recs: null, raf: 0, T: -1 };
   const isMatch = name => !!matchChan && key(name) === key(matchChan);
   // the records fed, [[index, frames]] ascending; the picture's local frame; local <-> stream position
   function fedOf(lv) {
@@ -712,19 +738,24 @@
     let need = false;
     for (const e of tl.entries) if (!e.pos) { e.pos = clockPos(tl.clock, e.T); if (!e.pos) need = true; }
     if (need) tlClock(lv);
-    const add = [];
+    let add = false;
     for (const e of tl.entries) {
-      if (e.raw || !e.pos) continue;
+      if (e.c || !e.pos) continue;
       const f = localOf(now.idx, e.pos);
       if (f == null) continue;
-      e.raw = nicoRaw(e.l, Math.round(f * 100 / 60)).raw;
-      add.push(e.raw);
+      e.c = dmMake(e.l, f / 60);
+      add = true;
     }
-    if (!add.length && tl.inst) return;
-    nicoLoad().then(() => {
-      if (!tl.inst) tlBuild(); else if (add.length > 50) tlBuild(); else for (const r of add) tl.inst.addComments(r);
-      tlKick();
-    }, () => {});
+    if (add) { tlRelayout(); tlKick(); }
+  }
+  // every placed comment laid out again in time order (cheap arithmetic: a new one may come before others, history
+  // arrives out of order), so the layout is the same whenever it is built
+  function tlRelayout() {
+    if (!tl.st) tl.st = dmStage('dmtl');
+    const cs = tl.entries.filter(e => e.c).map(e => e.c).sort((a, b) => a.t - b.t), spread = spreadOf(), done = [];
+    for (const c of cs) { dmPlace(done.filter(a => a.t + a.life + spread > c.t), c, spread); done.push(c); }
+    for (const c of tl.st.list) if (!cs.includes(c) && c.el) { c.el.remove(); c.el = null; }
+    tl.st.list = cs; tl.T = -1;
   }
   function tlClock(lv) {
     if (tl.clockBusy || performance.now() - tl.clockAt < CLOCK_EVERY) return;
@@ -734,45 +765,35 @@
       .then(c => { if (c && tl.chan === ch) { tl.clock = c; tlPlace(); } }, () => {})
       .finally(() => { tl.clockBusy = false; });
   }
-  function tlBuild() {
-    const w = over.clientWidth, h = over.clientHeight, dpr = Math.min(2, window.devicePixelRatio || 1);
-    if (!w || !h || !nico.lib) return false;
-    if (tl.inst) try { tl.inst.destroy(); } catch (e) {}
-    const cv = document.createElement('canvas');  // (fresh each build, as nicoBuild's)
-    if (tl.cv) tl.cv.replaceWith(cv); else over.append(cv);
-    tl.cv = cv;
-    const cw = h * 16 / 9;
-    tl.cv.width = Math.round(cw * dpr); tl.cv.height = Math.round(h * dpr);
-    tl.cv.style.width = `${cw}px`; tl.cv.style.left = `${(w - cw) / 2}px`;
-    tl.inst = new nico.lib(tl.cv, tl.entries.filter(e => e.raw).map(e => e.raw), nicoOpts());
-    tl.size = `${w}x${h}@${dpr}`; tl.vpos = -1;
-    return true;
-  }
   function tlDrop() {
     if (tl.raf) cancelAnimationFrame(tl.raf);
-    tl.raf = 0;
-    if (tl.inst) try { tl.inst.destroy(); } catch (e) {}
-    tl.inst = null; tl.recs = null; tl.vpos = -1;
-    for (const e of tl.entries) e.raw = null;
-    if (tl.cv) { tl.cv.remove(); tl.cv = null; }
+    tl.raf = 0; tl.recs = null; tl.T = -1;
+    if (tl.st) { dmClear(tl.st); tl.st.box.remove(); tl.st = null; }
+    for (const e of tl.entries) e.c = null;
   }
   function following() { const lv = api.live(); return !!(lv && lv.follow); }
-  function tlKick() { if (!tl.raf && tl.inst && overOn.checked) tl.raf = requestAnimationFrame(tlFrame); }
+  function tlKick() { if (!tl.raf && tl.st && overOn.checked) tl.raf = requestAnimationFrame(tlFrame); }
+  // (watching back only: the comments on screen at the picture's time, moved by transform, which the compositor applies;
+  // following live they run on the wall clock (danmaku) and this does nothing but wait)
   function tlFrame() {
     tl.raf = 0;
-    if (!tl.inst || over.hidden) return;
+    if (!tl.st || over.hidden) return;
     const lv = api.live();
     if (!lv || lv.recs !== tl.recs) { tlDrop(); tlPlace(); return; }
-    pin();
-    // (following live the comments run on the wall clock (danmaku): the timeline shows only when watching back)
-    if (tl.cv) tl.cv.style.visibility = lv.follow ? 'hidden' : '';
-    if (lv.follow) { tl.vpos = -1; tl.raf = requestAnimationFrame(tlFrame); return; }
-    const dpr = Math.min(2, window.devicePixelRatio || 1);
-    if (`${over.clientWidth}x${over.clientHeight}@${dpr}` !== tl.size && !tlBuild()) return;
-    const now = nowOf(lv);
-    if (now) {  // (mid-seek: the last picture's comments stay)
-      const v = Math.round(now.local * 100 / 60);
-      if (v !== tl.vpos) { tl.vpos = v; tl.inst.drawCanvas(v); }
+    tl.st.box.style.visibility = lv.follow ? 'hidden' : '';
+    if (!lv.follow) {
+      const now = nowOf(lv);
+      if (now && dmFit(tl.st)) {  // (mid-seek: the last picture's comments stay)
+        const T = now.local / 60;
+        if (T !== tl.T) {
+          tl.T = T;
+          for (const c of tl.st.list) {
+            const dt = T - c.t;
+            if (dt >= 0 && dt < c.life) { (c.el || dmEl(tl.st, c)).style.transform = dmXf(c, dt); }
+            else if (c.el) { c.el.remove(); c.el = null; }
+          }
+        }
+      }
     }
     tl.raf = requestAnimationFrame(tlFrame);
   }
