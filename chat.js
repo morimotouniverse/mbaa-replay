@@ -575,7 +575,9 @@
     const c = chan(name);
     l.chan = c.name;
     if (l.msgid) { if (c.seen.has(l.msgid)) return; c.seen.add(l.msgid); }
-    if (!l.sys && isMatch(name)) tlAdd(l);
+    // a reply (+draft/reply, or a line opening "@nick"): talk between viewers, kept in the chat, never on the picture
+    const onPic = !l.sys && !l.reply && !/^@\S/.test(l.text);
+    if (onPic && isMatch(name)) tlAdd(l);
     // (history arrives oldest first, before any live line of that channel: kept in time order)
     if (l.hist) { let i = c.lines.length; while (i > 0 && c.lines[i - 1].time > l.time) i--; c.lines.splice(i, 0, l); }
     else c.lines.push(l);
@@ -588,7 +590,7 @@
     // (a match channel's comments: on its timeline, tlAdd above, while watching back (DVR); following live, as they
     // arrive, as #melty's: on the wall clock, so they keep crossing through the result screen, a character select and
     // the switch to the next game, where the stream position stops or starts again)
-    if (!l.hist && !l.sys && (!isMatch(name) || following())) danmaku(l);
+    if (!l.hist && onPic && (!isMatch(name) || following())) danmaku(l);
   }
   let renderPend = 0;  // (a match's whole history arrives line by line: one redraw for the lot)
   const renderSoon = () => { if (!renderPend) renderPend = setTimeout(() => { renderPend = 0; render(); }, 0); };
