@@ -1750,13 +1750,16 @@ setInterval(() => {
   playersArt().then(() => playersShow(session)).catch(() => {});
 }, 500);
 // a text longer than its room (sel: boxes holding a .t) scrolls to its end and back, at ~25 px/s, resting at both ends
+// (the player block's room changes with the layout, the card's banner and its fonts: measured again on every resize)
+if (window.ResizeObserver && document.getElementById('players'))  // (viewer.js loads at the end of the page: it exists)
+  new ResizeObserver(() => marquee(document.getElementById('players'))).observe(document.getElementById('players'));
 function marquee(root, sel = '.mqx') {
   for (const nm of root.querySelectorAll(sel)) {
     const over = nm.firstChild.scrollWidth - nm.clientWidth;
     nm.classList.toggle('mq', over > 2);
     if (over <= 2) continue;
     nm.style.setProperty('--d', `${-over}px`);
-    nm.style.setProperty('--dur', `${(over / 25 / 0.7 + 0.5).toFixed(1)}s`);
+    nm.style.setProperty('--dur', `${(over / 60 / 0.7 + 0.5).toFixed(1)}s`);  // (~60 px/s while moving)
   }
 }
 // the watched match's viewer count (the live list's, every 15 s), on the players panel's VS line

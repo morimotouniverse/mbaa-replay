@@ -217,8 +217,9 @@
   #matchcard { position: relative; }
   #matchcard .por { display: none; }
   #matchcard.pors:has(#stageblk:not([hidden])) .por:not([hidden]) { display: block; position: absolute; z-index: 1; top: -22%; left: 25%;
-    transform: translateX(-50%); height: 165%; width: auto; max-width: none; pointer-events: none; filter: drop-shadow(0 0 8px #000c);
-    -webkit-mask: linear-gradient(#000 52%, #0000 66%); mask: linear-gradient(#000 52%, #0000 66%); }
+    transform: translateX(-50%); height: 165%; width: auto; max-width: none; pointer-events: none; filter: drop-shadow(0 0 8px #000c); }
+  /* (the song line under the picture covers the figures' lower part: they end at the picture's edge, uncut by a fade) */
+  #matchcard.pors:has(#stageblk:not([hidden])) .trk { position: relative; z-index: 3; background: var(--panel); margin-top: 0; padding-top: 4px; }
   /* (each figure centred on its half; P2 mirrored, facing P1) */
   #matchcard.pors:has(#stageblk:not([hidden])) .por.p2:not([hidden]) { left: 75%; transform: translateX(-50%) scaleX(-1); }
   #matchcard.pors:has(#stageblk:not([hidden])) { overflow: hidden; border-radius: 8px; }
@@ -227,23 +228,31 @@
   #matchcard:has(#stageblk:not([hidden])) #players { z-index: 2; position: relative; }
   /* with portraits the small icons go; each side: the name across, the moon and the character under it */
   #matchcard.pors:has(#stageblk:not([hidden])) #players .ico { display: none; }
-  #matchcard.pors:has(#stageblk:not([hidden])) #players .pl { grid-template-columns: 16px minmax(0, 1fr); column-gap: 4px; }
+  #matchcard.pors:has(#stageblk:not([hidden])) #players .pl { grid-template-columns: 18px minmax(0, 1fr); column-gap: 5px; }
+  #matchcard.pors:has(#stageblk:not([hidden])) #players .moon { width: 18px; height: 18px; }
+  #matchcard.pors:has(#stageblk:not([hidden])) #players .nm { font-size: 15px; }
+  #matchcard.pors:has(#stageblk:not([hidden])) #players .ch .mqx { font-size: 12.5px; }
+  #matchcard.pors:has(#stageblk:not([hidden])) #players .vs { font-size: 12px; }
   #matchcard.pors:has(#stageblk:not([hidden])) #players .nm { grid-area: 1 / 1 / 2 / 3; }
   #matchcard.pors:has(#stageblk:not([hidden])) #players .moon { grid-area: 2 / 1; }
   #matchcard.pors:has(#stageblk:not([hidden])) #players .ch .mqx { grid-area: 2 / 2; }
-  #matchcard.pors:has(#stageblk:not([hidden])) #players .pl:last-child { grid-template-columns: minmax(0, 1fr) 16px; }
+  #matchcard.pors:has(#stageblk:not([hidden])) #players .pl:last-child { grid-template-columns: minmax(0, 1fr) 18px; }
   #matchcard.pors:has(#stageblk:not([hidden])) #players .pl:last-child .nm { grid-area: 1 / 1 / 2 / 3; }
   #matchcard.pors:has(#stageblk:not([hidden])) #players .pl:last-child .moon { grid-area: 2 / 2; }
   #matchcard.pors:has(#stageblk:not([hidden])) #players .pl:last-child .ch .mqx { grid-area: 2 / 1; }
   /* wide (desktop: the card under the picture, as wide as the controls): a banner, not a 256:110 picture 500 px tall */
   body:is(.deskchat, :not(.side)) #matchcard:has(#stageblk:not([hidden])) .view { aspect-ratio: auto; height: clamp(150px, 15vw, 210px); object-fit: cover; }
   body:is(.deskchat, :not(.side)) #matchcard:has(#stageblk:not([hidden])) .name { width: auto; max-width: 46%; max-height: 22%; }
-  body:is(.deskchat, :not(.side)) #matchcard.pors:has(#stageblk:not([hidden])) .por:not([hidden]) { height: 250%; top: -37%; left: 27%;
-    -webkit-mask: linear-gradient(#000 40%, #0000 51%); mask: linear-gradient(#000 40%, #0000 51%); }
+  body:is(.deskchat, :not(.side)) #matchcard.pors:has(#stageblk:not([hidden])) .por:not([hidden]) { height: 250%; top: -37%; left: 27%; }
   body:is(.deskchat, :not(.side)) #matchcard.pors:has(#stageblk:not([hidden])) .por.p2:not([hidden]) { left: 73%; }
   body:is(.deskchat, :not(.side)) #matchcard:has(#stageblk:not([hidden])) #players { padding: 10px 14px 0; }
-  body:is(.deskchat, :not(.side)) #matchcard:has(#stageblk:not([hidden])) #players .nm { font-size: 17px; }
-  body:is(.deskchat, :not(.side)) #matchcard:has(#stageblk:not([hidden])) #players .ch .mqx { font-size: 12.5px; }
+  body:is(.deskchat, :not(.side)) #matchcard:has(#stageblk:not([hidden])) #players .nm { font-size: 22px; }
+  body:is(.deskchat, :not(.side)) #matchcard:has(#stageblk:not([hidden])) #players .ch .mqx { font-size: 15px; }
+  body:is(.deskchat, :not(.side)) #matchcard:has(#stageblk:not([hidden])) #players .moon { width: 24px; height: 24px; }
+  body:is(.deskchat, :not(.side)) #matchcard:has(#stageblk:not([hidden])) #players .pl { grid-template-columns: 24px minmax(0, 1fr); column-gap: 6px; row-gap: 2px; }
+  body:is(.deskchat, :not(.side)) #matchcard:has(#stageblk:not([hidden])) #players .pl:last-child { grid-template-columns: minmax(0, 1fr) 24px; }
+  body:is(.deskchat, :not(.side)) #matchcard:has(#stageblk:not([hidden])) #players .vs { font-size: 15px; gap: 5px; }
+  body:is(.deskchat, :not(.side)) #matchcard:has(#stageblk:not([hidden])) #players #watching { font-size: 13px; }
   body.live .replayonly { display: none !important; }
   body:not(.live) .liveonly { display: none !important; }
   /* live: a player's name the game's banner font can't draw (viewer.js liveBanner), where the game's banner text goes */
@@ -506,6 +515,6 @@
 </div>
 <script src="mbaa.js?v=78cb9bf622fc"></script>
 <script src="bgm_stream.js?v=407ac29e5c89"></script>
-<script src="viewer.js?v=da7f6cef0d0b"></script>
+<script src="viewer.js?v=ca951d1046f2"></script>
 </body>
 </html>
