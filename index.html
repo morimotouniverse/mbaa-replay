@@ -64,6 +64,10 @@
   /* (the chat column and the menu sheet are outside the fullscreen picture: their buttons go with them) */
   .fsbar #menub, body:is(.mob, :not(.haschat)) .fsbar #chattog { display: none !important; }  /* (desktop: the chat column's toggle stays: the fullscreen chat) */
   .stage.fs.idle .fsbar { opacity: 0; pointer-events: none; }
+  /* the desktop overlay (not fullscreen, viewer.js fitStage ovlPick): the bar over the picture's bottom, as wide as it */
+  .stage.ovl:not(.fs) .fsbar { padding: 34px 12px 8px; background: linear-gradient(transparent, #000a 35%, #000e); }
+  .stage.ovl.idle:not(.fs) .fsbar { opacity: 0; pointer-events: none; }
+  .stage.ovl.idle:not(.fs) { cursor: none; }
   .stage.fs.idle { cursor: none; }
   body.mob .fsbar .tbar button { min-width: 44px; min-height: 40px; }
   /* a phone on its side in fullscreen (.sidebar, viewer.js fitStage: phones only, the room beside the 4:3 picture): the
@@ -242,6 +246,14 @@
             background: var(--raise, #1c1c28); border: 1px solid var(--line); border-radius: 10px; padding: 10px;
             box-shadow: 0 10px 30px #0008; display: flex; flex-direction: column; gap: 8px; }
   #setpop[hidden] { display: none; }
+  #setpop #scale { display: none; }
+  #setpop .row:has(.sizeseg) { align-items: center; gap: 8px; }
+  .sizeseg { display: inline-flex; border-radius: 8px; overflow: hidden; border: 1px solid #ffffff1f; }
+  .sizeseg button { min-width: 40px; padding: 4px 8px; border: 0; border-radius: 0; background: none; color: var(--faint, #9a9ab0); font-size: 12px; cursor: pointer; }
+  .sizeseg button + button { border-left: 1px solid #ffffff1f; }
+  .sizeseg button:hover { color: var(--fg, #eee); background: #ffffff10; }
+  .sizeseg button[aria-checked="true"] { background: #e04a5a; color: #fff; }
+  body.mob .sizeseg, body.mob .sizeseg + .lbl { display: none; }
   #setpop .row { flex-wrap: wrap; }
   /* (in the popover: skip intro and the size; the overlay toggles and music are the bar's chips) */
   #setpop label:has(:is(#boxes, #inputs, #hud, #music, #names)) { display: none; }
@@ -740,6 +752,6 @@
 </div>
 <script src="mbaa.js?v=35b9f117f88e"></script>
 <script src="bgm_stream.js?v=407ac29e5c89"></script>
-<script src="viewer.js?v=82dc75f87104"></script>
+<script src="viewer.js?v=8109f441cc25"></script>
 </body>
 </html>

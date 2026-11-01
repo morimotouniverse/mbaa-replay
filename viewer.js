@@ -285,10 +285,14 @@ let actx, master, outGain, musicGain;
 // the page shows #sound, the sessions keep the game's BGM requests (s.bgmLog) and play nothing, and once audio runs the
 // BGM the game requested starts from where the match is (__mbaaBgmResume).
 // Returns whether audio exists; inGesture: called from a click / key / drop handler.
+// (a touch's pointerdown is no gesture to the browser: only its pointerup / touchend / click are; a mouse's pointerdown is)
+const GESTURES = ['pointerdown', 'pointerup', 'touchend', 'click', 'keydown'];
 const activated = () => !!(navigator.userActivation && navigator.userActivation.hasBeenActive);
 function ensureAudio(inGesture = false) {
   if (actx) return true;
   if (!inGesture && !activated()) { audioArm(); return false; }
+  // (iPhone: 'playback' makes Web Audio play with the ringer switch on silent, as a video does; Safari 17+)
+  try { if (navigator.audioSession) navigator.audioSession.type = 'playback'; } catch (e) {}
   actx = new AudioContext();
   master = actx.createGain();  // the game's mix at CE level; video export records from here
   outGain = actx.createGain(); outGain.gain.value = volGain();
@@ -298,7 +302,7 @@ function ensureAudio(inGesture = false) {
   const show = () => { btn.hidden = actx.state === 'running'; };
   btn.onclick = () => actx.resume();
   const unlock = () => { if (actx.state !== 'running') actx.resume(); };
-  addEventListener('pointerdown', unlock); addEventListener('keydown', unlock);
+  for (const ev of GESTURES) addEventListener(ev, unlock, true);
   actx.onstatechange = () => { show(); if (actx.state === 'running' && window.__mbaaBgmResume) window.__mbaaBgmResume(); };
   show();
   // the tracks the match already has decode now (the stream decoder needs no context ahead)
@@ -314,8 +318,8 @@ function audioArm() {
   audioArmed = true;
   const btn = document.getElementById('sound');
   btn.hidden = false;
-  const go = () => { removeEventListener('pointerdown', go, true); removeEventListener('keydown', go, true); ensureAudio(true); actx.resume(); };
-  addEventListener('pointerdown', go, true); addEventListener('keydown', go, true);
+  const go = () => { for (const ev of GESTURES) removeEventListener(ev, go, true); ensureAudio(true); actx.resume(); };
+  for (const ev of GESTURES) addEventListener(ev, go, true);
 }
 // the volume slider (works before audio exists: the context takes its level when made)
 const volGain = () => Math.pow(+document.getElementById('vol').value / 100, 2);
@@ -1847,13 +1851,13 @@ async function liveListShow() {
   const badge = (v, n) => { v.title = n ? `${n} watching` : ''; v.replaceChildren(...(n ? [el('i', 'i i-eye'), String(n)] : [])); };
   l = [...l.filter(m => !liveIdle(m)), ...l.filter(liveIdle)];
   const idleTip = m => liveIdle(m) ? `idle: nothing played for ${Math.round(m.age / 60)} min (the host is still open)` : '';
-  ol.replaceChildren(...l.map(m => {
-    const key = JSON.stringify([m.id, m.names, m.chara, m.moon, !!plArt, liveIdle(m)]);
+  const rows = l.map(m => {
+    const key = JSON.stringify([m.id, m.names, m.chara, m.moon, !!plArt]);
     let li = old.get(key);
     if (li) {
       badge(li.querySelector('.lview'), m.viewers);
       li.className = [liveSrc && liveSrc.id === m.id ? 'cur' : '', liveIdle(m) ? 'idle' : ''].join(' ').trim();
-      if (liveIdle(m)) li.querySelector('a').title = idleTip(m);
+      li.querySelector('a').title = idleTip(m) || m.matchup || (m.names || []).map(n => (n || '').trim()).join(' vs ');
       if (liveSrc && liveSrc.id === m.id) liveWatching(m.viewers);
       return li;
     }
@@ -1882,7 +1886,11 @@ async function liveListShow() {
     if (liveIdle(m)) li.classList.add('idle');
     li.append(a);
     return li;
-  }));
+  });
+  // (in place: a kept row is never taken out of the list, which would restart its names' scrolling from the start;
+  // only rows out of order move)
+  rows.forEach((li, i) => { if (ol.children[i] !== li) ol.insertBefore(li, ol.children[i] || null); });
+  while (ol.children.length > rows.length) ol.lastElementChild.remove();
   if (!l.some(m => liveSrc && liveSrc.id === m.id)) liveWatching(0);
   marquee(ol, '.lnm:not(.mq)');
   setTimeout(liveListShow, 15000);
@@ -2846,7 +2854,9 @@ function controls() {
   btn('copyt', copyTimestamp);
   const sc = document.getElementById('scale');
   sc.value = scaleMode;
-  sc.onchange = () => { scaleMode = sc.value; try { localStorage.setItem('mbaaScale', scaleMode); } catch (e) {} fitStage(); sc.blur(); };
+  const segOn = () => document.querySelectorAll('.sizeseg button').forEach(x => x.setAttribute('aria-checked', String(x.dataset.v === scaleMode)));
+  sc.onchange = () => { scaleMode = sc.value; try { localStorage.setItem('mbaaScale', scaleMode); } catch (e) {} segOn(); fitStage(); sc.blur(); };
+  segOn();
   btn('full', toggleFullscreen); btn('fsx', toggleFullscreen); btn('pip', togglePip);
   document.getElementById('marks').addEventListener('click', e => {
     const s = session;
@@ -2872,7 +2882,12 @@ function controls() {
   // a click / tap on the picture: during the VS screen it skips it (as a button press does in the game), otherwise
   // it pauses / plays
   const stageEl = document.getElementById('overlay').parentElement;
-  stageEl.addEventListener('pointermove', e => { if (stageEl.classList.contains('fs') && e.pointerType === 'mouse') fsWake(); });
+  const barOver = () => stageEl.classList.contains('fs') || stageEl.classList.contains('ovl');
+  stageEl.addEventListener('pointermove', e => { if (barOver() && e.pointerType === 'mouse') fsWake(); });
+  // (the desktop overlay, not fullscreen: the bar goes as the mouse leaves the picture, as on YouTube; paused it stays)
+  stageEl.addEventListener('pointerleave', e => {
+    if (stageEl.classList.contains('ovl') && !stageEl.classList.contains('fs') && e.pointerType === 'mouse' && !ui.paused && !seekDragging && !clipPanel) { clearTimeout(fsTimer); stageEl.classList.add('idle'); }
+  });
   stageEl.addEventListener('pointerdown', e => {
     if (e.target.closest('.fsbar')) { fsWake(); return; }  // (the bar's own controls)
     if (e.target.closest('#help')) return;  // (the help over the picture: its own clicks)
@@ -2885,7 +2900,7 @@ function controls() {
       if (stageEl.classList.contains('idle')) fsWake(); else { clearTimeout(fsTimer); stageEl.classList.add('idle'); }
       return;
     }
-    if (stageEl.classList.contains('fs')) fsWake();
+    if (barOver()) fsWake();
     if (e.button > 0 || !session) return;
     if (actx && actx.state !== 'running') return;  // this click only turns sound on (the page-wide unlock handles it)
     togglePlay();
@@ -3678,6 +3693,21 @@ function fitStage() {
   // the transport under the picture (in fullscreen it is over it): its height at a picture width, measured at that
   // width (its bar is one row when wide, two or three when narrow), so a narrow picture's tall bar does not keep the
   // picture narrow: the widest picture's bar first, then the chosen picture's, until they agree
+  // Desktop, auto size: when the picture alone (the window's height) takes a larger whole multiple than it does with the
+  // transport under it (a 1080p window, ~970 px: 2x, against 1x with the bar under), the bar goes over the picture's
+  // bottom and fades on idle (.ovl, YouTube's player). wSide / wBelow: the picture's room beside the panel / full width.
+  // Returns [width, label, side (null: unchanged)].
+  const ovlPick = (wSide, wBelow, r) => {
+    const Hp = window.innerHeight - 8, k = /^(\d)x$/.exec(r[1]) ? +r[1][0] : 0;
+    let on = false, out = [r[0], r[1], null];
+    if (!b.classList.contains('mob') && dpr < 2 && scaleMode === 'auto') {
+      const kS = Math.floor(Math.min(wSide / 640, Hp / 480)), kB = Math.floor(Math.min(wBelow / 640, Hp / 480));
+      const kO = Math.max(kS, kB);
+      if (kO > k && kO >= 1) { on = true; out = [640 * kO, `${kO}x`, kS >= kB]; }
+    }
+    if (stage && stage.classList.contains('ovl') !== on) { stage.classList.toggle('ovl', on); barPlace(); }
+    return out;
+  };
   const trAt = w => {
     if (full || !tr) return 0;
     const o = tr.style.width; tr.style.width = `${Math.floor(w)}px`;
@@ -3696,7 +3726,8 @@ function fitStage() {
     };
     let trH = trAt(W), r = pick(trH);
     for (let n = 0; n < 3; n++) { const h = trAt(r[0]); if (h === trH) break; trH = h; r = pick(trH); }
-    return setW(r[0], r[1]);
+    const o = ovlPick(W, W, r);
+    return setW(o[0], o[1]);
   }
   const fsChatW = full && stage.classList.contains('fschat') ? Math.round(Math.min(400, Math.max(300, window.innerWidth * 0.22))) : 0;
   if (fsChatW) root.style.setProperty('--chatw', `${fsChatW}px`);
@@ -3730,6 +3761,11 @@ function fitStage() {
   };
   let trH = trAt(Math.min(W, 1280)), r = pick(trH);
   for (let n = 0; n < 3; n++) { const h = trAt(r[0]); if (h === trH) break; trH = h; r = pick(trH); }
+  if (!full) {
+    const o = ovlPick(W - SIDE_W, W, r);
+    if (o[2] !== null) document.body.classList.toggle('side', o[2]);
+    r = o;
+  }
   setW(r[0], r[1]);
   // desktop fullscreen with room under the picture for the whole bar (1080p at 2x: 960 + 120): the picture and the
   // bar as one block, centred, the bar under the picture instead of over its bottom (.fsroom); no room: over it
@@ -3756,6 +3792,15 @@ function placeControls(mob) {
     const tr = byId('tright'), pop = byId('setpop'), setb = byId('setb'), tclip = byId('tclip');
     if (!tr || !pop || !chips || !tclip) return;
     const sizeRow = document.createElement('div'); sizeRow.className = 'row';
+    // (desktop: the size as a row of buttons, the select (#scale, the state; phones' sheet uses it) kept hidden in it)
+    const seg = document.createElement('div'); seg.className = 'sizeseg'; seg.setAttribute('role', 'radiogroup'); seg.setAttribute('aria-label', 'picture size');
+    const segL = document.createElement('span'); segL.className = 'lbl'; segL.textContent = 'size';
+    for (const [v, t, tip] of [['auto', 'auto', 'the largest whole multiple that fits (the bar over the picture when that makes it larger)'], ['1', '1x'], ['2', '2x'], ['3', '3x'], ['fit', 'fit', 'as large as fits, not a whole multiple']]) {
+      const bt = document.createElement('button'); bt.type = 'button'; bt.textContent = t; bt.dataset.v = v; bt.setAttribute('role', 'radio'); bt.setAttribute('aria-checked', String(v === scaleMode)); bt.title = tip || `${t}: every game pixel ${v}x${v} screen pixels`;
+      bt.onclick = e => { e.stopPropagation(); const sc = byId('scale'); sc.value = v; sc.dispatchEvent(new Event('change')); };
+      seg.append(bt);
+    }
+    sizeRow.append(segL, seg);
     pop.append(sizeRow);
     for (const [el, to, before] of [[byId('mute'), tr, setb], [byId('vol'), tr, setb], [byId('speed'), tr, setb],
                                     [byId('pip'), tr, null], [byId('full'), tr, null], [byId('helpb'), tr, null],
@@ -3799,23 +3844,30 @@ function setFs(on) {
   const stage = document.querySelector('.stage'), sec = document.getElementById('transportsec');
   if (stage.classList.contains('fs') === on) return;
   stage.classList.toggle('fs', on);
-  if (on) {
-    const bar = document.createElement('div');
-    bar.className = 'fsbar';
-    sec.before(Object.assign(document.createElement('div'), { id: 'transporthome', hidden: true }));
-    bar.append(sec);
-    stage.append(bar);
-    fsWake();
-  } else {
-    const home = document.getElementById('transporthome');
-    home.replaceWith(sec);
-    stage.querySelector('.fsbar').remove();
-    stage.classList.remove('idle');
-    clearTimeout(fsTimer);
-  }
+  barPlace();
   fsChatPlace();
   marksKey = '';  // (the timeline's width changed: its marks are drawn again)
   fitStage();
+}
+// the transport in a bar over the picture's bottom (.fsbar: fullscreen, or the desktop overlay .ovl, where the picture
+// takes the window's height at a whole multiple the bar under it would not leave room for) or back at its place
+function barPlace() {
+  const stage = document.querySelector('.stage'), sec = document.getElementById('transportsec');
+  const want = stage.classList.contains('fs') || stage.classList.contains('ovl'), bar = stage.querySelector(':scope > .fsbar');
+  if (want && !bar) {
+    const nb = document.createElement('div');
+    nb.className = 'fsbar';
+    sec.before(Object.assign(document.createElement('div'), { id: 'transporthome', hidden: true }));
+    nb.append(sec);
+    stage.append(nb);
+    fsWake();
+  } else if (!want && bar) {
+    document.getElementById('transporthome').replaceWith(sec);
+    bar.remove();
+    stage.classList.remove('idle');
+    clearTimeout(fsTimer);
+  }
+  marksKey = '';
 }
 // fullscreen with the chat shown (desktop, a chat page): the chat column moves into the fullscreen layer, on the right,
 // the picture fitted to the rest (Twitch's fullscreen chat); the chat toggle in the bar takes it out again
