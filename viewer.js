@@ -532,7 +532,7 @@ function freshCanvas() {
   if (pipVideo) {  // (picture in picture: the new canvas; the old capture track stopped, else it kept the old canvas and its GL context)
     pipSelfAt = performance.now();
     if (pipVideo.srcObject) for (const tr of pipVideo.srcObject.getTracks()) tr.stop();
-    pipVideo.srcObject = c.captureStream(60); pipVideo.play().catch(() => {});
+    pipVideo.srcObject = pipStream(c); pipVideo.play().catch(() => {});
   }
   // a phone frees a background page's GPU context (switching to another app and back): kept restorable, and the session
   // started again on a fresh instance (its textures, shaders and targets died with the context) where it was
@@ -569,12 +569,28 @@ function bgTick(on) {
 }
 // Picture in picture: the canvas as a (silent: the page plays the sound) video stream, popped out by the button or, where
 // the browser allows, by leaving the page while a match plays
-let pipVideo = null;
+let pipVideo = null, pipTrack = null;
+// (a stream at 0 fps: frames only when asked. A 60 fps capture made the browser read the whole game canvas back every
+// frame for a video nobody watched; now 60 a second only while the picture-in-picture window is open, 2 a second
+// otherwise so a pop-out finds a frame ready)
+function pipStream(c) {
+  const st = c.captureStream(0);
+  pipTrack = st.getVideoTracks()[0] || null;
+  if (!pipTrack || typeof pipTrack.requestFrame !== 'function') { pipTrack = null; return c.captureStream(60); }
+  return st;
+}
+let pipTickN = 0;
+requestAnimationFrame(function pipTick() {
+  if (pipTrack && pipVideo && pipTrack.readyState === 'live') {
+    if (document.pictureInPictureElement === pipVideo || ++pipTickN % 30 === 0) { try { pipTrack.requestFrame(); } catch (e) {} }
+  }
+  requestAnimationFrame(pipTick);
+});
 function pipSource() {
   if (pipVideo) return pipVideo;
   pipVideo = document.createElement('video');
   pipVideo.id = 'pipv'; pipVideo.muted = true; pipVideo.playsInline = true; pipVideo.autoPictureInPicture = true;
-  pipVideo.srcObject = document.getElementById('canvas').captureStream(60);
+  pipVideo.srcObject = pipStream(document.getElementById('canvas'));
   pipSelfAt = performance.now();
   pipVideo.addEventListener('leavepictureinpicture', () => { if (document.visibilityState === 'hidden') bgTick(true); });
   // the window's own controls (Firefox draws volume, mute and play / pause; the video has no sound of its own): the
@@ -1884,9 +1900,16 @@ function marquee(root, sel = '.mqx') {
   for (const nm of root.querySelectorAll(sel)) {
     const over = nm.firstChild.scrollWidth - nm.clientWidth;
     nm.classList.toggle('mq', over > 2);
-    if (over <= 2) continue;
-    nm.style.setProperty('--d', `${-over}px`);
-    nm.style.setProperty('--dur', `${(over / 60 / 0.7 + 0.5).toFixed(1)}s`);  // (~60 px/s while moving)
+    const t = nm.firstChild;
+    // (a Web Animation with concrete numbers runs on the compositor; the CSS keyframes with var() re-styled the text
+    // every frame on the main thread)
+    if (t.__mq && t.__mq.over === over) continue;
+    if (t.__mq) { t.__mq.anim.cancel(); t.__mq = null; }
+    if (over <= 2 || (window.matchMedia && matchMedia('(prefers-reduced-motion: reduce)').matches) || !t.animate) continue;
+    const anim = t.animate([{ transform: 'translateX(0)', offset: 0 }, { transform: 'translateX(0)', offset: 0.15 },
+                            { transform: `translateX(${-over}px)`, offset: 0.85 }, { transform: `translateX(${-over}px)`, offset: 1 }],
+                           { duration: (over / 60 / 0.7 + 0.5) * 1000, iterations: Infinity, direction: 'alternate', easing: 'ease-in-out' });
+    t.__mq = { over, anim };
   }
 }
 // the watched match's viewer count (the live list's, every 15 s), on the players panel's VS line
@@ -2771,8 +2794,15 @@ const BOX_STYLE = [  // kind -> [stroke, fill] (colours after the community Exte
 ];
 const DRAW_ORDER = [0, 6, 5, 1, 4, 3, 2];
 const ARROW = ['·', '↙', '↓', '↘', '←', '·', '→', '↖', '↑', '↗'];
+let overlayClear = false;  // (the overlay canvas holds nothing: nothing to clear or place)
 function drawOverlay() {
   const c = document.getElementById('overlay'), gc = document.getElementById('canvas');
+  // hitboxes and inputs off: one clear when they go off, then nothing per frame (no layout reads, no full-canvas clear)
+  if (!ui.boxes && !ui.inputs && !clipChat) {
+    if (!overlayClear) { c.getContext('2d').clearRect(0, 0, c.width, c.height); overlayClear = true; }
+    return;
+  }
+  overlayClear = false;
   // (exactly over the picture: in fullscreen the picture is not where a centred overlay would be once the controls
   // column sits beside it)
   const L = `${gc.offsetLeft}px`, T = `${gc.offsetTop}px`;
@@ -2837,10 +2867,10 @@ let seekDragging = false, marksKey = '';
 // (the page writes only what changed: a text or a slider rewritten every display frame costs a style / layout pass on
 // phones; the time changes 10 times a second, the slider's fill when it moves a whole pixel, the frame number only
 // where it shows)
-const uiLast = { time: '', dur: '', fc: '', px: -1, sw: 0, fcShown: true };
+const uiLast = { time: '', dur: '', fc: '', px: -1, vpx: -1, sw: 0, fcShown: false, measured: false };
 // (sizes read on resize, never inside the frame: a layout read after the frame's writes would force a synchronous layout)
 const uiMeasure = () => { const sk = document.getElementById('seek'), fc = document.getElementById('fc');
-  uiLast.sw = sk ? sk.clientWidth : 0; uiLast.fcShown = !!fc && fc.offsetParent !== null; uiLast.px = -1; };
+  uiLast.sw = sk ? sk.clientWidth : 0; uiLast.fcShown = !!fc && fc.offsetParent !== null; uiLast.px = uiLast.vpx = -1; };
 addEventListener('resize', () => requestAnimationFrame(uiMeasure));
 if (window.ResizeObserver) addEventListener('load', () => { const tb = document.querySelector('.tbar'); if (tb) new ResizeObserver(() => uiMeasure()).observe(tb); });
 const setText = (id, k, v) => { if (uiLast[k] !== v) { uiLast[k] = v; document.getElementById(id).textContent = v; } };
@@ -2852,10 +2882,18 @@ function uiLoop() {
     if (rec) { try { recTick(s, f); } catch (e) { recFail(e); } }
     const seek = document.getElementById('seek');
     if (+seek.max !== max) seek.max = max;
-    if (!seekDragging) { const v = t.want !== null ? t.want : f; if (+seek.value !== v) seek.value = v; }
+    // (the slider's value only when its thumb moves a whole pixel: a new value every frame re-laid the thumb every frame)
+    if (!uiLast.measured) { uiLast.measured = true; uiMeasure(); }
+    if (!seekDragging) {
+      const v = t.want !== null ? t.want : f, vpx = Math.round((uiLast.sw || 1000) * v / Math.max(1, max));
+      if (vpx !== uiLast.vpx || t.want !== null) { uiLast.vpx = vpx; if (+seek.value !== v) seek.value = v; }
+    }
     setText('time', 'time', fmtTime(f));
     setText('dur', 'dur', `/ ${fmtTime(max)}${t.end === null ? '+' : ''}`);
-    if (uiLast.fcShown || uiLast.fc === '') setText('fc', 'fc', `frame ${f}`);
+    // (phones hide it; playing, 10 a second is all an eye reads; paused or stepping, every frame)
+    if (uiLast.fcShown && !document.body.classList.contains('mob') && (ui.paused || f - (uiLast.fcF ?? -99) >= 6 || f < uiLast.fcF)) {
+      uiLast.fcF = f; setText('fc', 'fc', `frame ${f}`);
+    }
     const px = Math.round((uiLast.sw || 1000) * seek.value / Math.max(1, max));
     if (px !== uiLast.px) { uiLast.px = px; seek.style.setProperty('--p', `${(100 * seek.value / Math.max(1, max)).toFixed(2)}%`); }
     drawMarks(t, max);
@@ -4038,7 +4076,7 @@ function fitStage() {
   if (!full) {  // (fullscreen keeps the page's layout under it)
     layMode = chatLayout();
     const mob = layMode === 'port' || layMode === 'land';
-    b.classList.toggle('mob', mob); placeControls(mob); b.classList.toggle('port', layMode === 'port'); b.classList.toggle('land', layMode === 'land');
+    b.classList.toggle('mob', mob); document.documentElement.classList.toggle('mob', mob); placeControls(mob); b.classList.toggle('port', layMode === 'port'); b.classList.toggle('land', layMode === 'land');
     b.classList.toggle('nochat', (chatHidden || !b.classList.contains('haschat')) && (layMode === 'land' || layMode === 'desk'));
     b.classList.toggle('deskchat', layMode === 'desk' && !chatHidden);
     if (!mob) b.classList.remove('sheet', 'kbd');

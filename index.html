@@ -123,7 +123,7 @@
   body.deskchat #chatcol { position: sticky; top: 8px; height: calc(100vh - 16px); height: calc(100dvh - 16px); }
   /* phones with chat: the page itself never scrolls; .main is the visual viewport (viewer.js: --vvh / --vvt, so the input
      stays above the on-screen keyboard) */
-  html:has(body.mob) { overflow: hidden; height: 100%; overscroll-behavior: none; }
+  html.mob { overflow: hidden; height: 100%; overscroll-behavior: none; }  /* (viewer.js sets it with body.mob: an html:has(body.mob) rule re-styled the document on every text change) */
   body.mob { padding: 0; overflow: hidden; height: 100%; min-height: 0; overscroll-behavior: none; }
   body.mob .main { position: fixed; left: 0; right: 0; top: var(--vvt, 0px); height: var(--vvh, 100dvh); margin: 0; gap: 0;
                    justify-content: stretch; }
@@ -480,7 +480,8 @@
   #radiogrid .tile span { font-size: 11px; line-height: 1.25; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .clock { display: flex; align-items: baseline; gap: 8px; font-variant-numeric: tabular-nums; }
   #time { font-size: 20px; font-weight: 600; letter-spacing: .02em; }
-  #fc { color: var(--faint); font-size: 11px; margin-left: auto; }
+  #fc { color: var(--faint); font-size: 11px; margin-left: auto; font-variant-numeric: tabular-nums; }
+  .clock > :is(#time, #fc, #dur) { contain: layout paint style; }  /* (their text changes: laid out on their own) */
   /* timeline: round marks above a thin seek track */
   .timeline { display: flex; flex-direction: column; gap: 2px; }
   #marks { width: 100%; height: 16px; display: block; cursor: pointer; }
@@ -546,7 +547,7 @@
   /* a text longer than its room scrolls to its end and back (viewer.js marquee(): .mqx holding a .t) */
   #liveitems .lnm, .mqx { overflow: hidden; white-space: nowrap; min-width: 0; }
   #liveitems .lnm .t, .mqx .t { display: inline-block; }
-  #liveitems .lnm.mq .t, .mqx.mq .t { animation: lmq var(--dur) ease-in-out infinite alternate; }
+  #liveitems .lnm.mq .t, .mqx.mq .t { will-change: transform; }  /* (viewer.js marquee: a Web Animation) */
   @keyframes lmq { 0%, 15% { transform: translateX(0); } 85%, 100% { transform: translateX(var(--d)); } }
   @media (prefers-reduced-motion: reduce) { #liveitems .lnm.mq .t, .mqx.mq .t { animation: none; } #liveitems .lnm, .mqx { text-overflow: ellipsis; } }
   #liveitems .lvs { font-size: 10px; color: var(--faint); letter-spacing: .08em; flex: none; }
@@ -773,8 +774,8 @@
   </div>
 </div>
 </div>
-<script src="mbaa.js?v=19a4eb4a0c36"></script>
+<script src="mbaa.js?v=f2bb88e80551"></script>
 <script src="bgm_stream.js?v=407ac29e5c89"></script>
-<script src="viewer.js?v=b26d8b930ba0"></script>
+<script src="viewer.js?v=4ff9b1fe9790"></script>
 </body>
 </html>
