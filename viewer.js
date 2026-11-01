@@ -3043,6 +3043,49 @@ function controls() {
   requestAnimationFrame(uiLoop);
 }
 
+// ?perf=hud: an on-screen readout for measuring a real phone (screenshot it): display rate, game frames a second, the
+// engine tick's wall time (game + render), missed frames, long tasks, heaps, the GPU and the picture's size
+if (Q.get('perf') === 'hud') (() => {
+  const el = document.createElement('pre');
+  el.id = 'perfhud';
+  el.style.cssText = 'position:fixed;left:4px;top:4px;z-index:9999;margin:0;padding:6px 8px;background:#000c;color:#7f7;font:11px/1.35 ui-monospace,monospace;pointer-events:none;white-space:pre;border-radius:6px';
+  document.body.append(el);
+  let gpu = '?';
+  try { const g = document.createElement('canvas').getContext('webgl2'), x = g && g.getExtension('WEBGL_debug_renderer_info'); gpu = x ? g.getParameter(x.UNMASKED_RENDERER_WEBGL) : g ? g.getParameter(g.RENDERER) : 'none'; } catch (e) {}
+  const raf = [], longs = [];
+  let last = performance.now();
+  try { new PerformanceObserver(l => { for (const e of l.getEntries()) longs.push([e.startTime, e.duration]); }).observe({ type: 'longtask', buffered: false }); } catch (e) {}
+  (function tick(t) { raf.push([t, t - last]); last = t; requestAnimationFrame(tick); })(last);
+  const pc = (a, q) => { if (!a.length) return 0; const b = [...a].sort((x, y) => x - y); return b[Math.min(b.length - 1, Math.floor(q * b.length))]; };
+  let f0 = -1, t0 = 0, gfps = 0, missMax = 0;
+  setInterval(() => {
+    const now = performance.now();
+    while (raf.length && raf[0][0] < now - 2000) raf.shift();
+    while (longs.length && longs[0][0] < now - 5000) longs.shift();
+    const iv = raf.map(r => r[1]), med = pc(iv, 0.5) || 16.7;
+    const missed = iv.filter(v => v > Math.max(med, 16.7) * 1.5).length;
+    const s = session, M = s && s.M;
+    let tk = [], heap = 0, f = -1;
+    if (M && M._viewer_tick_ms) {
+      const p = M._viewer_tick_ms() / 8, n = Math.min(128, M._viewer_tick_count() >>> 0);
+      tk = Array.from(M.HEAPF64.subarray(p, p + n));
+      heap = M.HEAP32.buffer.byteLength; f = M._viewer_frame();
+    }
+    if (f0 >= 0 && f >= f0) gfps = (f - f0) / ((now - t0) / 1000);
+    f0 = f; t0 = now;
+    const cv = document.getElementById('canvas'), dm = document.querySelectorAll('#chatover .dm').length, fr = document.getElementById('front');
+    el.textContent = [
+      `display ${(1000 / med).toFixed(0)} Hz  rAF p95 ${pc(iv, 0.95).toFixed(1)} ms  missed ${missed}/2s`,
+      `game ${gfps.toFixed(1)} fps${ui.paused ? ' (paused)' : ''}  frame ${f}`,
+      `tick p50 ${pc(tk, 0.5).toFixed(2)}  p95 ${pc(tk, 0.95).toFixed(2)}  max ${tk.length ? Math.max(...tk).toFixed(1) : 0} ms`,
+      `long tasks ${longs.length}/5s  worst ${longs.length ? Math.max(...longs.map(l => l[1])).toFixed(0) : 0} ms`,
+      `wasm ${(heap / 1048576).toFixed(0)} MB  js ${performance.memory ? (performance.memory.usedJSHeapSize / 1048576).toFixed(0) + ' MB' : 'n/a'}`,
+      `canvas ${cv ? cv.width + 'x' + cv.height : '-'} css ${cv ? cv.clientWidth + 'x' + cv.clientHeight : '-'} dpr ${devicePixelRatio}`,
+      `comments ${dm}  behind ${fr && !fr.hidden ? 'on' : 'off'}  lowmem ${typeof LOWMEM !== 'undefined' && LOWMEM ? 1 : 0}`,
+      `gpu ${gpu}`.slice(0, 60),
+    ].join('\n');
+  }, 500);
+})();
 window.__mbaaPerf = () => {
   const M = session.M, n = call(session, 'viewer_perf_count'), p = call(session, 'viewer_perf_data');
   return Array.from(M.HEAPF64.subarray(p / 8, p / 8 + n));
