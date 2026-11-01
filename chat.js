@@ -204,7 +204,8 @@
   #chatlog li:hover .cdel, #chatlog li .cdel:focus-visible { opacity: 1; }
   #chatover { position: absolute; left: 0; top: 0; width: 100%; height: 100%; overflow: hidden; pointer-events: none; z-index: 1; }
   #chatover .dmstage { position: absolute; left: 0; top: 0; width: 1920px; height: 1080px; transform-origin: 0 0; contain: strict; }
-  #chatover .dm { position: absolute; left: 0; top: 0; white-space: pre; line-height: 1; padding-top: 4px; will-change: transform;
+  #chatover .dm { position: absolute; left: 0; top: 0; white-space: pre; line-height: 1.25; padding: 0 6px 0.12em; will-change: transform;
+                  /* (room for descenders and the outline: the composited layer is the box, a line-height: 1 box cut g / j / y) */
                   paint-order: stroke fill; -webkit-text-stroke: 7px rgba(0, 0, 0, .4); }
   `;
   document.head.append(css);
