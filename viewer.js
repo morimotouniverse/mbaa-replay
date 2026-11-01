@@ -2604,7 +2604,7 @@ function grabCard() {
 async function copyTimestamp() {
   const s = session;
   if (!s) return;
-  if (s.liveSrc) { status('links to a moment of a live match: not yet (E saves the clip as a video)'); return; }
+  if (s.liveSrc) { status(LIVE_NOLINK); return; }
   const f = s.M._viewer_frame();
   const shots = grabCard();
   const u = new URL(location.origin + location.pathname);
@@ -2625,6 +2625,7 @@ async function copyTimestamp() {
     console.warn('share upload failed:', e);
     text = `${s.name.replace(/^.*\//, '')} @ ${fmtTime(f)} (frame ${f})`;
   }
+  window.__mbaaLastLink = text;
   try { await navigator.clipboard.writeText(text); status(`copied: ${text}`); }
   catch (e) { prompt('copy:', text); }
 }
@@ -2666,7 +2667,11 @@ window.mbaaChatApi = { art: playersArt, iconCell, chara: CHARA, liveId: () => se
   // (ahead null: not fed yet, or mid-seek; null: no live match)
   live: () => { const s = session, L = s && s.liveSrc;
     return L && s.M ? { info: L.info, base: LIVE, follow: !!s.liveFollow, recs: L.recs || null,
-                        ahead: L.recs && !s.seeking ? call(s, 'viewer_spectate_buffered') : null } : null; } };
+                        ahead: L.recs && !s.seeking ? call(s, 'viewer_spectate_buffered') : null } : null; },
+  // chat's clickable timestamps and link cards: the picture's frame and the last seekable one (null: no timeline yet),
+  // a seek (a live match goes to watching back, as any seek), the live list (the feed's /live/list)
+  frame: () => session && session.tl ? curFrame() : null, seekMax: () => session && session.tl ? tlMax(session.tl) : null,
+  seek: f => requestSeek(f), lives: () => liveList() };
 if (document.querySelector('meta[name="mbaa-chat"]') || (/^(127\.0\.0\.1|localhost)$/.test(location.hostname) && Q.has('chat'))) {
   document.body.classList.add('haschat');  // (the chat layout from the start: fitStage)
   const el = document.createElement('script');
@@ -2675,6 +2680,7 @@ if (document.querySelector('meta[name="mbaa-chat"]') || (/^(127\.0\.0\.1|localho
 }
 window.mbaaViewer = { startItem: i => startItem(i), card: () => grabCard().jpeg, seek: requestSeek, step: stepBy, pause: setPaused, frame: () => session.M._viewer_frame(),
                       tl: () => session.tl, ui, pl, cacheSize: () => cache.size, cacheMap: () => cache, phone: PHONE, lowmem: LOWMEM, bgmStream: () => bgmStreamReady, audioState: () => [actx && actx.state, session && session.mute, session && session.bgmLog && session.bgmLog.length, ui.paused], bgmMap: () => bgmDecoded, clip: () => session && session.clip,
+                      clipFirst: () => clipFirst(session), clipPanel: () => clipPanel,
                       stats: () => { const t = session.tl; return { kfs: t.kfs.length, kfFrames: t.kfs.map(k => k.frame),
                         kfMs: t.kfs.map(k => Math.round(k.ms * 10) / 10), kfFresh: t.kfs.map(k => k.fresh), bytes: t.bytes,
                         memTop: session.M._viewer_mem_top(), heap: session.M.HEAPU8.length, simMax: t.simMax, end: t.end,
@@ -2780,6 +2786,7 @@ function drawMarks(t, max) {
   const key = `${t.marks.length}/${max}/${Math.round(t.simMax / 60)}/${c ? c.a + ':' + c.b : ''}`;
   if (key === marksKey) return;
   marksKey = key;
+  clipUi(max);
   const cv = document.getElementById('marks'), dpr = window.devicePixelRatio || 1;
   cv.width = Math.round(cv.clientWidth * dpr); cv.height = Math.round(cv.clientHeight * dpr);
   const g = cv.getContext('2d');
@@ -2850,6 +2857,7 @@ function controls() {
     if (best !== null && Math.abs(best - x) / max < 0.04) requestSeek(best); else requestSeek(Math.round(x));
   });
   btn('prevr', () => jumpRound(-1)); btn('nextr', () => jumpRound(1));
+  btn('clipnow', clipNow); clipControls();
   btn('clipa', () => setClip('a')); btn('clipb', () => setClip('b')); btn('clipx', clearClip); btn('cliploop', toggleLoop); btn('clipexp', exportVideo);
   btn('helpb', toggleHelp); btn('helpx', toggleHelp); btn('mute', toggleMute);
   document.getElementById('help').addEventListener('click', e => { if (e.target === e.currentTarget) toggleHelp(); });  // (the backdrop)
@@ -2936,6 +2944,7 @@ function controls() {
     else if (k === 'f' || k === 'F') toggleFullscreen();
     else if (k === '[' || k === 'PageUp') jumpRound(-1);
     else if (k === ']' || k === 'PageDown') jumpRound(1);
+    else if (k === 'x' || k === 'X') clipNow();
     else if (k === '{') setClip('a');
     else if (k === '}') setClip('b');
     else if (k === 'Escape') { if (fx) fx.cancel = true; else if (rec) stopRecording(false); else if (!document.getElementById('help').hidden) toggleHelp(); else if (!document.fullscreenElement && document.querySelector('.stage.fs')) setFs(false); else clearClip(); }
@@ -3223,7 +3232,12 @@ function toggleHelp() {
   h.hidden = !h.hidden;
   if (!h.hidden) { const st = document.querySelector('.stage'); if (st.classList.contains('fs')) fsWake(); }
 }
-function clearClip() { if (session && session.clip) { session.clip = null; marksKey = ''; status('playing'); } }
+function clearClip() {
+  const s = session, c = s && s.clip;
+  if (c) { s.clip = null; marksKey = ''; status('playing'); }
+  clipPanelShow(false);
+  if (c && c.wasLive && s.liveSrc) liveGoLive();  // (a clip taken while following live: back to live)
+}
 // a clip being played stops at its out point; play again from there starts it over
 function clipTick(s, f) {
   const c = s.clip;
@@ -3232,9 +3246,118 @@ function clipTick(s, f) {
     const next = s.tl.marks.find(x => x[0] > c.a), b = next ? next[0] - 1 : tlMax(s.tl);
     if (b !== c.b) { c.b = b; marksKey = ''; }
   }
-  if (loopOn && f >= c.b) { requestSeek(c.a); return; }
+  if ((loopOn || (c.preview && clipPanel)) && !clipDrag && f >= c.b) { requestSeek(c.a); return; }
   if (!c.stop) return;
   if (f >= c.b) { setPaused(true); if (f > c.b) requestSeek(c.b); status(`clip end (${fmtTime(c.a)} – ${fmtTime(c.b)}): Space plays it again`); }
+}
+
+// ---- clip that: one button / key (X) takes the last CLIP_LEN frames up to the frame on screen (clamped to the first
+// frame there is; live: up to the newest frame shown) and opens the clip panel: the range as two handles over the
+// timeline (drag them, or nudge a frame at a time), a looped preview while the panel is open, and Copy link / Save MP4 /
+// Clear. The handles and the panel's text change only when the clip does (drawMarks -> clipUi), never per frame.
+const CLIP_LEN = 1800;  // 30 s
+const LIVE_NOLINK = 'links to a live match: not available (the live stream is not saved as a replay); Save MP4 (E) keeps the clip';
+let clipPanel = false, clipPanelKey = '', clipDrag = null;
+const clipFirst = s => Math.max(1, s.tl.kfs.length ? s.tl.kfs[0].frame : 1);  // (the earliest frame a seek reaches)
+const clipLast = s => s.liveSrc ? Math.max(s.tl.simMax, s.M._viewer_frame()) : tlMax(s.tl);
+const clipIsLive = s => !!(s && s.liveSrc) || document.body.classList.contains('live');
+function clipNow() {
+  const s = session;
+  if (!s || !s.tl || fx || rec) return;
+  document.body.classList.remove('sheet');  // (phones: taken from the menu sheet; the panel is over the picture)
+  const lo = clipFirst(s), b = Math.max(lo + 1, s.liveSrc ? s.M._viewer_frame() : curFrame()), a = Math.max(lo, b - CLIP_LEN);
+  s.clip = { a, b, stop: false, round: false, preview: true, wasLive: !!(s.liveSrc && s.liveFollow) };
+  marksKey = '';
+  clipPanelShow(true);
+  status(`clip ${fmtTime(a)} – ${fmtTime(b)} (${((b - a) / 60).toFixed(1)} s): drag the handles to trim; ` +
+         (clipIsLive(s) ? 'Save MP4 (E) keeps it; links to a live match are not available' : 'Copy link (C), Save MP4 (E), Esc clears'));
+  requestSeek(a).then(() => { if (session === s && s.clip && s.clip.preview && clipPanel && !clipDrag) setPaused(false); });
+}
+function clipPanelShow(on) {
+  clipPanel = on; clipPanelKey = '';
+  document.getElementById('clippanel').hidden = !on;
+  document.getElementById('cliph').hidden = !on;
+  document.getElementById('clipnow').classList.toggle('on', on);
+  marksKey = '';
+  if (on && document.querySelector('.stage.fs')) fsWake();
+}
+// the handles' places and the panel's text (from drawMarks, when the timeline's key changed)
+function clipUi(max) {
+  if (!clipPanel) return;
+  const s = session, c = s && s.clip;
+  if (!c) { clipPanelShow(false); return; }
+  const pa = `${(100 * c.a / Math.max(1, max)).toFixed(3)}%`, pb = `${(100 * c.b / Math.max(1, max)).toFixed(3)}%`;
+  const ha = document.getElementById('chA'), hb = document.getElementById('chB');
+  if (ha.style.left !== pa) ha.style.left = pa;
+  if (hb.style.left !== pb) hb.style.left = pb;
+  const live = clipIsLive(s), key = `${c.a}:${c.b}:${live}`;
+  if (key === clipPanelKey) return;
+  clipPanelKey = key;
+  document.getElementById('cpa').textContent = fmtTime(c.a);
+  document.getElementById('cpb').textContent = fmtTime(c.b);
+  document.getElementById('cplen').textContent = `${((c.b - c.a) / 60).toFixed(1)} s`;
+  ha.setAttribute('aria-valuenow', c.a); ha.setAttribute('aria-valuetext', fmtTime(c.a));
+  hb.setAttribute('aria-valuenow', c.b); hb.setAttribute('aria-valuetext', fmtTime(c.b));
+  const link = document.getElementById('cplink');
+  link.disabled = live;
+  link.title = live ? `Copy link: ${LIVE_NOLINK}` : 'Copy a link that plays just this clip (C)';
+}
+// move an end of the clip (w: 'a' in, 'b' out) to frame f, kept inside what there is and at least a frame long
+function clipSet(w, f, seek) {
+  const s = session, c = s && s.clip;
+  if (!c || !s.tl) return;
+  if (w === 'a') c.a = Math.max(clipFirst(s), Math.min(Math.round(f), c.b - 1));
+  else c.b = Math.min(clipLast(s), Math.max(Math.round(f), c.a + 1));
+  c.round = false; marksKey = '';
+  if (seek) requestSeek(c[w]);
+}
+// a frame-accurate nudge: pauses on the moved end's frame
+function clipNudge(w, d) {
+  if (!session || !session.clip) return;
+  if (!ui.paused) setPaused(true);
+  clipSet(w, session.clip[w] + d, true);
+}
+// after a drag: the preview goes on from the in point (or just before the out point), if it was playing
+function clipResume(w, playing) {
+  const s = session, c = s && s.clip;
+  if (!c || !playing) return;
+  requestSeek(w === 'a' ? c.a : Math.max(c.a, c.b - 90)).then(() => { if (session === s && s.clip && clipPanel && !clipDrag) setPaused(false); });
+}
+function clipControls() {
+  const tl = document.querySelector('#transportsec .timeline');
+  for (const [id, w] of [['chA', 'a'], ['chB', 'b']]) {
+    const h = document.getElementById(id);
+    const at = e => { const r = tl.getBoundingClientRect(); return (e.clientX - r.left) / Math.max(1, r.width) * tlMax(session.tl); };
+    h.addEventListener('pointerdown', e => {
+      const s = session;
+      if (!s || !s.clip || !s.tl || e.button > 0) return;
+      e.preventDefault(); e.stopPropagation();
+      try { h.setPointerCapture(e.pointerId); } catch (err) {}
+      clipDrag = { w, playing: !ui.paused, id: e.pointerId };
+      if (!ui.paused) setPaused(true);
+      h.classList.add('drag');
+    });
+    h.addEventListener('pointermove', e => {
+      if (!clipDrag || clipDrag.w !== w || clipDrag.id !== e.pointerId || !session || !session.tl) return;
+      clipSet(w, at(e), true);
+    });
+    const end = e => {
+      if (!clipDrag || clipDrag.w !== w || clipDrag.id !== e.pointerId) return;
+      const d = clipDrag; clipDrag = null; h.classList.remove('drag');
+      clipResume(d.w, d.playing);
+    };
+    h.addEventListener('pointerup', end); h.addEventListener('pointercancel', end);
+    h.addEventListener('keydown', e => {  // (a focused handle: arrows nudge it, 1 frame; Shift 1 s)
+      if (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight') return;
+      e.preventDefault(); e.stopPropagation();
+      clipNudge(w, (e.key === 'ArrowLeft' ? -1 : 1) * (e.shiftKey ? 60 : 1));
+    });
+  }
+  for (const b of document.querySelectorAll('#clippanel [data-nudge]')) {
+    b.onclick = e => { e.currentTarget.blur(); const [w, d] = b.dataset.nudge.split(','); clipNudge(w, +d); };
+  }
+  const on = (id, f) => { document.getElementById(id).onclick = e => { e.currentTarget.blur(); f(); }; };
+  on('cplink', copyTimestamp); on('cpsave', exportVideo); on('cpclear', clearClip);
 }
 
 // ---- video export: the clip, or the round being watched, as a 1280x960 60 fps video (every game frame drawn 2x,
@@ -3685,7 +3808,7 @@ function fsWake() {
   stage.classList.remove('idle');
   clearTimeout(fsTimer);
   fsTimer = setTimeout(function idle() {
-    if (ui.paused || seekDragging) { fsTimer = setTimeout(idle, FS_IDLE); return; }
+    if (ui.paused || seekDragging || clipPanel) { fsTimer = setTimeout(idle, FS_IDLE); return; }
     stage.classList.add('idle');
   }, FS_IDLE);
 }

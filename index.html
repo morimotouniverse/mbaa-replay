@@ -18,7 +18,7 @@
 <meta name="twitter:description" content="Watch Melty Blood Actress Again Current Code replays in your browser, frame-exact.">
 <meta name="twitter:image" content="https://watch.meltyblood.org/preview.png">
 <meta name="mbaa-manifest" content="2a2e2bac19a8">
-<meta name="mbaa-chatjs" content="chat.js?v=861bc867495d">
+<meta name="mbaa-chatjs" content="chat.js?v=1703fc3eda46">
 <link rel="manifest" href="site.webmanifest">
 <link rel="icon" href="icon-192.png">
 <link rel="apple-touch-icon" href="icon-192.png">
@@ -192,6 +192,40 @@
   .tbar #clipgrp { gap: 2px; }
   .tbar #clipgrp .lbl { display: none; }
   .tbar #clipgrp button.txt { height: 26px; min-width: 0; padding: 0 9px; border-radius: 6px; font-weight: 650; }
+  /* clip that (X): the clip group's prominent button (the last 30 s); its panel and the timeline's in / out handles */
+  .i-cut { --m: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath d='M9.6 7.6A3.5 3.5 0 1 0 8 9.3l2.4 2.7L8 14.7a3.5 3.5 0 1 0 1.6 1.7l2.4-2.6 6.5 7.2H22L9.6 7.6zM6 8.4a1.4 1.4 0 1 1 0-2.8 1.4 1.4 0 0 1 0 2.8zm0 10a1.4 1.4 0 1 1 0-2.8 1.4 1.4 0 0 1 0 2.8zM22 3h-3.5l-5 5.5 1.8 1.9z'/%3E%3C/svg%3E"); }
+  button#clipnow { background: #50c8ff26; color: #d6f2ff; box-shadow: inset 0 0 0 1px #50c8ff80; font-weight: 750; gap: 4px; }
+  button#clipnow:hover { background: #50c8ff40; }  button#clipnow.on { background: #50c8ff55; color: #fff; }
+  button#clipnow .i { width: 15px; height: 15px; }
+  .tbar #clipgrp button#clipnow { padding: 0 9px 0 7px; margin-right: 4px; }
+  #transportsec .timeline { position: relative; }
+  #cliph { position: absolute; inset: 0; pointer-events: none; }
+  #cliph[hidden] { display: none; }
+  #cliph .ch { position: absolute; top: -4px; bottom: -2px; width: 24px; min-width: 0; height: auto; padding: 0; margin: 0; transform: translateX(-50%);
+               pointer-events: auto; touch-action: none; cursor: ew-resize; background: none; border-radius: 0; z-index: 3; }
+  #cliph .ch::before { content: ''; position: absolute; left: 50%; top: 0; bottom: 0; width: 4px; transform: translateX(-50%);
+                       background: #50c8ff; border-radius: 2px; box-shadow: 0 0 0 1px #000a; }
+  #cliph .ch::after { content: ''; position: absolute; left: 50%; top: 0; width: 12px; height: 12px; transform: translateX(-50%);
+                      background: #50c8ff; border-radius: 3px; box-shadow: 0 0 0 1px #000a; }
+  #cliph #chA::after { border-radius: 3px 0 3px 3px; }  #cliph #chB::after { border-radius: 0 3px 3px 3px; }
+  #cliph .ch:is(:hover, :focus-visible, .drag)::before, #cliph .ch:is(:hover, :focus-visible, .drag)::after { background: #a8e6ff; }
+  #cliph .ch:hover { background: none; }
+  body.mob #cliph .ch { width: 36px; top: -10px; bottom: -6px; }
+  #clippanel { position: absolute; z-index: 22; left: 50%; transform: translateX(-50%); width: max-content; max-width: calc(100% - 8px); bottom: calc(100% + 4px); display: flex; flex-wrap: wrap;
+               align-items: center; justify-content: center; gap: 6px 12px; padding: 6px 10px; box-sizing: border-box;
+               background: #12121cf0; border: 1px solid #50c8ff66; border-radius: 10px; box-shadow: 0 8px 24px #000a; font-size: 12px; }
+  #clippanel[hidden] { display: none; }
+  #clippanel .cprange { font-variant-numeric: tabular-nums; white-space: nowrap; color: #d6f2ff; }
+  #clippanel .cprange b { font-weight: 700; }  #clippanel #cplen { color: var(--muted); margin-left: 4px; }
+  #clippanel .cpg { display: inline-flex; align-items: center; gap: 2px; white-space: nowrap; }
+  #clippanel .lbl { margin-right: 2px; }
+  #clippanel button { height: 28px; min-width: 32px; padding: 0 7px; line-height: 1; font-size: 12px; font-variant-numeric: tabular-nums; }
+  #clippanel button.txt { display: inline-flex; align-items: center; gap: 4px; font-weight: 650; }
+  #clippanel .i { width: 15px; height: 15px; }
+  body.mob #clippanel { max-width: 100%; gap: 4px 8px; padding: 6px; }
+  body.mob #clippanel button { height: 36px; min-width: 40px; }
+  /* (fullscreen: above the bar's timeline, inside the bar's own box) */
+  .fsbar #clippanel { bottom: calc(100% + 2px); }
   #tright { display: none; gap: 2px; align-items: center; }
   body:not(.mob) #tright { display: inline-flex; }
   #tright #vol { width: 72px; flex: none; margin: 0 4px; }
@@ -540,6 +574,7 @@
           </table>
           <h4>Clip</h4>
           <table>
+            <tr><td><kbd>X</kbd></td><td>clip that: the last 30 s up to this frame; drag its handles on the timeline to trim</td></tr>
             <tr><td><kbd>{</kbd> <kbd>}</kbd></td><td>clip in / out point</td></tr>
             <tr class="replayonly"><td><kbd>L</kbd></td><td>loop the clip (no clip: the round)</td></tr>
             <tr><td><kbd>E</kbd></td><td>save the clip (or the round) as a video; again to stop</td></tr>
@@ -573,7 +608,13 @@
   </div>
 </div>
   <div class="sec" id="transportsec">
-    <div class="timeline"><canvas id="marks"></canvas><input id="seek" type="range" min="0" max="1" value="0" step="1" aria-label="seek"></div>
+    <div class="timeline"><canvas id="marks"></canvas><input id="seek" type="range" min="0" max="1" value="0" step="1" aria-label="seek"><div id="cliph" hidden><button class="ch" id="chA" role="slider" aria-label="clip in point" title="Clip in point: drag; arrows nudge 1 frame (Shift: 1 s)"></button><button class="ch" id="chB" role="slider" aria-label="clip out point" title="Clip out point: drag; arrows nudge 1 frame (Shift: 1 s)"></button></div></div>
+    <div id="clippanel" role="group" aria-label="clip" hidden>
+      <span class="cprange"><b id="cpa">0:00.0</b> &ndash; <b id="cpb">0:00.0</b><span id="cplen"></span></span>
+      <span class="cpg"><span class="lbl">in</span><button data-nudge="a,-1" title="In point one frame earlier">&minus;1f</button><button data-nudge="a,1" title="In point one frame later">+1f</button></span>
+      <span class="cpg"><span class="lbl">out</span><button data-nudge="b,-1" title="Out point one frame earlier">&minus;1f</button><button data-nudge="b,1" title="Out point one frame later">+1f</button></span>
+      <span class="cpg"><button class="txt" id="cplink" title="Copy a link that plays just this clip (C)"><i class="i i-share"></i>Copy link</button><button class="txt" id="cpsave" title="Save the clip as an MP4 video; again to stop (E)"><i class="i i-film"></i>Save MP4</button><button class="txt" id="cpclear" title="Clear the clip (Esc)"><i class="i i-x"></i>Clear</button></span>
+    </div>
     <div class="tbar">
       <div class="clock"><span id="time">0:00.0</span><span class="hint" id="dur"></span><span id="fc"></span><button id="livebtn" class="livebtn" title="Back to live, ~4 s behind the players (L)" hidden>LIVE</button></div>
       <span class="tg tg-seek sep" id="tseek">
@@ -633,6 +674,7 @@
     </div>
     <div class="row spread">
       <span class="grp" id="clipgrp"><span class="lbl" style="margin-right:6px">clip</span>
+        <button class="txt" id="clipnow" title="Clip that: the last 30 s up to this frame, to trim, link or save (X)"><i class="i i-cut"></i>Clip</button>
         <button class="txt" id="clipa" title="Clip in point ({)">in</button>
         <button class="txt" id="clipb" title="Clip out point (})">out</button>
         <button id="cliploop" class="replayonly" title="Loop the clip, or the round when no clip is set (L)"><i class="i i-loop"></i></button>
@@ -692,6 +734,6 @@
 </div>
 <script src="mbaa.js?v=35b9f117f88e"></script>
 <script src="bgm_stream.js?v=407ac29e5c89"></script>
-<script src="viewer.js?v=9a66653609b0"></script>
+<script src="viewer.js?v=b74c6c4b4626"></script>
 </body>
 </html>

@@ -39,6 +39,11 @@
 // recent speakers), replies (+draft/reply=<msgid> and an "@nick " prefix; a quoted header on the line); a line naming
 // you or replying to you is highlighted. A guest's nick is checked with the slur filter here too
 // (a copy of tools/web/name_filter.mjs's lists, below; the bot renames one that gets through).
+// Tabs: the viewer's choice (#melty or this match) is kept across match switches and reloads; a hidden tab counts its
+// new lines. A reconnect fetches what was said meanwhile (CHATHISTORY AFTER the newest msgid held). Links to our site
+// (replays, clips, playlists, live matches) get a card (the matchup, the clip's range; metadata lazy and cached), "m:ss"
+// and a match line's time seek the picture, links never reach the overlay. The live list sits at the top of the chat
+// column while it shows (tools/chat/chat_history_check.py, viewer_tools/chat_links_check.py, chat_layout2_check.py).
 (() => {
   'use strict';
   const api = window.mbaaChatApi;
@@ -295,6 +300,46 @@
   .cmodm .mq { padding: 4px 6px 6px; color: var(--muted); max-width: 240px; line-height: 1.35; }
   .cmodm .mq b { color: var(--fg); }
   @media (hover: none) { #chatlog li .cact button { font-size: 15px; padding: 3px 7px; } }
+  /* a tab's new lines while another is shown */
+  #chatsec .ctab .cunread { margin-left: 4px; padding: 0 5px; border-radius: 999px; background: var(--accent, #e04a5a); color: #fff; font-size: 10px; }
+  /* links to our site, their cards, clickable times */
+  #chatlog a.clink { color: var(--accent2, #8ab4ff); text-decoration: underline; text-underline-offset: 2px; word-break: break-all; }
+  #chatlog .cts { cursor: pointer; color: var(--accent2, #8ab4ff); border-bottom: 1px dotted currentColor; }
+  #chatlog .ctime.cts { color: var(--faint); }
+  #chatlog .ctime.cts:hover, #chatlog .cts:hover { color: var(--fg); }
+  #chatlog .cts.off { cursor: not-allowed; opacity: .6; }
+  #chatlog .cts:focus-visible, #chatlog a.ccard:focus-visible { outline: 2px solid var(--accent2, #8ab4ff); outline-offset: 1px; }
+  #chatlog a.ccard { display: flex; flex-direction: column; gap: 2px; margin: 3px 0 1px; padding: 4px 8px; max-width: 290px; box-sizing: border-box;
+                     border: 1px solid var(--line); border-left: 3px solid var(--accent, #e04a5a); border-radius: 8px; background: #ffffff08;
+                     color: inherit; text-decoration: none; }
+  #chatlog a.ccard:hover { background: #ffffff12; }
+  #chatlog a.ccard.gone, #chatlog a.ccard.idle { opacity: .55; }
+  #chatlog .ccmu { display: flex; align-items: center; gap: 5px; min-width: 0; font-weight: 600; }
+  #chatlog .ccmu.wait { color: var(--faint); font-weight: 400; font-size: 11px; }
+  #chatlog .ccside { display: flex; align-items: center; gap: 4px; min-width: 0; flex: 1 1 0; }
+  #chatlog .ccside:last-child { flex-direction: row-reverse; text-align: right; }
+  #chatlog .ccico { width: 24px; height: 32px; flex: none; border-radius: 4px; background: #ffffff0a; }
+  #chatlog .ccn { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+  #chatlog .ccvs { font-size: 10px; color: var(--faint); letter-spacing: .08em; flex: none; }
+  #chatlog .cclive { flex: none; font-size: 9px; font-weight: 700; letter-spacing: .06em; padding: 0 5px; border-radius: 999px; background: var(--accent, #e04a5a); color: #fff; }
+  #chatlog .ccsub { font-size: 10.5px; color: var(--muted); font-variant-numeric: tabular-nums; }
+  /* the live list, moved to the top of the chat column (a strip: "live N" opens the list) */
+  #chatcol { flex-direction: column; }
+  #chatcol > #livesec { flex: none; gap: 4px; }
+  #chatcol > #livesec + #chatsec { border-top: 1px solid var(--line); padding-top: 6px; }
+  #livesec .lvtog { display: none; }
+  #chatcol > #livesec .lvtog { display: inline-flex; align-items: center; gap: 6px; background: none; border: 1px solid var(--line); border-radius: 999px;
+                               color: var(--fg); font: inherit; font-size: 12px; font-weight: 650; padding: 2px 10px; cursor: pointer; }
+  #chatcol > #livesec .lvtog::before { content: '\\25CF'; color: var(--accent, #e04a5a); font-size: 9px; }
+  #chatcol > #livesec .lvtog .lvn { font-variant-numeric: tabular-nums; }
+  #chatcol > #livesec .lvtog .lvc { color: var(--faint); font-size: 10px; }
+  #chatcol > #livesec .lvtog[aria-expanded=true] .lvc { transform: rotate(180deg); }
+  #chatcol > #livesec .row.spread > .lbl { display: none; }
+  #chatcol > #livesec .row.spread .tog { font-size: 11px; }
+  #chatcol > #livesec:not(.lvopen) #liveitems { display: none; }
+  #chatcol > #livesec #liveitems { max-height: min(150px, 24vh); }
+  body.mob #chatcol > #livesec #liveitems { max-height: 28vh; }
+  body.mob.kbd #chatcol > #livesec { display: none; }
   #chatover { position: absolute; left: 0; top: 0; width: 100%; height: 100%; overflow: hidden; pointer-events: none; z-index: 1; }
   #chatover .dmstage { position: absolute; left: 0; top: 0; width: 1920px; height: 1080px; transform-origin: 0 0; contain: strict; }
   #chatover .dm { position: absolute; left: 0; top: 0; white-space: pre; line-height: 1.25; padding: 0 6px 0.12em; will-change: transform;
@@ -352,6 +397,36 @@
   const controls = document.getElementById('controls'), col = document.getElementById('chatcol');
   const after = document.getElementById('livesec');
   if (col) col.append(sec); else if (after && after.parentNode === controls) after.after(sec); else controls.append(sec);
+  // The live list (viewer.js liveListShow fills #livesec; idle matches dimmed, last): at the top of the chat column
+  // while the column shows (desktop, and phones, whose menu sheet was the only way to it and is behind a button), as a
+  // strip whose "live N" button opens the list (open by default on desktop, closed on phones; remembered); back in the
+  // panel when the chat column is hidden (its button, a phone on its side with chat off) or the page has none.
+  if (after && col) {
+    const home = after.parentNode, homeNext = after.nextSibling, head = after.querySelector('.row.spread');
+    const tog = document.createElement('button');
+    tog.type = 'button'; tog.className = 'lvtog'; tog.setAttribute('aria-controls', 'liveitems');
+    tog.innerHTML = '<span>live</span><span class="lvn"></span><span class="lvc" aria-hidden="true">▾</span>';
+    if (head) head.prepend(tog);
+    const items = document.getElementById('liveitems');
+    const openOf = () => { const v = store.get('mbaa-live-open', null); return v === null ? !document.body.classList.contains('mob') : !!v; };
+    const count = () => {
+      const all = items ? items.children.length : 0, idle = items ? items.querySelectorAll('li.idle').length : 0;
+      tog.querySelector('.lvn').textContent = String(all - idle);
+      tog.title = `${all - idle} live match${all - idle === 1 ? '' : 'es'}${idle ? ` (+${idle} idle)` : ''}: ${after.classList.contains('lvopen') ? 'hide' : 'show'} the list`;
+    };
+    const show = () => { const o = openOf(); after.classList.toggle('lvopen', o); tog.setAttribute('aria-expanded', String(o)); count(); };
+    tog.onclick = () => { store.set('mbaa-live-open', !after.classList.contains('lvopen')); show(); tog.blur(); };
+    const place = () => {
+      const inCol = getComputedStyle(col).display !== 'none';
+      if (inCol && after.parentNode !== col) col.prepend(after);
+      else if (!inCol && after.parentNode === col) home.insertBefore(after, homeNext && homeNext.parentNode === home ? homeNext : null);
+      show();
+    };
+    if (items) new MutationObserver(count).observe(items, { childList: true, subtree: true, attributes: true, attributeFilter: ['class'] });
+    new MutationObserver(place).observe(document.body, { attributes: true, attributeFilter: ['class'] });
+    addEventListener('resize', place);
+    place();
+  }
   const $ = s => sec.querySelector(s);
   {  // the profile panel: a done button, Esc and a click outside it close it
     const d = sec.querySelector('details');
@@ -456,11 +531,15 @@
   // ---- channels and the log ----
   const chans = new Map();  // name (lowercase) -> {name, lines: [], names: Set, joined, histDone}
   let shown = GENERAL, matchChan = null;
+  // the tab is the viewer's: a match appearing or the watched match switching never takes a viewer off #melty (it looked
+  // like #melty's chat being wiped: every reload, and a click on another live match is one, showed the new match's
+  // empty channel); remembered across reloads ('match' by default: a new viewer sees the match they came to watch)
+  let tabPref = store.get('mbaa-chat-tab', 'match') === 'general' ? 'general' : 'match';
   const key = n => n.toLowerCase();
   function chan(name) {
     let c = chans.get(key(name));
     if (!c) chans.set(key(name), c = { name, lines: [], names: new Set(), ops: new Set(), joined: false, histDone: false, seen: new Set(),
-                                       tries: 0, retryAt: 0 });
+                                       tries: 0, retryAt: 0, unread: 0 });
     return c;
   }
   function tabs() {
@@ -472,7 +551,11 @@
       b.textContent = name === GENERAL ? '#melty' : 'this match';
       b.title = name;
       const n = document.createElement('span'); n.className = 'n'; n.textContent = c.names.size || ''; b.append(n);
-      b.onclick = () => { shown = name; tabs(); render(); b.blur(); };
+      if (c.unread && key(name) !== key(shown)) { const u = document.createElement('span'); u.className = 'cunread'; u.textContent = c.unread > 99 ? '99+' : c.unread; u.title = 'new lines'; b.append(u); }
+      b.onclick = () => {
+        shown = name; tabPref = name === GENERAL ? 'general' : 'match'; store.set('mbaa-chat-tab', tabPref);
+        tabs(); render(); b.blur();
+      };
       tabsEl.append(b);
     }
   }
@@ -506,7 +589,10 @@
     // (a reply's leading "@<their nick> ", written for plain IRC clients, is said by the header already)
     let text = l.text;
     if (orig && orig.irc && text.toLowerCase().startsWith(`@${orig.irc.toLowerCase()} `)) text = text.slice(orig.irc.length + 2);
-    body.append(tm, nk, ...pills(text));
+    // (a match channel line carries where its sender's picture was (+mbaa/at): its time seeks there)
+    if (l.at && isMatch(l.chan)) atTime(tm, l.at);
+    body.append(tm, nk, ...richText(text, l));
+    for (const sl of linksOf(text).slice(0, 2)) body.append(linkCard(sl));
     li.append(body);
     if (l.msgid) {
       li.dataset.msgid = l.msgid;
@@ -557,6 +643,212 @@
     if (!names.length || !text) return false;
     return new RegExp(`(^|[^\\p{L}\\p{N}_])@?(${names.map(reEsc).join('|')})(?![\\p{L}\\p{N}_])`, 'iu').test(text);
   }
+  // ---- links and timestamps in a line ----
+  // A link to our site (a replay: ?r=<share id> / ?rep=<url>, with an optional clip ?t=<frame>&e=<frame>; a playlist
+  // ?l=; a live match ?live=) is a link and gets a card under the line (linkCard). Links elsewhere stay text (never
+  // fetched or made clickable). "m:ss" / "h:mm:ss" in a match channel, or in any channel while a replay plays, seeks
+  // the picture to that time (the clock's time: frames / 60).
+  const URL_RE = /\bhttps?:\/\/[^\s<>"'`]+/gi;
+  const TS_RE = /(^|[^\d:.])((?:(\d{1,2}):)?(\d{1,2}):([0-5]\d)(?:\.(\d))?)(?![\d:])/g;
+  const STORE = 'https://replays.meltyblood.org';
+  const SITE_HOSTS = new Set(['watch.meltyblood.org', 'replay.meltyblood.org', 'web.meltyblood.org', location.hostname]);
+  const LIVE_PAGE = Q.has('live');
+  const urlEnd = u => u.replace(/[).,!?;:'"\]]+$/, '');
+  function siteLink(raw) {
+    let u;
+    try { u = new URL(raw); } catch (e) { return null; }
+    if (!SITE_HOSTS.has(u.hostname) || !/^https?:$/.test(u.protocol)) return null;
+    const q = u.searchParams, fr = k => /^\d{1,7}$/.test(q.get(k) || '') ? +q.get(k) : 0;
+    const t = fr('t'), e = fr('e') > fr('t') ? fr('e') : 0, r = q.get('r') || '';
+    if (/^[0-9a-f]{64}$/.test(r) || /^[A-Za-z0-9_-]{8,43}$/.test(r)) return { kind: 'rep', r, t, e, q, raw };
+    if (q.get('rep') && q.get('rep').length < 400) return { kind: 'rep', rep: q.get('rep'), t, e, q, raw };
+    if (/^[A-Za-z0-9_]{4,64}$/.test(q.get('live') || '')) return { kind: 'live', live: q.get('live'), q, raw };
+    if (/^[A-Za-z0-9_-]{8,43}$/.test(q.get('l') || '')) return { kind: 'list', l: q.get('l'), q, raw };
+    return null;
+  }
+  const linksOf = text => [...String(text).matchAll(URL_RE)].map(m => siteLink(urlEnd(m[0]))).filter(Boolean);
+  // the overlay's text: links left out (a line that is only a link stays in the chat)
+  const picText = text => String(text).replace(URL_RE, ' ').replace(/\s+/g, ' ').trim();
+  // timestamps seek in a match channel, or anywhere while a replay plays (not #melty on a live page: no shared clock)
+  const tsHere = l => (l.chan && isMatch(l.chan)) || !LIVE_PAGE;
+  // text -> nodes: our links, @mentions (pills), timestamps
+  function richText(text, l) {
+    const out = [];
+    let i = 0;
+    for (const m of text.matchAll(URL_RE)) {
+      const u = urlEnd(m[0]), sl = siteLink(u);
+      if (!sl) continue;
+      if (m.index > i) out.push(...tsText(text.slice(i, m.index), l));
+      const a = document.createElement('a');
+      a.className = 'clink'; a.href = openUrl(sl); a.textContent = u.length > 60 ? u.slice(0, 57) + '…' : u; a.title = u;
+      a.onclick = e => { if (e.button || e.ctrlKey || e.metaKey || e.shiftKey) return; e.preventDefault(); openLink(sl); };
+      out.push(a); i = m.index + u.length;
+    }
+    if (i < text.length) out.push(...tsText(text.slice(i), l));
+    return out;
+  }
+  function tsText(text, l) {
+    if (!tsHere(l)) return pills(text);
+    const out = [];
+    let i = 0;
+    for (const m of text.matchAll(TS_RE)) {
+      const at = m.index + m[1].length;
+      const sec = (+(m[3] || 0)) * 3600 + (+m[4]) * 60 + (+m[5]) + (+(m[6] || 0)) / 10;
+      if (m[3] && +m[4] > 59) continue;
+      if (at > i) out.push(...pills(text.slice(i, at)));
+      const s = document.createElement('span');
+      s.className = 'cts'; s.textContent = m[2]; s.setAttribute('role', 'button'); s.tabIndex = 0;
+      const f = Math.max(1, Math.round(sec * 60));
+      const state = () => { const max = api.seekMax ? api.seekMax() : null;
+        const why = max == null ? 'nothing to seek yet' : f > max ? 'past what has been played so far' : '';
+        s.classList.toggle('off', !!why); s.title = why ? `${m[2]}: ${why}` : `go to ${m[2]}`; return !why; };
+      s.addEventListener('pointerenter', state);
+      const go = e => { e.stopPropagation(); if (state()) api.seek(f); };
+      s.onclick = go; s.onkeydown = e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); go(e); } };
+      out.push(s); i = at + m[2].length;
+    }
+    if (i < text.length) out.push(...pills(text.slice(i)));
+    return out;
+  }
+  // a match channel line's time: seeks to the stream position it was said at (+mbaa/at), if this page has it
+  // (watching back: the picture's frame moved by the stream frames between; live: back into the buffer)
+  function atFrame(at) {
+    const now = nowOf(api.live()), fr = api.frame ? api.frame() : null;
+    if (!now || fr == null) return null;
+    const f = localOf(now.idx, at);
+    return f == null ? null : Math.max(1, Math.round(fr + (f - now.local)));
+  }
+  function atTime(tm, at) {
+    tm.classList.add('cts'); tm.setAttribute('role', 'button'); tm.tabIndex = 0;
+    const state = () => { const f = atFrame(at);
+      tm.classList.toggle('off', f == null);
+      tm.title = f == null ? 'said at a moment this page does not have (before it joined, or not received yet)' : 'go to the moment this was said';
+      return f; };
+    tm.addEventListener('pointerenter', state);
+    const go = e => { e.stopPropagation(); const f = state(); if (f != null) api.seek(f); };
+    tm.onclick = go; tm.onkeydown = e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); go(e); } };
+  }
+  // where a link opens: this page (the chat page keeps its chat), with the link's own parameters
+  function openUrl(sl) {
+    const p = new URLSearchParams();
+    for (const k of ['r', 'rep', 't', 'e', 'loop', 'live', 'l', 'i']) if (sl.q.get(k)) p.set(k, sl.q.get(k));
+    if (LOCAL) for (const k of ['chat', 'chatUrl', 'chatAuth', 'liveUrl']) if (Q.has(k)) p.set(k, Q.get(k));
+    return `${location.origin}${location.pathname}?${p}`;
+  }
+  function openLink(sl) {
+    // the replay already playing: a seek (and the clip's range), no reload
+    const same = sl.kind === 'rep' && ((sl.r && sl.r === Q.get('r')) || (sl.rep && sl.rep === Q.get('rep')));
+    if (same && api.seek && api.frame && api.frame() != null) { api.seek(Math.max(1, sl.t || 1)); return; }
+    location.assign(openUrl(sl));
+  }
+  // ---- link cards: the matchup (select icons, moons, names) and the clip; metadata fetched once per link, when its
+  // card scrolls into view, and kept (a replay's header never changes: localStorage; the live list: 15 s) ----
+  // A replay in the store: <store>/meta/<id> (the Worker reads the header and the PCRM block's player names from R2;
+  // tools/web/replay_worker.js), or, from a store without that route, the replay's first bytes (the read stops there).
+  // A ?rep= replay on this site: its first bytes (a Range request). Another host is never fetched (every viewer's
+  // address would reach it).
+  const META_KEY = 'mbaa-chat-meta', META_MAX = 300;
+  const metaMem = new Map();
+  let livesP = null;  // (the live list, one fetch per 15 s for every live card)
+  const metaStore = store.get(META_KEY, {}) || {};
+  const metaKeep = (k, v) => {
+    metaStore[k] = v;
+    const ks = Object.keys(metaStore);
+    if (ks.length > META_MAX) for (const x of ks.slice(0, ks.length - META_MAX)) delete metaStore[x];
+    store.set(META_KEY, metaStore);
+  };
+  function parseHead(b) {
+    if (!b || b.length < 0x58 || String.fromCharCode(...b.subarray(0, 14)) !== 'MBAAReplayFile') return null;
+    const dv = new DataView(b.buffer, b.byteOffset, b.byteLength), i = o => dv.getInt32(o, true);
+    return { chara: [i(0x40), i(0x50)], moon: [i(0x44), i(0x54)], names: [null, null] };
+  }
+  async function headOf(url, range) {
+    const res = await fetch(url, range ? { headers: { Range: 'bytes=0-95' } } : {});
+    if (!res.ok || !res.body) return null;
+    const rd = res.body.getReader();
+    let buf = new Uint8Array(0);
+    while (buf.length < 0x60) {
+      const { done, value } = await rd.read();
+      if (done) break;
+      const n = new Uint8Array(buf.length + value.length); n.set(buf); n.set(value, buf.length); buf = n;
+    }
+    rd.cancel().catch(() => {});
+    return parseHead(buf);
+  }
+  const okMeta = j => j && Array.isArray(j.chara) && j.chara.length === 2 ? {
+    chara: j.chara.map(Number), moon: (j.moon || [-1, -1]).map(Number),
+    names: (j.names || [null, null]).map(n => typeof n === 'string' && n.trim() ? clean(n).slice(0, 40) : null) } : null;
+  async function fetchMeta(sl) {
+    if (sl.kind === 'live') {
+      if (!livesP || performance.now() - livesP.at > 15000) livesP = { p: api.lives ? api.lives() : Promise.resolve([]), at: performance.now() };
+      const l = await livesP.p;
+      const m = (l || []).find(x => x.id === sl.live);
+      return m ? { chara: m.chara || [-1, -1], moon: m.moon || [-1, -1], names: (m.names || []).map(n => (n || '').trim() || null), live: true,
+                   idle: m.age > 300 } : { ended: true };
+    }
+    if (sl.kind === 'list') {
+      const r = await fetch(`${STORE}/l/${sl.l}`);
+      const j = r.ok ? await r.json() : null;
+      return j && Array.isArray(j.items) ? { count: j.items.length, first: clean(String((j.items[0] || {}).name || '')).slice(0, 60) } : null;
+    }
+    if (sl.r) {
+      try {
+        const r = await fetch(`${STORE}/meta/${sl.r}`);
+        if ((r.headers.get('Content-Type') || '').includes('json')) return r.ok ? okMeta(await r.json()) : null;
+      } catch (e) {}
+      return headOf(`${STORE}/${/^[0-9a-f]{64}$/.test(sl.r) ? `rep/${sl.r}.rep` : `s/${sl.r}`}`, false);
+    }
+    let u;
+    try { u = new URL(sl.rep, location.href); } catch (e) { return null; }
+    if (u.origin === location.origin || SITE_HOSTS.has(u.hostname)) return headOf(u.href, u.origin === location.origin);
+    if (u.origin === STORE) return headOf(u.href, false);
+    return null;
+  }
+  const metaId = sl => sl.kind === 'live' ? `live:${sl.live}` : sl.kind === 'list' ? `l:${sl.l}` : sl.r ? `r:${sl.r}` : `rep:${sl.rep}`;
+  function metaFor(sl) {
+    const k = metaId(sl), live = sl.kind === 'live';
+    if (!live && metaStore[k] !== undefined) return Promise.resolve(metaStore[k]);
+    const m = metaMem.get(k);
+    if (m && (!live || performance.now() - m.at < 15000)) return m.p;
+    const p = fetchMeta(sl).catch(() => null).then(v => { if (!live && v) metaKeep(k, v); return v; });
+    metaMem.set(k, { p, at: performance.now() });
+    return p;
+  }
+  const cardIO = window.IntersectionObserver ? new IntersectionObserver(es => {
+    for (const e of es) if (e.isIntersecting) { cardIO.unobserve(e.target); e.target.load(); }
+  }, { root: logEl, rootMargin: '120px 0px' }) : null;
+  const fmtF = f => { const s = f / 60, h = Math.floor(s / 3600), m = Math.floor(s / 60) % 60, ss = (s % 60).toFixed(1).padStart(4, '0');
+    return h ? `${h}:${String(m).padStart(2, '0')}:${ss}` : `${m}:${ss}`; };
+  function linkCard(sl) {
+    const a = document.createElement('a');
+    a.className = 'ccard'; a.href = openUrl(sl); a.title = sl.raw;
+    a.onclick = e => { if (e.button || e.ctrlKey || e.metaKey || e.shiftKey) return; e.preventDefault(); e.stopPropagation(); openLink(sl); };
+    const mu = document.createElement('span'); mu.className = 'ccmu';
+    const sub = document.createElement('span'); sub.className = 'ccsub';
+    const what = sl.kind === 'live' ? 'live match' : sl.kind === 'list' ? 'playlist' : sl.e ? 'clip' : 'replay';
+    const range = sl.kind !== 'rep' ? '' : sl.e ? `${fmtF(sl.t)} – ${fmtF(sl.e)} (${((sl.e - sl.t) / 60).toFixed(1)} s)` : sl.t ? `from ${fmtF(sl.t)}` : '';
+    sub.textContent = [what, range].filter(Boolean).join(' · ');
+    mu.textContent = 'loading…'; mu.classList.add('wait');
+    a.append(mu, sub);
+    a.load = () => metaFor(sl).then(m => {
+      mu.classList.remove('wait'); mu.replaceChildren();
+      if (sl.kind === 'list') { mu.textContent = m ? `${m.count} replay${m.count === 1 ? '' : 's'}${m.first ? ` · ${m.first}` : ''}` : 'a playlist'; return; }
+      if (!m || m.ended) { mu.textContent = m && m.ended ? 'not live any more' : sl.kind === 'live' ? 'a live match' : 'a replay'; a.classList.toggle('gone', !!(m && m.ended)); return; }
+      const side = p => {
+        const c = m.chara[p], mo = m.moon[p], s = document.createElement('span'); s.className = 'ccside';
+        if (validChara(c) || api.iconCell(c) >= 0) s.append(iconCanvas('ccico', 48, validChara(c) ? c : CHARAS.find(x => api.iconCell(x) === api.iconCell(c)), mo));
+        const n = document.createElement('span'); n.className = 'ccn';
+        const ch = `${['C-', 'F-', 'H-'][mo] || ''}${api.chara[c] || ''}`;
+        n.textContent = m.names[p] || ch || `Player ${p + 1}`; s.title = m.names[p] ? `${m.names[p]} (${ch})` : ch;
+        s.append(n); return s;
+      };
+      const vs = document.createElement('span'); vs.className = 'ccvs'; vs.textContent = 'vs';
+      mu.append(side(0), vs, side(1));
+      if (m.live) { const b = document.createElement('span'); b.className = 'cclive'; b.textContent = m.idle ? 'idle' : 'LIVE'; mu.prepend(b); a.classList.toggle('idle', !!m.idle); }
+    });
+    if (cardIO) cardIO.observe(a); else a.load();
+    return a;
+  }
   function flashLine(msgid) {
     const li = msgid && logEl.querySelector(`li[data-msgid="${CSS.escape(msgid)}"]`);
     if (!li) return;
@@ -568,6 +860,7 @@
   }
   function render() {
     const c = chan(shown);
+    c.unread = 0;
     logEl.replaceChildren(...c.lines.map(lineEl));
     logEl.scrollTop = logEl.scrollHeight;
   }
@@ -576,14 +869,16 @@
     l.chan = c.name;
     if (l.msgid) { if (c.seen.has(l.msgid)) return; c.seen.add(l.msgid); }
     // a reply (+draft/reply, or a line opening "@nick"): on the picture without its "@nick " (a line that is only the
-    // mention: not at all); the chat keeps the whole line
+    // mention: not at all); links are left out of the picture (a line that is only a link stays in the chat, with its
+    // card); the chat keeps the whole line
+    if (!l.sys) l.pic = picText(l.text);
     const onPic = !l.sys && !!dmText(l);
     if (onPic && isMatch(name)) tlAdd(l);
     // (history arrives oldest first, before any live line of that channel: kept in time order)
     if (l.hist) { let i = c.lines.length; while (i > 0 && c.lines[i - 1].time > l.time) i--; c.lines.splice(i, 0, l); }
     else c.lines.push(l);
     if (c.lines.length > MAXLINES) c.lines.splice(0, c.lines.length - MAXLINES);
-    if (key(name) !== key(shown)) return;
+    if (key(name) !== key(shown)) { if (!l.hist && !l.sys && !l.self) { c.unread++; tabs(); } return; }
     const stick = logEl.scrollHeight - logEl.scrollTop - logEl.clientHeight < 30;
     if (l.hist) renderSoon();
     else { logEl.append(lineEl(l)); if (logEl.children.length > MAXLINES) logEl.firstChild.remove(); }
@@ -731,14 +1026,15 @@
   const measure = document.createElement('canvas').getContext('2d');
   // a comment's look and timing; t: when it enters, in seconds on its stage's clock
   // the overlay's text of a line: a reply's or a mention's leading "@nick" (and a ':' or ',' after it) left out
-  function dmText(l) { return l.action ? l.text : String(l.text || '').replace(/^(@\S+[:,]?\s*)+/, '').trim(); }
+  function dmText(l) { const t = String((l.pic != null ? l.pic : l.text) || ''); return l.action ? t : t.replace(/^(@\S+[:,]?\s*)+/, '').trim(); }
   function dmMake(l, t) {
     const cmds = nicoCmds(l.cmd);
     const loc = cmds.find(c => c === 'ue' || c === 'shita') || 'naka';
     const size = cmds.find(c => DM_SIZE[c]) || 'medium', font = cmds.find(c => DM_FONT[c]) || 'defont';
     // (Niconico takes the first colour given; none: the sender's profile colour)
     const col = cmds.map(c => DM_COLOR[c] || (COLOR_RE.test(c) ? c : null)).find(Boolean) || (l.color ? readableHex(l.color) : '#FFFFFF');
-    const text = nicoClip(l.action ? `${disp(l.nick)} ${l.text}` : dmText(l));
+    const said = dmText(l);
+    const text = nicoClip(l.action ? `${disp(l.nick)} ${said}` : said);
     const [px, row] = DM_SIZE[size], [wt, fam] = DM_FONT[font], css = `${wt} ${px}px ${fam}`;
     measure.font = css;
     const w = Math.ceil(measure.measureText(text).width) + 8;  // (+ the outline)
@@ -1218,7 +1514,14 @@
       case '366': {
         const c = chan(p[1]); tabs();
         if (!c.names.has(BOT) && ![...c.names].some(n => key(n) === key(BOT))) { c.retryAt = 0; irc.send(`PRIVMSG ${BOT} :open ${c.name}`); }
-        if (!c.histDone && (irc.caps.has('draft/chathistory') || irc.caps.has('chathistory'))) {
+        const hasHist = irc.caps.has('draft/chathistory') || irc.caps.has('chathistory');
+        // joined again (a reconnect: signing in or out, the server or the network restarting): what was said while away,
+        // from the newest line we have (nothing doubled: msgids are seen once)
+        const last = c.histDone && hasHist ? [...c.lines].reverse().find(l => l.msgid && !l.sys) : null;
+        c.failed = false;
+        if (last) { c.paging = true; irc.send(`CHATHISTORY AFTER ${c.name} msgid=${last.msgid} ${PAGE}`); }
+        else if (c.histDone && hasHist) irc.send(`CHATHISTORY LATEST ${c.name} * ${HISTORY}`);
+        else if (!c.histDone && hasHist) {
           c.histDone = true;
           // a per-match channel (#m-<match key>): everything, oldest first, for its timeline; else the latest lines
           if (isMatch(c.name) && matchPer) { c.paging = true; irc.send(`CHATHISTORY AFTER ${c.name} timestamp=${HIST_FROM} ${PAGE}`); }
@@ -1277,7 +1580,12 @@
                           chara: validChara(chara) ? chara : -1, moon, cmd: nicoCmds(t['+mbaa/cmd']).join(' '), at });
         return;
       }
-      case 'FAIL': sys(`server: ${clean(p.slice(2).join(' '))}`); return;
+      case 'FAIL': {
+        // (a catch-up from a msgid the server no longer has, a deleted line: the latest lines instead; seen ones skip)
+        const hc = p[0] === 'CHATHISTORY' && chans.get(key(p.find(x => x && x[0] === '#') || ''));
+        if (hc && !hc.failed) { hc.failed = true; hc.paging = false; irc.send(`CHATHISTORY LATEST ${hc.name} * ${HISTORY}`); return; }
+        sys(`server: ${clean(p.slice(2).join(' '))}`); return;
+      }
       case 'ERROR': sys(`disconnected: ${clean(p[0] || '')}`); return;
       case '404': case '473': case '474': case '475': case '477': case '482': sys(clean(p[p.length - 1] || 'refused')); return;
     }
@@ -1580,11 +1888,13 @@
     if (!want && matchChan) { if (!noneSince) noneSince = Date.now(); if (Date.now() - noneSince < LEAVE_MS) return; }
     noneSince = 0;
     if (want === matchChan) return;
+    const onMatch = !!matchChan && key(shown) === key(matchChan);
     if (matchChan && irc.registered) { irc.send(`PART ${matchChan}`); chan(matchChan).joined = false; }
     if (matchChan) chans.delete(key(matchChan));
     matchChan = want; matchPer = !!(info && info.match);
     tlReset(want);
-    if (want) { join(want); shown = want; } else if (shown !== GENERAL) shown = GENERAL;
+    // (#melty is never touched: its lines stay, and a viewer on it stays on it; the match tab follows the match)
+    if (want) { join(want); if (onMatch || tabPref === 'match') shown = want; } else shown = GENERAL;
     tabs(); render();
   }, 1000);
 
