@@ -129,6 +129,8 @@
   const css = document.createElement('style');
   css.textContent = `
   #chatsec .chead { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+  #chatsec .prow[hidden] { display: none; }
+  #chatspread { font-size: 11px; padding: 2px 4px; border-radius: 6px; background: var(--panel); color: inherit; border: 1px solid var(--line); }
   #chatsec .ctabs { display: flex; gap: 4px; flex: 1 1 auto; min-width: 0; }
   #chatsec button.ctab { line-height: 1.4; font-size: 11px; padding: 2px 8px; border-radius: 999px; color: var(--faint); background: none; border: 1px solid var(--line);
                    cursor: pointer; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 140px; }
@@ -209,7 +211,9 @@
   sec.className = 'sec'; sec.id = 'chatsec';
   sec.innerHTML = `
     <div class="chead"><span class="lbl">chat</span><span class="ctabs"></span>
-      <label class="tog" title="new comments cross the game picture (Nico Nico style)"><input id="chatover_on" type="checkbox"> on picture</label></div>
+      <label class="tog" title="new comments cross the game picture (Nico Nico style)"><input id="chatover_on" type="checkbox"> on picture</label>
+      <select id="chatspread" title="spread: how long a comment keeps its row on the picture, so comments a little apart still fan out to new rows (tight: Niconico's own)" aria-label="comment spread">
+        <option value="0">tight</option><option value="1">spread 1 s</option><option value="2">spread 2 s</option><option value="3">spread max</option></select></div>
     <ol id="chatlog" aria-live="polite"></ol>
     <div class="ctool" role="toolbar" aria-label="how your comments look on the picture (Niconico commands)">
       <span class="cseg" data-k="pos">
@@ -281,6 +285,14 @@
   over.id = 'chatover';
   const stage = document.querySelector('.stage');
   stage.insertBefore(over, document.getElementById('banner0') || null);
+  // spread (#chatspread, remembered): a comment keeps its row for this many seconds more after its tail has passed, so
+  // slow chat still fans out down the picture instead of every line taking the top row (niconicomments' collisionPadding,
+  // in its 1920-wide stage units: a naka comment moves ~400 of them per second)
+  const spreadSel = $('#chatspread');
+  spreadSel.value = String(store.get('mbaa-nico-spread', 1));
+  if (!spreadSel.value) spreadSel.value = '1';
+  const nicoOpts = () => ({ format: 'formatted', mode: 'html5', config: { collisionPadding: Math.min(1024, 5 + 400 * +spreadSel.value) } });  // (the library's limit: 1024, ~2.3 s)
+  spreadSel.onchange = () => { store.set('mbaa-nico-spread', +spreadSel.value); if (nico.inst) nicoBuild(); if (tl.inst) tlBuild(); spreadSel.blur(); };
   const overOn = $('#chatover_on');
   overOn.checked = store.get('mbaa-chat-over', true);
   over.hidden = !overOn.checked;
@@ -360,7 +372,8 @@
     const li = document.createElement('li');
     if (l.sys) { li.className = 'sys'; li.textContent = l.text; return li; }
     if (l.hist) li.className = 'hist';
-    li.append(iconCanvas('cico', 48, l.chara, l.moon));
+    // (no character picked: no icon at all, rather than an empty square)
+    if (validChara(l.chara)) li.append(iconCanvas('cico', 48, l.chara, l.moon));
     const body = document.createElement('span');
     const tm = document.createElement('span'); tm.className = 'ctime';
     tm.textContent = l.time.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
@@ -566,7 +579,7 @@
     const cw = h * 16 / 9;
     nico.cv.width = Math.round(cw * dpr); nico.cv.height = Math.round(h * dpr);
     nico.cv.style.width = `${cw}px`; nico.cv.style.left = `${(w - cw) / 2}px`;
-    nico.inst = new nico.lib(nico.cv, nico.list.map(c => c.raw), { format: 'formatted', mode: 'html5' });
+    nico.inst = new nico.lib(nico.cv, nico.list.map(c => c.raw), nicoOpts());
     nico.size = `${w}x${h}@${dpr}`;
     return true;
   }
@@ -731,7 +744,7 @@
     const cw = h * 16 / 9;
     tl.cv.width = Math.round(cw * dpr); tl.cv.height = Math.round(h * dpr);
     tl.cv.style.width = `${cw}px`; tl.cv.style.left = `${(w - cw) / 2}px`;
-    tl.inst = new nico.lib(tl.cv, tl.entries.filter(e => e.raw).map(e => e.raw), { format: 'formatted', mode: 'html5' });
+    tl.inst = new nico.lib(tl.cv, tl.entries.filter(e => e.raw).map(e => e.raw), nicoOpts());
     tl.size = `${w}x${h}@${dpr}`; tl.vpos = -1;
     return true;
   }
@@ -833,6 +846,8 @@
     // a guest on a server with sign-in: no input (channels are +M); without sign-in (auth 'none'): as before
     formEl.hidden = !signedIn && auth.state !== 'none' && auth.state !== 'unknown';
     $('#chatnick').disabled = signedIn;
+    // (signed in, the name is the account: "change name" above renames it; a guest on a sign-in server cannot speak)
+    $('#chatnick').closest('.prow').hidden = signedIn || formEl.hidden;
     if (signedIn) {  // (the nick box shows the name, not the IRC nick "Name-1234"; renaming is "change name")
       const full = shownNick(irc.account, irc.account, auth.name);
       $('.mynick').textContent = disp(full); $('.mynick').title = full; $('#chatnick').value = disp(full);
