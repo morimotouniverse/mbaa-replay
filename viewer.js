@@ -2858,7 +2858,7 @@ function controls() {
   });
   btn('prevr', () => jumpRound(-1)); btn('nextr', () => jumpRound(1));
   btn('clipnow', clipNow); clipControls();
-  btn('clipa', () => setClip('a')); btn('clipb', () => setClip('b')); btn('clipx', clearClip); btn('cliploop', toggleLoop); btn('clipexp', exportVideo);
+  btn('clipx', clearClip); btn('cliploop', toggleLoop); btn('clipexp', exportVideo);
   btn('helpb', toggleHelp); btn('helpx', toggleHelp); btn('mute', toggleMute);
   document.getElementById('help').addEventListener('click', e => { if (e.target === e.currentTarget) toggleHelp(); });  // (the backdrop)
   // the seek buttons that are not frame step (the bar's on desktop, the menu sheet's on phones): one action each, as
@@ -2876,6 +2876,7 @@ function controls() {
   stageEl.addEventListener('pointerdown', e => {
     if (e.target.closest('.fsbar')) { fsWake(); return; }  // (the bar's own controls)
     if (e.target.closest('#help')) return;  // (the help over the picture: its own clicks)
+    if (e.target.closest('#chatcol')) return;  // (the chat beside the picture in fullscreen: its own clicks)
     // touch: outside fullscreen a tap goes fullscreen; in it, a tap shows / hides the controls over the picture (beside
     // it they stay); pause is a button. A mouse click pauses / plays, as always.
     if (e.pointerType !== 'mouse') {
