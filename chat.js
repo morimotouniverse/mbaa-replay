@@ -502,17 +502,13 @@
   #chatsec .cmenupop button { text-align: left; background: none; border: none; color: var(--fg); font: inherit; font-size: 12px; padding: 6px 10px; border-radius: 6px; cursor: pointer; }
   #chatsec .cmenupop button:hover, #chatsec .cmenupop button:focus-visible { background: #ffffff14; outline: none; }
   #chatsec .cmenupop .mh { font-size: 10px; color: var(--faint); padding: 4px 10px 2px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  /* emoji: a line of one emoji (repeated) shown once, big, with its count; a combo row of such lines; the overlay's swell */
+  /* emoji: a line of one emoji (repeated) shown once, big, with its count; a combo row of such lines (the overlay's swell: the renderer, swellLayout) */
   #chatlog .cjumbo { display: inline-flex; align-items: center; gap: 5px; vertical-align: middle; }
   #chatlog .cjumbo .je { font-size: 26px; line-height: 1.1; font-family: 'Apple Color Emoji', 'Segoe UI Emoji', 'Noto Color Emoji', sans-serif; }
   #chatlog .cjumbo .jn { font-size: 12px; font-weight: 700; color: var(--muted); font-variant-numeric: tabular-nums; }
   #chatlog .cjumbo .jw { font-size: 11px; color: var(--faint); }
   #chatlog .cjumbo.join { cursor: pointer; border-radius: 8px; padding: 0 4px; }
   #chatlog .cjumbo.join:hover { background: #ffffff10; }
-  #chatover .cswell { position: absolute; left: 0; display: flex; flex-direction: column; align-items: center; pointer-events: none; transition: bottom .2s, opacity .5s; }
-  #chatover .cswell .e { line-height: 1; font-family: 'Apple Color Emoji', 'Segoe UI Emoji', 'Noto Color Emoji', sans-serif; transition: font-size .15s; }
-  #chatover .cswell .n { opacity: 0; transition: opacity .6s; color: #fff; font-weight: 700; font-family: sans-serif; line-height: 1.1; font-variant-numeric: tabular-nums;
-                         text-shadow: -1px -1px 0 #000, 1px -1px 0 #000, -1px 1px 0 #000, 1px 1px 0 #000; }
   /* Discord-style formatting in a line (render only; the IRC text stays plain) */
   #chatlog .cmd-h { font-weight: 700; color: var(--fg, #fff); line-height: 1.25; }
   #chatlog .cmd-h1 { font-size: 15px; }
@@ -1778,9 +1774,8 @@
     red2: '#CC0033', truered: '#CC0033', pink2: '#FF33CC', orange2: '#FF6600', passionorange: '#FF6600', yellow2: '#999900',
     madyellow: '#999900', green2: '#00CC66', elementalgreen: '#00CC66', cyan2: '#00CCCC', blue2: '#3399FF', marinblue: '#3399FF',
     purple2: '#6633CC', nobleviolet: '#6633CC', black2: '#666666' };
-  // On the picture a comment is at most Niconico's own 75 characters (the chat keeps the whole line)
-  const NICO_MAX = 75, NICO_ON_SCREEN = 60;
-  const nicoClip = t => { const a = Array.from(t); return a.length > NICO_MAX ? a.slice(0, NICO_MAX - 1).join('') + '…' : t; };
+  // On the picture a comment is the whole line, never clipped (a long one scrolls by faster: its speed grows with its width)
+  const NICO_ON_SCREEN = 60;
   const measure = document.createElement('canvas').getContext('2d');
   // a comment's look and timing; t: when it enters, in seconds on its stage's clock
   // the overlay's text of a line: a reply's or a mention's leading "@nick" (and a ':' or ',' after it) left out
@@ -1808,7 +1803,7 @@
     // (Niconico takes the first colour given; none: the sender's profile colour)
     const col = cmds.map(c => DM_COLOR[c] || (COLOR_RE.test(c) ? c : null)).find(Boolean) || (l.color ? readableHex(l.color) : '#FFFFFF');
     const said = dmText(l);
-    const text = nicoClip(l.action ? `${disp(l.nick)} ${said}` : said);
+    const text = l.action ? `${disp(l.nick)} ${said}` : said;
     const [px, row] = DM_SIZE[size], [wt, fam] = DM_FONT[font], css = `${wt} ${px}px ${fam}`;
     const gw = glovMeasure(text, px * 1);
     let w;
@@ -1858,14 +1853,6 @@
     const k = h / 1080, key = `${w}x${h}`;
     if (st.fit !== key) { st.fit = key; st.box.style.transform = `translate(${((w - h * 16 / 9) / 2).toFixed(2)}px, 0) scale(${k.toFixed(5)})`; }
     return true;
-  }
-  function dmEl(st, c) {
-    const e = document.createElement('div');
-    e.className = 'dm'; e.textContent = c.text;
-    e.style.font = c.css; e.style.color = c.col;
-    if (c.col.toUpperCase() === '#000000') e.style.webkitTextStrokeColor = 'rgba(255,255,255,.4)';
-    st.box.append(e);
-    return c.el = e;
   }
   const dmXf = (c, dt) => `translate(${dmX(c, dt).toFixed(1)}px, ${c.y}px)${c.scale !== 1 ? ` scale(${c.scale.toFixed(4)})` : ''}`;
   function dmRemove(st, c) {
@@ -1997,55 +1984,48 @@
   // under it; it fades SWELL_FADE after the spam stops. Several at once stack upward (at most 3). Live comments only
   // (the overlay's own layer: off with "on picture"). ----
   const SWELL_MIN = 5, SWELL_WIN = 4000, SWELL_FADE = 3000, SWELL_MAX = 0.25, SWELL_N = 3, SWELL_RIDE = 6000, SWELL_TILT = 6, SWELL_TILT_MAX = 24;
-  const swells = new Map();  // emoji key -> {e, hits: [t], count, el, num, fadeT, at}
+  // Drawn by the renderer (overlay_gl viewer_ov_fx: the ride, the tilt, the pulse and the fades run in wasm at each
+  // present), so a swell goes behind the fighters with the comments and costs no DOM or script per frame. Geometry in
+  // the comments' stage units (1920 x 1080, 16:9, centred on the picture).
+  const swells = new Map();  // emoji key -> {e, hits: [t], count, on, gid, nid, ds, at, tilt, t0, shownMs, numT}
+  const SWELL_RASTER = 400;  // (the emoji rasterised once at most this many device px, scaled as it grows)
+  const swellNow = () => performance.now() / 1000;
+  function swellGeom() {
+    const H = over.clientHeight || 360, W = over.clientWidth || 480, k = 1080 / H, offX = (W - H * 16 / 9) / 2;
+    const dpr = window.devicePixelRatio || 1;
+    return { H, W, k, offX, R: Math.min(270, SWELL_RASTER * 1080 / (H * dpr)), numPx: Math.max(11, H * 0.03) * k };
+  }
   function swellFeed(l) {
     if (emoAmt <= 0) return;  // (no emoji on the picture)
+    const M = glovReady();
+    if (!M) return;
     const now = performance.now(), per = new Map();
     for (const g of graphemes(l.pic != null ? l.pic : l.text)) if (isEmo(g)) { const k = emoKey(g); const x = per.get(k) || { e: g, n: 0 }; x.n++; per.set(k, x); }
     for (const [k, { e, n }] of per) {
       let s = swells.get(k);
-      if (!s) swells.set(k, s = { e, hits: [], count: 0, el: null });
+      if (!s) swells.set(k, s = { e, hits: [], count: 0, on: false });
       s.hits = s.hits.filter(t => now - t <= SWELL_WIN);
       for (let i = 0; i < n; i++) s.hits.push(now);
-      if (s.el) s.count += n;
-      else if (s.hits.length >= SWELL_MIN && [...swells.values()].filter(x => x.el).length < SWELL_N) {
-        s.count = s.hits.length; s.at = now;
-        s.el = document.createElement('div'); s.el.className = 'cswell'; s.el.dataset.e = k;
-        s.em = document.createElement('div'); s.em.className = 'e'; s.em.textContent = e;
-        s.num = document.createElement('div'); s.num.className = 'n';
-        s.el.append(s.em, s.num); over.append(s.el);
-        // (it rides across the picture, left to right, again and again while the spam goes on)
-        s.tilt = 0; swellRide(s);
+      if (s.on) s.count += n;
+      else if (s.hits.length >= SWELL_MIN && [...swells.values()].filter(x => x.on).length < SWELL_N) {
+        s.count = s.hits.length; s.at = now; s.on = true; s.tilt = 0; s.ds = 0; s.t0 = swellNow(); s.shownMs = 0;
+        s.gid = glov.next++; s.nid = glov.next++; s.M = M;
+        const G = swellGeom();
+        M._viewer_ov_add(s.gid, glovSend(M, glovCps(e)), 0, s.t0, 0, 0, 0, 1, 1e6, G.R, 0xFFFFFFFF, 0);
       } else continue;
       // the count shows for a moment when the riding emoji appears and each time it passes a milestone (10, 25, 50,
       // 100, 250, 500, 1000, ...), then fades: the number marks the spam growing, not every copy
-      s.num.textContent = String(s.count);
       const ms = swellMilestone(s.count);
       if (ms > (s.shownMs || 0)) {
-        s.shownMs = ms;
-        s.num.style.transition = 'none'; s.num.style.opacity = '1';
-        void s.num.offsetWidth; s.num.style.transition = '';
-        clearTimeout(s.numT); s.numT = setTimeout(() => { if (s.num) s.num.style.opacity = '0'; }, 1000);
+        s.shownMs = ms; s.numShow = swellNow();
         // each milestone after the first tilts its path up a little more (flat, then climbing), up to SWELL_TILT_MAX
-        if (ms > 5 && s.tilt < SWELL_TILT_MAX) { s.tilt = Math.min(SWELL_TILT_MAX, s.tilt + SWELL_TILT); swellRide(s); }
+        if (ms > 5 && s.tilt < SWELL_TILT_MAX) s.tilt = Math.min(SWELL_TILT_MAX, s.tilt + SWELL_TILT);
       }
+      s.numText = String(s.count);
       clearTimeout(s.fadeT);
-      s.el.style.opacity = '1';
       s.fadeT = setTimeout(() => swellEnd(k), SWELL_FADE);
     }
     swellLayout();
-  }
-  // the ride across the picture, left to right, looping, along a path tilted up by s.tilt degrees (the emoji leaning
-  // with it); a new tilt carries on from where the current pass is
-  function swellRide(s) {
-    if (!s.el || !s.el.animate) return;
-    const W = over.clientWidth || 640, rise = -Math.tan(s.tilt * Math.PI / 180) * W * 0.9;
-    const at = s.anim ? s.anim.currentTime : 0;
-    if (s.anim) s.anim.cancel();
-    s.anim = s.el.animate([{ left: '-25%', transform: 'translateY(0px)' }, { left: '105%', transform: `translateY(${rise.toFixed(1)}px)` }],
-      { duration: SWELL_RIDE, iterations: Infinity, easing: 'linear' });
-    s.anim.currentTime = at || 0;
-    s.em.style.transform = s.tilt ? `rotate(${-s.tilt}deg)` : '';
   }
   // the last milestone a count has passed: 5 (the start), 10, 25, 50, 100, 250, 500, 1000, 2500, ...
   function swellMilestone(n) {
@@ -2055,21 +2035,43 @@
   }
   function swellEnd(k) {
     const s = swells.get(k);
-    if (!s || !s.el) return;
-    s.el.style.opacity = '0';
-    const el = s.el; s.el = null; s.hits = []; s.count = 0; s.shownMs = 0; clearTimeout(s.numT);
-    const anim = s.anim; s.anim = null;
-    setTimeout(() => { if (anim) anim.cancel(); el.remove(); swellLayout(); }, 500);
+    if (!s || !s.on) return;
+    s.on = false; s.hits = []; s.count = 0; s.shownMs = 0;
+    const M = s.M, t = swellNow(), gid = s.gid, nid = s.nid;
+    if (M === glov.M) {  // (fades out in half a second, then goes)
+      M._viewer_ov_fx(gid, SWELL_RIDE / 1000, s.vy || 0, s.rot || 0, s.ds, s.ds, t, 0, 1, 0, t, 0.5);
+      M._viewer_ov_fx(nid, SWELL_RIDE / 1000, s.vy || 0, 0, 1, 1, t, 0, 0, 0, t, 0);
+    }
+    setTimeout(() => { if (M === glov.M) { M._viewer_ov_remove(gid); M._viewer_ov_remove(nid); } swellLayout(); }, 500);
   }
-  function swellClear() { for (const s of swells.values()) { clearTimeout(s.fadeT); if (s.el) s.el.remove(); } swells.clear(); }
-  function swellLayout() {  // (sizes from the picture's height; the oldest at the bottom)
-    const H = over.clientHeight || 360;
-    let y = H * 0.11;  // (above the battle HUD's bottom meters: the comments' band)
-    for (const s of [...swells.values()].filter(x => x.el).sort((a, b) => a.at - b.at)) {
-      const sz = Math.min(SWELL_MAX, 0.07 + 0.006 * s.count) * H;
-      s.em.style.fontSize = `${sz.toFixed(1)}px`; s.num.style.fontSize = `${Math.max(11, H * 0.03).toFixed(1)}px`;
-      s.el.style.bottom = `${y.toFixed(1)}px`;
-      y += sz * 1.12 + Math.max(11, H * 0.03) * 1.2;
+  function swellClear() {
+    for (const s of swells.values()) { clearTimeout(s.fadeT); if (s.on && s.M === glov.M) { s.M._viewer_ov_remove(s.gid); s.M._viewer_ov_remove(s.nid); } }
+    swells.clear();
+  }
+  // sizes from the picture's height, the oldest at the bottom; each swell's ride (left to right, again and again, along
+  // a path tilted up by its tilt, the emoji leaning with it), its pulse to the new size and its count
+  function swellLayout() {
+    const M = glovReady();
+    if (!M) return;
+    const G = swellGeom(), t = swellNow();
+    let yb = G.H * 0.11;  // (from the picture's bottom, above the battle HUD's meters: the comments' band)
+    const numH = Math.max(11, G.H * 0.03) * 1.1;
+    for (const s of [...swells.values()].filter(x => x.on && x.M === M).sort((a, b) => a.at - b.at)) {
+      const sz = Math.min(SWELL_MAX, 0.07 + 0.006 * s.count) * G.H, szS = sz * G.k, ds = szS / G.R;
+      const topS = (G.H - yb - numH - sz) * G.k;
+      const x0 = (-0.25 * G.W - G.offX) * G.k, x1 = (1.05 * G.W - G.offX) * G.k, P = SWELL_RIDE / 1000;
+      const vx = (x1 - x0) / P;
+      s.vy = -Math.tan(s.tilt * Math.PI / 180) * G.W * 0.9 * G.k / P; s.rot = -s.tilt * Math.PI / 180;
+      // (the emoji's middle a little above its row's: its quad sits on the font's baseline)
+      M._viewer_ov_move(s.gid, s.t0, x0, vx, topS - 0.1 * szS);
+      M._viewer_ov_fx(s.gid, P, s.vy, s.rot, s.ds || ds, ds, t, s.ds ? 0.15 : 0, 1, 1, t, 0);
+      s.ds = ds;
+      // the count under it, centred, riding with it (not turned); shown at a milestone, faded after a second
+      const nw = glovMeasure(s.numText || '', G.numPx) || 0;
+      M._viewer_ov_add(s.nid, glovSend(M, glovCps(s.numText || '')), 0, s.t0, x0 + (szS - nw) / 2, vx, topS + szS, 1, 1e6, G.numPx, 0xFFFFFFFF, 0x000000FF);
+      const sh = s.numShow || 0;
+      M._viewer_ov_fx(s.nid, P, s.vy, 0, 1, 1, t, 0, 1, 0, sh + 1, 0.6);
+      yb += sz * 1.12 + numH;
     }
   }
 

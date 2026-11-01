@@ -40,6 +40,7 @@ const PHONE = matchMedia('(pointer: coarse)').matches && Math.min(screen.width, 
 // low-memory mode (phones; ?lowmem=1 / 0 forces it): no pre-scan, a small keyframe budget, a match's files freed once
 // it has loaded them (freeLoaded) and the next match prefetched to the disk cache only
 const LOWMEM = Q.get('lowmem') !== null ? Q.get('lowmem') === '1' : PHONE;
+const FREE_FILES = Q.get('free') !== '0';  // (low memory: a match's files freed once it has loaded; ?free=0: kept, tests)
 const KZ = Q.get('kz') !== '0';  // keyframe pages zlib-compressed (?kz=0: zero-word packing only)
 const KF_BUDGET = +(Q.get('kfmb') || (LOWMEM ? 40 : 450)) * 1e6;
 // the store textures the kept keyframes pin (kfTexBytes) have a budget of their own: over it, keyframes thin as over KF_BUDGET
@@ -264,7 +265,11 @@ function wrapOpen(M) {
 function freeLoaded(s, keep = null) {
   const probe = new Set((man.plan && man.plan.probe) || []);
   for (const p of new Set([...s.opened, ...(s.M.mbaaBootOpened || [])])) {
-    if (s.freed.has(p) || /^bgm\//.test(p) || !s.want.has(p) || (keep && keep.has(p))) continue;
+    // (graphics stay: the game reads its pictures again on later screens of the same match, the victory screen's
+    // portraits and cut-ins, the result menu's art; a freed probe file is a 1-byte stand-in that opens fine and decodes
+    // to nothing, drawn white: user 2026-11-01, harness-design/web_parity/viewer_tools/live_victory_phone_check.py.
+    // They are a few MB; the characters' sprite data and the stage are what freeing saves)
+    if (s.freed.has(p) || /^(bgm|grp)\//.test(p) || !s.want.has(p) || (keep && keep.has(p))) continue;
     try { if (probe.has(p)) s.M.FS.writeFile('/game/' + p, new Uint8Array(1)); else s.M.FS.unlink('/game/' + p); } catch (e) { continue; }
     cache.delete(p); s.freed.add(p);
   }
@@ -797,7 +802,7 @@ function watch(s) {
     if (s !== session) return clearInterval(t);
     if (misses.size && s.liveSrc) { liveMissed(s); }
     else if (misses.size) { clearInterval(t); refetchAndReplay(s, call(s, 'viewer_frame')); return; }
-    if (LOWMEM && s.freedAt < 0 && s.tl && s.tl.marks.some(m => m[0] > (s.freeArm ?? -1)) && !s.seeking && !call(s, 'viewer_files_open')) freeLoaded(s);
+    if (LOWMEM && FREE_FILES && s.freedAt < 0 && s.tl && s.tl.marks.some(m => m[0] > (s.freeArm ?? -1)) && !s.seeking && !call(s, 'viewer_files_open')) freeLoaded(s);
     // a playlist skips the win screen (scene 5: the winner's quote, which runs to the replay's end): the next match
     // starts as the battle ends
     const winScreen = pl.i >= 0 && pl.i + 1 < pl.items.length && !s.seeking && s.M.HEAP32[0x54EEE8 >> 2] === SCENE_WIN;
@@ -2753,6 +2758,8 @@ function stepBy(n, pause = true) {
   return requestSeek(curFrame() + n);
 }
 window.__mbaaSession = () => session;  // tests
+window.__mbaaSeek = T => requestSeek(T);  // tests
+window.__mbaaMisses = () => [...misses];  // tests (freed files the game opened again; bundle files not fetched)
 // live chat (web/shell/chat.js), only on the chat page: the Worker adds <meta name="mbaa-chat"> to it (a local test page:
 // ?chat=1 on 127.0.0.1 / localhost); chat.js draws its icons with the player block's art and follows the watched match
 window.mbaaChatApi = { art: playersArt, iconCell, chara: CHARA, liveId: () => session && session.liveSrc ? session.liveSrc.id : null,
