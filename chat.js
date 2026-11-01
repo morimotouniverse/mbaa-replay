@@ -145,6 +145,12 @@
                           border-radius: 8px; padding: 5px 8px; font: inherit; }
   #chatsec details summary { cursor: pointer; display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--muted); list-style: none; }
   #chatsec details summary::-webkit-details-marker { display: none; }
+  /* (the profile opens and closes on its summary: said plainly there, plus a done button and Esc / a click outside) */
+  #chatsec details summary::after { content: 'edit profile ▾'; margin-left: auto; font-size: 11px; color: var(--accent2, #8ab4ff);
+    border: 1px solid var(--line); border-radius: 999px; padding: 2px 8px; white-space: nowrap; }
+  #chatsec details[open] summary::after { content: 'close ✕'; color: #fff; background: var(--accent); border-color: var(--accent); }
+  #chatsec details .pdone { justify-content: flex-end; margin-top: 6px; }
+  #chatsec details .pdonebtn { background: var(--accent); color: #fff; padding: 4px 16px; border-radius: 999px; }
   #chatsec .me { width: 21px; height: 28px; border-radius: 4px; }
   #chatsec .prow { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; margin-top: 6px; font-size: 12px; }
   #chatsec .prow input[type=text] { width: 130px; background: var(--raise); color: var(--fg); border: 1px solid var(--line); border-radius: 6px; padding: 3px 6px; font: inherit; }
@@ -233,12 +239,19 @@
       <div class="prow">colour <span class="sws"></span><input id="chatcolor" type="color" title="any colour"></div>
       <div class="prow">moon <span class="moons"></span></div>
       <div class="cgrid"></div>
+      <div class="prow pdone"><button type="button" class="txt pdonebtn">done</button></div>
     </details>`;
   // (the page's chat column, beside or under the picture: index.html / viewer.js fitStage; an older page: the panel)
   const controls = document.getElementById('controls'), col = document.getElementById('chatcol');
   const after = document.getElementById('livesec');
   if (col) col.append(sec); else if (after && after.parentNode === controls) after.after(sec); else controls.append(sec);
   const $ = s => sec.querySelector(s);
+  {  // the profile panel: a done button, Esc and a click outside it close it
+    const d = sec.querySelector('details');
+    sec.querySelector('.pdonebtn').onclick = () => { d.open = false; };
+    document.addEventListener('keydown', e => { if (e.key === 'Escape' && d.open) d.open = false; });
+    document.addEventListener('pointerdown', e => { if (d.open && !d.contains(e.target)) d.open = false; });
+  }
   const logEl = $('#chatlog'), tabsEl = $('.ctabs'), input = $('#chatin'), cmdIn = $('#chatcmd'), stateEl = $('.cstate');
   // the newest line stays in view when the log's box changes size (the on-screen keyboard, a rotation, the layout)
   let logStick = true;
