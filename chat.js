@@ -493,8 +493,11 @@
   #chatsec .cme .csign { display: contents; }
   #chatsec .cme a.signin { display: inline-flex; align-items: center; padding: 3px 9px; border-radius: 8px; background: #5865f2; color: #fff; text-decoration: none;
                            font-weight: 700; font-size: 11px; white-space: nowrap; }
-  #chatsec .cme button.cmenu { margin-left: auto; background: none; border: 1px solid var(--line); border-radius: 999px; color: var(--accent2, #8ab4ff); cursor: pointer;
-                               font-size: 11px; padding: 1px 9px; }
+  /* (a real button: a label, a size that does not shrink; was a bare 11 px "▾" Firefox squashed to a sliver) */
+  #chatsec .cme button.cmenu { margin-left: auto; flex: none; display: inline-flex; align-items: center; gap: 4px; min-height: 26px;
+                               padding: 3px 11px; background: #ffffff0a; border: 1px solid var(--line); border-radius: 999px;
+                               color: var(--accent2, #8ab4ff); cursor: pointer; font: 600 12px/1 system-ui, sans-serif; white-space: nowrap; }
+  #chatsec .cme button.cmenu:hover { background: #ffffff16; color: #fff; }
   #chatsec .cme button.cmenu[aria-expanded=true] { color: #fff; background: #ffffff14; }
   #chatsec .cmenupop { position: absolute; z-index: 7; right: 0; bottom: calc(100% + 4px); min-width: 160px; background: var(--raise, #1c1c28); border: 1px solid var(--line);
                        border-radius: 10px; box-shadow: 0 8px 28px #000a; padding: 4px; display: grid; }
@@ -574,7 +577,7 @@
       <div class="cgrid"></div>
       <div class="prow pdone"><button type="button" class="txt pdonebtn">done</button></div>
     </details>
-    <div class="cme"><span class="csign"></span><button type="button" class="cmenu" aria-haspopup="menu" aria-expanded="false" title="profile and account" aria-label="profile and account menu">▾</button>
+    <div class="cme"><span class="csign"></span><button type="button" class="cmenu" aria-haspopup="menu" aria-expanded="false" title="profile and account" aria-label="profile and account menu">profile ▾</button>
       <div class="cmenupop" hidden role="menu"></div></div>`;
   // (the page's chat column, beside or under the picture: index.html / viewer.js fitStage; an older page: the panel)
   const controls = document.getElementById('controls'), col = document.getElementById('chatcol');
