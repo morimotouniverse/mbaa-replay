@@ -4001,13 +4001,18 @@ function fitStage() {
     const o = ovlPick(W, W, r);
     return setW(o[0], o[1]);
   }
-  const fsChatW = full && stage.classList.contains('fschat') ? Math.round(Math.min(400, Math.max(300, window.innerWidth * 0.22))) : 0;
+  if (full) fsChatPlace();  // (a phone turned in fullscreen: the chat beside only on its side)
+  const fsMob = b.classList.contains('mob');
+  // (a phone on its side: the picture the full height, the chat the rest, at least 240 px, at most 45 % of the width)
+  const fsChatW = full && stage.classList.contains('fschat')
+    ? Math.round(fsMob ? Math.min(window.innerWidth * 0.45, Math.max(240, window.innerWidth - window.innerHeight * 4 / 3))
+                       : Math.min(400, Math.max(300, window.innerWidth * 0.22))) : 0;
   if (fsChatW) root.style.setProperty('--chatw', `${fsChatW}px`);
   const Wwin = full ? window.innerWidth - fsChatW : document.documentElement.clientWidth - 32;
   const H = full ? window.innerHeight : window.innerHeight - 16;
   // a phone in fullscreen with FS_SIDE or more beside the full-height picture (landscape): the controls go there
   // (.sidebar); desktop (any shape, 16:9 to 32:9) keeps the bar over the picture's bottom
-  const sidebar = full && b.classList.contains('mob') && Wwin - H * 4 / 3 >= FS_SIDE;
+  const sidebar = full && !fsChatW && b.classList.contains('mob') && Wwin - H * 4 / 3 >= FS_SIDE;
   if (stage) stage.classList.toggle('sidebar', sidebar);
   const W = sidebar ? Wwin - FS_SIDE : Wwin;
   const pick = trH => {
@@ -4085,8 +4090,12 @@ function placeControls(mob) {
     setb.onclick = e => { e.stopPropagation(); pop.hidden = !pop.hidden; setb.setAttribute('aria-expanded', String(!pop.hidden)); };
     document.addEventListener('click', e => { if (!pop.hidden && !pop.contains(e.target) && e.target !== setb) { pop.hidden = true; setb.setAttribute('aria-expanded', 'false'); } });
   }
+  // phones: the mute button (and the volume, where the bar has room: landscape / fullscreen) in the transport bar
+  // (#mvolgrp, before fullscreen), not only in the menu
+  const mvg = document.getElementById('mvolgrp');
   for (const m of MOVED) {
-    if (mob) { if (m.el.previousSibling !== m.mark) m.mark.after(m.el); }
+    if (mob && mvg && (m.el.id === 'mute' || m.el.id === 'vol')) { if (m.el.parentNode !== mvg) mvg.append(m.el); }
+    else if (mob) { if (m.el.previousSibling !== m.mark) m.mark.after(m.el); }
     else if (m.el.parentNode !== m.to) m.before ? m.to.insertBefore(m.el, m.before) : m.to.append(m.el);
   }
   if (mob) { const pop = document.getElementById('setpop'); if (pop) pop.hidden = true; }
@@ -4151,7 +4160,9 @@ function barPlace() {
 function fsChatPlace() {
   const stage = document.querySelector('.stage'), col = document.getElementById('chatcol'), b = document.body;
   if (!stage || !col) return;
-  const want = stage.classList.contains('fs') && b.classList.contains('haschat') && !b.classList.contains('mob') && !chatHidden;
+  // (phones: on their side only; upright the picture takes the screen)
+  const want = stage.classList.contains('fs') && b.classList.contains('haschat') && !chatHidden
+    && (!b.classList.contains('mob') || window.innerWidth > window.innerHeight);
   const home = document.getElementById('chathome');
   if (want && !home) { col.before(Object.assign(document.createElement('div'), { id: 'chathome', hidden: true })); stage.append(col); }
   else if (!want && home) home.replaceWith(col);

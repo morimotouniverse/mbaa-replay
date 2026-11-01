@@ -106,7 +106,8 @@
   if (!prof.picked) { if (prof.chara === 17) prof.chara = -1; if (prof.moon === 1) prof.moon = -1; prof.picked = 1; store.set('mbaa-chat-profile', prof); }
   if (!NICK_RE.test(prof.nick) || !nameOk(prof.nick)) prof.nick = randNick();
   if (!COLOR_RE.test(prof.color)) prof.color = PRESETS[0];
-  const saveProf = () => store.set('mbaa-chat-profile', prof);
+  // (mt: when this device last changed it: a signed-in account's newer own message from another device wins, profAdopt)
+  const saveProf = () => { prof.mt = Date.now(); store.set('mbaa-chat-profile', prof); };
   // the characters with a select-screen icon (no boss versions), in the select screen's order
   const CHARAS = Object.keys(api.chara).map(Number).filter(c => c < 52 && api.iconCell(c) >= 0)
     .sort((a, b) => api.iconCell(a) - api.iconCell(b))
@@ -194,6 +195,12 @@
   #chatsec .prow { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; margin-top: 6px; font-size: 12px; }
   #chatsec .prow input[type=text] { width: 130px; background: var(--raise); color: var(--fg); border: 1px solid var(--line); border-radius: 6px; padding: 3px 6px; font: inherit; }
   #chatsec .sw { width: 16px; height: 16px; border-radius: 50%; border: 2px solid transparent; cursor: pointer; padding: 0; }
+  #chatsec .prow input[type=color] { -webkit-appearance: none; appearance: none; width: 36px; height: 22px; padding: 0; border: 2px solid #ffffff33; border-radius: 6px; background: none; cursor: pointer; }
+  #chatsec .prow input[type=color]::-webkit-color-swatch-wrapper { padding: 0; }
+  #chatsec .prow input[type=color]::-webkit-color-swatch { border: none; border-radius: 4px; }
+  body.mob #chatsec .sws { display: inline-flex; flex-wrap: wrap; gap: 8px; }
+  body.mob #chatsec .sw { width: 32px; height: 32px; }
+  body.mob #chatsec .prow input[type=color] { width: 64px; height: 32px; }
   #chatsec .sw.on { border-color: #fff; }
   #chatsec input[type=color] { width: 24px; height: 20px; padding: 0; border: none; background: none; cursor: pointer; }
   #chatsec .moons canvas, #chatsec .cgrid canvas { cursor: pointer; border-radius: 4px; border: 2px solid transparent; }
@@ -222,6 +229,19 @@
   #chatsec .cpop button.sw2[aria-pressed=true] { border-color: #fff; background-clip: padding-box; }
   #chatsec .cpop button.mine { width: auto; border-radius: 999px; padding: 0 8px 0 4px; gap: 4px; color: var(--fg); border: 1px solid var(--line); height: 24px; }
   #chatsec .cpop input[type=color] { width: 28px; height: 24px; }
+  #chatsec .cpop input[type=color] { -webkit-appearance: none; appearance: none; padding: 0; border: 3px solid transparent; border-radius: 10px; cursor: pointer;
+      background: conic-gradient(red, yellow, lime, cyan, blue, magenta, red) border-box; }
+  #chatsec .cpop input[type=color]::-webkit-color-swatch-wrapper { padding: 0; }
+  #chatsec .cpop input[type=color]::-webkit-color-swatch { border: none; border-radius: 6px; }
+  #chatsec .cpop input[type=color]::-moz-color-swatch { border: none; border-radius: 6px; }
+  body.mob #chatsec .cpop, body.mob #chatsec .cform > .ctool .cpop { position: fixed; left: 0; right: 0; top: auto; bottom: 0; z-index: 70; max-width: none; max-height: 70vh; max-height: 70dvh;
+      overflow: auto; border-radius: 14px 14px 0 0; padding: 14px 14px calc(14px + env(safe-area-inset-bottom)); gap: 12px; box-shadow: 0 -8px 28px #000c; }
+  body.mob #chatsec .cpop .row { gap: 10px; }
+  body.mob #chatsec .cpop .row .lbl { font-size: 13px; }
+  body.mob #chatsec .cpop button.sw2 { width: 38px; height: 38px; min-width: 38px; }
+  body.mob #chatsec .cpop button.mine { height: 38px; font-size: 14px; padding: 0 14px 0 8px; }
+  body.mob #chatsec .cpop button.mine .dot { width: 18px; height: 18px; }
+  body.mob #chatsec .cpop input[type=color] { flex: 0 0 76px; width: 76px !important; height: 38px; }
   #chatsec .cauth { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; font-size: 11px; color: var(--muted); }
   #chatsec .cauth[hidden] { display: none; }
   #chatsec .cauth a.signin { display: inline-flex; align-items: center; gap: 6px; padding: 5px 10px; border-radius: 8px; background: #5865f2; color: #fff;
@@ -2498,6 +2518,16 @@
         const chara = /^\d{1,2}$/.test(t['+mbaa/chara'] || '') ? +t['+mbaa/chara'] : -1;
         const moon = /^[0-2]$/.test(t['+mbaa/moon'] || '') ? +t['+mbaa/moon'] : -1;
         const reply = /^[\w\-+/=:.]{1,100}$/.test(t['+draft/reply'] || '') ? t['+draft/reply'] : null;
+        // the account's profile on every device: its own newest message (history or another device, live) carries the
+        // colour, character and moon it was sent with; newer than this device's last edit, they become this device's too
+        if (irc.account && t.account && key(t.account) === key(irc.account) && COLOR_RE.test(t['+mbaa/color'] || '')) {
+          const when = t.time ? +new Date(t.time) : Date.now();
+          if (when > (prof.mt || 0) && (t['+mbaa/color'] !== prof.color || (validChara(chara) ? chara : -1) !== prof.chara || moon !== prof.moon)) {
+            prof.color = t['+mbaa/color']; prof.chara = validChara(chara) ? chara : -1; prof.moon = moon; prof.mt = when;
+            store.set('mbaa-chat-profile', prof);
+            try { profShow(); } catch (e) {}
+          } else if (when > (prof.mt || 0)) { prof.mt = when; store.set('mbaa-chat-profile', prof); }
+        }
         addLine(target, { nick: shownNick(m.nick, t.account, clean(t['+mbaa/name'] || '')), irc: m.nick, reply, text: clean(text), action, hist, self: m.nick === irc.nick, msgid: t.msgid,
                           time: t.time ? new Date(t.time) : new Date(), color: COLOR_RE.test(t['+mbaa/color'] || '') ? t['+mbaa/color'] : null,
                           chara: validChara(chara) ? chara : -1, moon, cmd: nicoCmds(t['+mbaa/cmd']).join(' '), at });
