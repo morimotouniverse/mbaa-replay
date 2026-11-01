@@ -1033,6 +1033,8 @@
     let i = 0;
     for (const mm of text.matchAll(AT_RE)) {
       if (mm.index > 0 && /[\p{L}\p{N}_]/u.test(text[mm.index - 1])) continue;  // (an e-mail address, not a mention)
+      // (a name has a letter or digit: "@_@", "@-@", "@^@" are faces, not mentions; was a pill "@_" + "@")
+      if (!/[\p{L}\p{N}]/u.test(mm[1])) continue;
       if (mm.index > i) out.push(document.createTextNode(text.slice(i, mm.index)));
       const s = document.createElement('span'); s.className = 'cat';
       s.textContent = '@' + atName(mm[1]); s.title = mm[1];
@@ -3100,7 +3102,8 @@
     if (e.key === 'Escape' && replyTo && (!ment || mpop.hidden) && epop.hidden) { replyEnd(); return; }
     if (!ment || mpop.hidden) return;
     if (e.key === 'ArrowDown' || e.key === 'ArrowUp') { e.preventDefault(); ment.i = (ment.i + (e.key === 'ArrowDown' ? 1 : ment.items.length - 1)) % ment.items.length; mentionDraw(); }
-    else if (e.key === 'Tab' || e.key === 'Enter') { e.preventDefault(); mentionPick(); }
+    // (Enter picks only once a name is being typed: "@" or "@_" then Enter sends the text as typed; Tab always picks)
+    else if (e.key === 'Tab' || (e.key === 'Enter' && (ment.kind === 'emo' || /[\p{L}\p{N}]/u.test(input.value.slice(ment.start + 1, ment.end))))) { e.preventDefault(); mentionPick(); }
     else if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); mentionClose(); }
   });
 
