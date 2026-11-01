@@ -709,6 +709,7 @@ async function play(rep, name, catchUp = 0, want = null) {
   { const b = document.getElementById('ffbadge'); if (b) b.hidden = true; } catchUpShow(null);  // (a new session: its own state)
   misses.clear();
   const s = await newSession(rep, name, want);
+  try { call(s, 'viewer_rate', 1); } catch (e) {}  // (a reused module keeps the last session's live pacing rate)
   // stage animations on, except for native comparisons (?stageAnim=0, hash runs): the oracle's settings have them off
   call(s, 'viewer_stage_anim', Q.get('stageAnim') !== null ? +(Q.get('stageAnim') !== '0') : HASH ? 0 : 1);
   if (Q.get('seal') === '0') call(s, 'viewer_seal_off', 1);
@@ -2258,6 +2259,7 @@ function liveRefeed(s) {  // restore(): after the keyframe is back
 function liveFollow(s, on) {
   s.liveFollow = on;
   if (!on && s.liveFF) { s.liveFF = false; call(s, 'viewer_speed', ui.speed); }
+  if (!on && s.liveTrim) { s.liveTrim = false; call(s, 'viewer_rate', 1); }
   document.getElementById('livebtn').classList.toggle('on', on);
 }
 async function liveGoLive() {
@@ -2465,7 +2467,14 @@ function liveBegin(s) {  // play(): after viewer_play
       call(s, 'viewer_pause', hold || ui.paused || s.seeking ? 1 : 0);
       // up to the jump (or without it): CCCaster's spectateFastFwd, more than 60 frames (2 x NUM_INPUTS) over the kept
       // buffer (its floor: not a burst), two game frames per drawn frame until caught up
-      const ff = !hold && Math.min(ahead, floor) > LIVE_BEHIND + 60;
+      // Pacing: the stream drifts slowly ahead (~1-2 frames a second: each stall's time is not made up). Up to 3 s over
+      // the target it is taken up unseen, the clock at 1.05x (63 game frames a second) from 0.5 s over until back on
+      // target; 2x (CCCaster's spectateFastFwd, with its badge) only for a real backlog past that. (2x from 1 s over
+      // flashed "2x catching up" every 30-40 s all match: artifacts/xz_check/live_catchup)
+      const excess = Math.min(ahead, floor) - LIVE_BEHIND;
+      const ff = !hold && excess > 180;
+      const trim = !hold && !ff && (excess > 30 || (s.liveTrim && excess > 0));
+      if (trim !== !!s.liveTrim) { s.liveTrim = trim; call(s, 'viewer_rate', trim ? 1.05 : 1); }
       if (ff !== !!s.liveFF) { s.liveFF = ff; call(s, 'viewer_speed', ff ? 2 : ui.speed); }
       { const b = document.getElementById('ffbadge'); if (b) b.hidden = !ff; }
       if (s.cssHeld || s.loadHeld) status('live: loading the next game');
