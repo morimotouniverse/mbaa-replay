@@ -725,6 +725,11 @@ async function play(rep, name, catchUp = 0, want = null) {
     s.M.mbaaBootOpened = new Set(s.opened);  // read before the snapshot: a reused instance's later matches never open them
   }
   if (!call(s, 'viewer_load')) { window.__mbaaStarted = -1; loading(false); status('start failed (see console)'); return; }
+  // a live clip's replay: the live session's forcing (clipLtFor), before the first frame
+  s.lt = clipLt && clipLt.name === name && !liveSrc ? clipLt.bytes : null;
+  if (s.lt && !s.M.ccall('viewer_lt_set', 'number', ['array', 'number'], [s.lt, s.lt.length])) { console.warn('clip: live forcing unreadable'); s.lt = null; }
+  if (!s.lt) s.M.ccall('viewer_lt_clear', null, [], []);
+  else console.log(`clip: replay played with its live forcing (${s.lt.length} bytes)`);
   if (HASH) s.M.ccall('viewer_hash_enable', null, [], []);
   call(s, 'viewer_play', 0);
   if (liveSrc && Q.get('live')) liveBegin(s);
@@ -835,7 +840,7 @@ function uiApply(s) {
 function timelineInit(s) {
   const M = s.M;
   kzM = M;
-  const t = s.tl = { kfs: [], simMax: 0, end: null, marks: [], bytes: 0, lastKf: -1, seekMs: [],
+  const t = s.tl = { kfs: [], simMax: 0, end: null, marks: [], fights: [], intro: -1, bytes: 0, lastKf: -1, seekMs: [],
                      want: null, running: false, round: -1, scene: -1, est: repEstimate(s.rep), M };
   M.mbaaTexKfRef = new Map();  // (a reused instance: the last match's keyframes are gone with its timeline)
   M.mbaaFrame = f => {
@@ -846,6 +851,11 @@ function timelineInit(s) {
         t.marks.push([f, round]); t.marks.sort((a, b) => a[0] - b[0]);
       }
       t.scene = scene; t.round = round;
+      // each round's fight start (the intro state 0x55D20B reaching 0 in battle): live clip links anchor on it, as the
+      // pre-fight parts (character intros, round calls skipped by the players) run other lengths live and in a replay
+      const intro = M.HEAPU8[0x55D20B];
+      if (scene === 1 && intro === 0 && t.intro !== 0) t.fights.push(f);
+      t.intro = scene === 1 ? intro : -1;
       if (t.end === null && M._viewer_ended()) t.end = f;
     }
     if (s.liveSrc) { liveCssWatch(s); liveRematchHold(s); liveBanner(s); liveStreak(s); }
@@ -876,7 +886,7 @@ function startScan(s) {
     }
   };
   w.onerror = e => { console.warn('pre-scan failed:', e.message); w.terminate(); };
-  w.postMessage({ files: [...s.want].filter(p => cache.has(p)).map(p => [p, cache.get(p)]), probe: (man.plan && man.plan.probe) || [], rep: s.rep, v });
+  w.postMessage({ files: [...s.want].filter(p => cache.has(p)).map(p => [p, cache.get(p)]), probe: (man.plan && man.plan.probe) || [], rep: s.rep, v, lt: s.lt || null });
 }
 // jump to the previous / next round start (dir -1 / +1)
 function jumpRound(dir) {
@@ -2305,6 +2315,9 @@ function liveBegin(s) {  // play(): after viewer_play
   L.since = L.info.game;
   L.recs = new Map();
   L.next = false;
+  // (the session's finished games' replays, for clip links: liveTapes; a reused instance's older ones go)
+  L.tapes = new Map(); L.firstGame = L.info.game; L.clipPend = null;
+  try { for (const n of s.M.FS.readdir('/lt')) if (n.endsWith('.rep') || n.endsWith('.lt')) s.M.FS.unlink(`/lt/${n}`); } catch (e) {}
   liveFollow(s, true);
   call(s, 'viewer_spectate_open', L.info.rollback, L.info.winCount);
   // the waits that end on a record (the players' retry menu choice, the host's next index ending the VS screen) end
@@ -2334,6 +2347,7 @@ function liveBegin(s) {  // play(): after viewer_play
       }
     } catch (e) { L.failAt = performance.now(); console.warn('live feed:', e); }
     if (session !== s) return;
+    liveTapes(s);
     let ahead = call(s, 'viewer_spectate_buffered');
     // how long the feed has been up and brought nothing new (a failed or timed-out request starts it again: an outage
     // is not the stream going quiet. Was: one 10 s hung request read as "the stream is dry", and with the next game
@@ -2618,7 +2632,7 @@ function grabCard() {
 async function copyTimestamp() {
   const s = session;
   if (!s) return;
-  if (s.liveSrc) { status(LIVE_NOLINK); return; }
+  if (s.liveSrc) return liveClipLink(s);
   const f = s.M._viewer_frame();
   const shots = grabCard();
   const u = new URL(location.origin + location.pathname);
@@ -2771,6 +2785,7 @@ function drawOverlay() {
       });
     }
   }
+  clipChatDraw(g, w, h, M._viewer_frame());  // (a live clip's chat: ?c=)
 }
 
 // ---- controls ----
@@ -3279,7 +3294,6 @@ function clipTick(s, f) {
 // timeline (drag them, or nudge a frame at a time), a looped preview while the panel is open, and Copy link / Save MP4 /
 // Clear. The handles and the panel's text change only when the clip does (drawMarks -> clipUi), never per frame.
 const CLIP_LEN = 1800;  // 30 s
-const LIVE_NOLINK = 'links to a live match: not available (the live stream is not saved as a replay); Save MP4 (E) keeps the clip';
 let clipPanel = false, clipPanelKey = '', clipDrag = null;
 const clipFirst = s => Math.max(1, s.tl.kfs.length ? s.tl.kfs[0].frame : 1);  // (the earliest frame a seek reaches)
 const clipLast = s => s.liveSrc ? Math.max(s.tl.simMax, s.M._viewer_frame()) : tlMax(s.tl);
@@ -3290,10 +3304,12 @@ function clipNow() {
   document.body.classList.remove('sheet');  // (phones: taken from the menu sheet; the panel is over the picture)
   const lo = clipFirst(s), b = Math.max(lo + 1, s.liveSrc ? s.M._viewer_frame() : curFrame()), a = Math.max(lo, b - CLIP_LEN);
   s.clip = { a, b, stop: false, round: false, preview: true, wasLive: !!(s.liveSrc && s.liveFollow) };
+  if (s.liveSrc) Object.assign(s.clip, liveClipWhere(s));
   marksKey = '';
   clipPanelShow(true);
   status(`clip ${fmtTime(a)} – ${fmtTime(b)} (${((b - a) / 60).toFixed(1)} s): drag the handles to trim; ` +
-         (clipIsLive(s) ? 'Save MP4 (E) keeps it; links to a live match are not available' : 'Copy link (C), Save MP4 (E), Esc clears'));
+         (clipIsLive(s) ? (liveClipCan() ? 'Copy link (C) saves this game as a replay, Save MP4 (E), Esc clears' : `Save MP4 (E) keeps it; ${LIVE_SIGNIN}`)
+                        : 'Copy link (C), Save MP4 (E), Esc clears'));
   requestSeek(a).then(() => { if (session === s && s.clip && s.clip.preview && clipPanel && !clipDrag) setPaused(false); });
 }
 function clipPanelShow(on) {
@@ -3313,7 +3329,7 @@ function clipUi(max) {
   const ha = document.getElementById('chA'), hb = document.getElementById('chB');
   if (ha.style.left !== pa) ha.style.left = pa;
   if (hb.style.left !== pb) hb.style.left = pb;
-  const live = clipIsLive(s), key = `${c.a}:${c.b}:${live}`;
+  const live = clipIsLive(s), can = live && liveClipCan(), pend = live && liveClipPending(s), key = `${c.a}:${c.b}:${live}:${can}:${pend}`;
   if (key === clipPanelKey) return;
   clipPanelKey = key;
   document.getElementById('cpa').textContent = fmtTime(c.a);
@@ -3322,8 +3338,12 @@ function clipUi(max) {
   ha.setAttribute('aria-valuenow', c.a); ha.setAttribute('aria-valuetext', fmtTime(c.a));
   hb.setAttribute('aria-valuenow', c.b); hb.setAttribute('aria-valuetext', fmtTime(c.b));
   const link = document.getElementById('cplink');
-  link.disabled = live;
-  link.title = live ? `Copy link: ${LIVE_NOLINK}` : 'Copy a link that plays just this clip (C)';
+  link.disabled = live && !can;
+  link.title = !live ? 'Copy a link that plays just this clip (C)'
+             : !can ? `Copy link: ${LIVE_SIGNIN}`
+             : pend ? 'Copy link: waiting for this game to end (its replay is saved then); the link is copied when it is ready'
+             : 'Copy a link to this clip (C): this game is saved as a replay (once, whoever clips it) with the chat said during the clip';
+  link.classList.toggle('pend', !!pend);
 }
 // move an end of the clip (w: 'a' in, 'b' out) to frame f, kept inside what there is and at least a frame long
 function clipSet(w, f, seek) {
@@ -3381,6 +3401,251 @@ function clipControls() {
   }
   const on = (id, f) => { document.getElementById(id).onclick = e => { e.currentTarget.blur(); f(); }; };
   on('cplink', copyTimestamp); on('cpsave', exportVideo); on('cpclear', clearClip);
+}
+
+// ---- live clip links: a clip of a live match as a replay link (?r=<id>&t=<in>&e=<out>&c=<clip id>&loop=1) ----
+// The game itself keeps a finished game's replay: the session plays the stream in record mode, and at the game's retry
+// menu web/host/spectate.cpp tape_keep writes the game's own tape to MEMFS /lt/g<game>_f<battle start>_e<end>.rep
+// (game: its Loading index, -1 the session's first). liveTapes moves it into the page (L.tapes; nothing leaves the page
+// otherwise). Copy link on a live clip (signed-in chat accounts only): the game's tape and the chat said during the clip
+// go to the Worker (POST <chat path>/clip, tools/web/replay_worker.js liveClip): the replay is stored in the replay
+// store like a shared one (named by its content: one stored replay per game however many clip it), with the players'
+// names in its PCRM block, and the clip's chat as a small JSON (c/<id>) the link names. A game still being played: the
+// link is made when it ends (the clip panel says so; the link is copied, or C copies it, once it is there).
+// Frames: a replay's battle starts at viewer frame REP_BATTLE_AT (the VS screen's 9.4 s first; every replay:
+// harness-design/web_parity/viewer_tools/rep_battle_start_probe.py), the session's at the tape's recFrame + 1 (a live boot
+// goes straight to battle, a rematch after its retry menu and VS screen): replay frame = live frame - recFrame - 1 + REP_BATTLE_AT.
+const REP_BATTLE_AT = 566;
+const LIVE_SIGNIN = 'sign in to share live clips (the chat’s Sign in)';
+const liveClipCan = () => { const C = window.mbaaChat; return !!(C && C.irc && C.irc.account); };
+const liveClipPending = s => !!(s && s.liveSrc && s.liveSrc.clipPend && s.clip && s.liveSrc.clipPend.clip === s.clip);
+// the game at the clip and the chat timeline's local frame - viewer frame (clipNow: the picture is at the clip's out point)
+function liveClipWhere(s) {
+  const L = s.liveSrc, g = call(s, 'viewer_spectate_game'), out = { game: g >= 0 ? g : L.firstGame, loc0: null };
+  // (the chat's local frame: the stream frames fed (each record's u32 at 240) less those still ahead of the picture,
+  // chat.js nowOf; worked out here, as mbaaChatApi.live() gives no buffer count mid-seek)
+  if (L.recs && L.recs.size) {
+    let total = 0;
+    for (const b of L.recs.values()) if (b.length >= 244) total += new DataView(b.buffer, b.byteOffset, b.byteLength).getUint32(240, true);
+    out.loc0 = Math.max(0, total - call(s, 'viewer_spectate_buffered')) - s.M._viewer_frame();
+  }
+  return out;
+}
+function liveTapes(s) {
+  const L = s.liveSrc;
+  if (!L || !s.M) return;
+  let names = [];
+  try { names = s.M.FS.readdir('/lt'); } catch (e) { return; }
+  for (const n of names) {
+    const m = n.match(/^g(-?\d+)_f(\d+)_e(\d+)\.rep$/);
+    if (!m) continue;
+    let rep = null, lt = null;
+    try { rep = s.M.FS.readFile(`/lt/${n}`); s.M.FS.unlink(`/lt/${n}`); } catch (e) { continue; }
+    // (its live forcing, <stem>.lt, written before it: what the session did to the game from outside its frames, which a
+    // replay of the tape needs to play what the session showed: web/host/live_tape.cpp)
+    const ltn = `/lt/${n.slice(0, -4)}.lt`;
+    try { lt = s.M.FS.readFile(ltn); s.M.FS.unlink(ltn); } catch (e) {}
+    const g = +m[1] < 0 ? L.firstGame : +m[1];
+    const old = L.tapes.get(g);
+    if (!old) console.log(`live: game ${g}'s replay kept (${rep.length} bytes, live forcing ${lt ? lt.length : 0} bytes, battle from frame ${m[2]}, end ${m[3]})`);
+    if (!old || !old.id) L.tapes.set(g, { rep, lt, rec: +m[2], end: +m[3] });
+  }
+  const p = L.clipPend;
+  if (p && L.tapes.has(p.game) && !p.busy) liveClipUpload(s, p);
+  const can = liveClipCan();
+  if (can !== L.clipCan) { L.clipCan = can; clipPanelKey = ''; marksKey = ''; }
+}
+// the chat lines said during the clip (#melty and the match channel): each placed at its stream position (+mbaa/at, else
+// its server time on the capture's clock), as the overlay places them; [{o: frames after the clip's in point, n: name,
+// x: text as on the picture, m: Niconico commands, c: the sender's colour, a: 1 an action}]. Nothing else of a line.
+async function liveClipChat(s, c) {
+  const C = window.mbaaChat, lv = window.mbaaChatApi.live(), L = s.liveSrc;
+  if (!C || !lv || !lv.recs || c.loc0 == null) return [];
+  const idx = C.nowOf({ ...lv, ahead: 0 }).idx;
+  let clock = C.tl && C.tl.clock;
+  try { const r = await fetch(`${LIVE}/live/${L.id}/clock`, { cache: 'no-store' }); if (r.ok) clock = await r.json(); } catch (e) {}
+  const st = C.status(), want = ['#melty', st.matchChan].filter(Boolean).map(n => n.toLowerCase()), out = [];
+  for (const ch of C.chans.values()) {
+    if (!want.includes(String(ch.name).toLowerCase())) continue;
+    for (const l of ch.lines) {
+      if (l.sys || l.gone) continue;
+      const pic = String((l.pic != null ? l.pic : l.text) || ''), x = l.action ? pic : pic.replace(/^(@\S+[:,]?\s*)+/, '').trim();
+      if (!x) continue;
+      const pos = l.at || C.clockPos(clock, +l.time);
+      const loc = pos ? C.localOf(idx, pos) : null;
+      if (loc == null) continue;
+      const f = loc - c.loc0;
+      if (f < c.a || f > c.b) continue;
+      out.push({ o: f - c.a, n: String(l.nick || '').slice(0, 40), x: x.slice(0, 300), m: String(l.cmd || '').slice(0, 80),
+                 c: /^#[0-9a-f]{6}$/i.test(l.color || '') ? l.color : '', a: l.action ? 1 : 0 });
+    }
+  }
+  return out.sort((p, q) => p.o - q.o).slice(0, 500);
+}
+async function liveClipLink(s) {
+  const L = s.liveSrc, c = s.clip;
+  if (!c) { status('live: take a clip (X) to share a moment of a live match'); return; }
+  if (!liveClipCan()) { status(`live clip: ${LIVE_SIGNIN}`); return; }
+  if (L.clipPend && L.clipPend.clip === c) {  // (its link is there: copy it now, a click being a user gesture)
+    if (L.clipPend.link) return liveClipCopy(L.clipPend.link);
+    status('live clip: the link is made when this game ends (its replay is saved then): Esc to watch on, it is copied then');
+    return;
+  }
+  const p = { clip: c, game: c.game, a: c.a, b: c.b, chat: await liveClipChat(s, c), link: null, busy: false };
+  L.clipPend = p; clipPanelKey = ''; marksKey = '';
+  liveTapes(s);
+  if (!L.tapes.has(p.game) && !p.busy)
+    status('live clip: the link is made when this game ends (its replay is saved then): Esc to watch on, it is copied then');
+}
+async function liveClipUpload(s, p) {
+  const L = s.liveSrc, T = L.tapes.get(p.game);
+  p.busy = true;
+  status('live clip: saving the game as a replay…');
+  try {
+    // frames in the replay: anchored at the battle's first frame (the session's frame T.rec + 1: T.rec is the 0-based
+    // step the game went to record mode at; the replay's REP_BATTLE_AT). With the game's live forcing (T.lt) the replay
+    // then plays the session's frames exactly, rounds, intros and win poses included (live_clip_link_check: clipFix moves 0)
+    const off = T.rec + 1 - REP_BATTLE_AT;
+    const t = Math.max(1, p.a - off), e = Math.max(t + 1, Math.min(T.end - off, p.b - off));
+    const rep = T.rep.slice();
+    // the header's date: the game's start on the capture's clock (the same for every viewer: one stored replay per game)
+    try {
+      const r = await fetch(`${LIVE}/live/${L.id}/clock`, { cache: 'no-store' });
+      const k = r.ok ? await r.json() : null, at = k && k.wall != null ? k.s.find(x => x[1] >= p.game) : null;
+      if (at) {
+        const d = new Date(k.wall + at[0]), dv = new DataView(rep.buffer);
+        [d.getUTCFullYear(), d.getUTCMonth() + 1, d.getUTCDate(), d.getUTCHours(), d.getUTCMinutes(), d.getUTCSeconds()].forEach((v, i) => dv.setUint16(0x18 + 2 * i, v, true));
+      }
+    } catch (err) {}
+    const b64 = u => { let bin = ''; for (let i = 0; i < u.length; i += 0x8000) bin += String.fromCharCode(...u.subarray(i, i + 0x8000)); return btoa(bin); };
+    const chat = p.chat.map(x => ({ ...x, o: x.o + (p.a - off - t) })).filter(x => x.o >= 0 && x.o <= e - t);
+    // the clip by the game's fight starts (k: the round's fight, da / db: frames after its start), which the link's page
+    // turns into its own frames (clipFix): t / e above are the estimate the link carries
+    const fights = s.tl.fights.filter(f => f >= T.rec && f <= T.end), k = Math.max(0, fights.filter(f => f <= p.a).length - 1);
+    const at = fights.length ? { k, da: p.a - fights[k], db: p.b - fights[k] } : null;
+    // lt: the game's live forcing (liveTapes), which the link's page plays the replay with (clipLtFor)
+    const body = { rep: b64(rep), lt: T.lt ? b64(T.lt) : null, t, e, at, names: (L.info.names || []).map(n => String(n || '').trim()), match: L.info.match || null, chat };
+    const r = await fetch(`${LIVE}/clip`, { method: 'POST', credentials: 'same-origin', body: JSON.stringify(body),
+                                           headers: { 'Content-Type': 'application/json' } });
+    const j = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error(j.error || `HTTP ${r.status}`);
+    T.id = j.r;
+    const u = new URL(LIVE_CLIP_SITE + '/');
+    u.searchParams.set('r', j.r); u.searchParams.set('t', t); u.searchParams.set('e', e);
+    if (j.c) u.searchParams.set('c', j.c);
+    u.searchParams.set('loop', '1');
+    p.link = u.toString(); p.t = t; p.e = e; p.id = j.r; p.cid = j.c;
+    window.__mbaaLastLink = p.link;
+    clipPanelKey = ''; marksKey = '';
+    try { await navigator.clipboard.writeText(p.link); status(`copied: ${p.link}`); }
+    catch (err) { status(`live clip link ready: Copy link (C) copies it: ${p.link}`); }
+  } catch (err) {
+    console.warn('live clip link failed:', err);
+    status(`live clip link failed: ${err.message || err}`);
+    if (L.clipPend === p) L.clipPend = null;
+    clipPanelKey = ''; marksKey = '';
+  } finally { p.busy = false; }
+}
+async function liveClipCopy(text) {
+  try { await navigator.clipboard.writeText(text); status(`copied: ${text}`); } catch (e) { prompt('copy:', text); }
+}
+// (links go to the public site, never to the chat page's own path)
+const LIVE_CLIP_SITE = Q.get('clipSite') || (/^(127\.0\.0\.1|localhost)$/.test(location.hostname) ? location.origin + location.pathname.replace(/\/[^/]*$/, '') : 'https://watch.meltyblood.org');
+
+// ---- a live clip's chat on a replay link (?c=<clip id>): the comments said during the clip, drawn over the picture as
+// the chat's Niconico overlay draws them (its 1920x1080 stage scaled to the picture's height; scrolling (naka) comments
+// cross in (1725 + width) / v s, ue / shita stay 3 s), at the replay's frames, so pauses, seeks and the loop show them
+// where they were said; Save MP4 draws them too (drawOverlay)
+let clipChat = null;  // [{f, x, col, px, row, loc, w, v, life, y}] or null
+const CC_SIZE = { small: [51, 51], medium: [76, 82], big: [110, 129] };
+const CC_COLOR = { white: '#FFFFFF', red: '#FF0000', pink: '#FF8080', orange: '#FFC000', yellow: '#FFFF00', green: '#00FF00',
+  cyan: '#00FFFF', blue: '#0000FF', purple: '#C000FF', black: '#000000', white2: '#CCCC99', niconicowhite: '#CCCC99',
+  red2: '#CC0033', truered: '#CC0033', pink2: '#FF33CC', orange2: '#FF6600', passionorange: '#FF6600', yellow2: '#999900',
+  madyellow: '#999900', green2: '#00CC66', elementalgreen: '#00CC66', cyan2: '#00CCCC', blue2: '#3399FF', marinblue: '#3399FF',
+  purple2: '#6633CC', nobleviolet: '#6633CC', black2: '#666666' };
+const CC_FONT = '"Arial", "MS PGothic", "Hiragino Kaku Gothic ProN", "Noto Sans CJK JP", sans-serif';
+async function clipChatLoad(jp, t) {
+  try {
+    const j = await jp, ms = document.createElement('canvas').getContext('2d'), out = [];
+    const base = Number.isFinite(+j.t) ? +j.t : t;
+    for (const l of (j.chat || [])) {
+      const cmds = String(l.m || '').toLowerCase().split(/\s+/).filter(Boolean);
+      const loc = cmds.find(c => c === 'ue' || c === 'shita') || 'naka', size = cmds.find(c => CC_SIZE[c]) || 'medium';
+      const col = cmds.map(c => CC_COLOR[c] || (/^#[0-9a-f]{6}$/.test(c) ? c : null)).find(Boolean) || l.c || '#FFFFFF';
+      const x = Array.from(l.a ? `${l.n} ${l.x}` : String(l.x || '')), text = x.length > 75 ? x.slice(0, 74).join('') + '…' : x.join('');
+      const [px, row] = CC_SIZE[size];
+      ms.font = `600 ${px}px ${CC_FONT}`;
+      const w = Math.ceil(ms.measureText(text).width) + 8, c = { f: base + (+l.o || 0), text, col, px, row, loc, w, y: 0 };
+      if (loc === 'naka') { c.v = (1530 + 0.95 * w) / 4; c.life = (1725 + w) / c.v; } else c.life = 3;
+      out.push(c);
+    }
+    // rows: the topmost where it meets no comment placed before it (ue from the top, shita from the bottom)
+    out.sort((p, q) => p.f - q.f);
+    const xAt = (c, T) => c.loc === 'naka' ? 1725 - c.v * (T - c.f / 60) : (1920 - c.w) / 2;
+    const meet = (a, c) => {
+      if (a.loc !== c.loc) return false;
+      const s0 = Math.max(a.f / 60, c.f / 60), s1 = Math.min(a.f / 60 + a.life, c.f / 60 + c.life);
+      if (s0 >= s1) return false;
+      if (c.loc !== 'naka') return true;
+      const r0 = xAt(c, s0) - xAt(a, s0), r1 = xAt(c, s1) - xAt(a, s1);
+      return Math.min(r0, r1) <= a.w + 5 && Math.max(r0, r1) >= -(c.w + 5);
+    };
+    for (const [k, c] of out.entries()) {
+      const near = out.slice(0, k).filter(a => meet(a, c));
+      let y = 0;
+      for (let moved = true; moved;) { moved = false; for (const a of near) if (y < a.y + a.row && a.y < y + c.row) { y = a.y + a.row; moved = true; } }
+      c.y = y + c.row > 1080 ? Math.floor(Math.random() * Math.max(1, 1080 - c.row)) : y;
+    }
+    clipChat = out;
+    overlayDirty = true;
+    console.log(`clip chat: ${out.length} comments`);
+    if (j.at && Number.isInteger(j.at.k)) clipFix(j.at);
+  } catch (e) { console.warn('clip chat:', e); }
+}
+// A live clip's replay is played with the game's live forcing (the clip JSON's lt, base64 of the live session's .lt:
+// web/host/live_tape.cpp): the raw pad words of every pre-fight / win pose phase (skipped intros and win poses), the RNG
+// forced at the join point, CCCaster's intro clear. Without it the replay plays the full intro and win poses (other round
+// start frames and start positions than the live session showed). For the replay of that link only (play(): by name)
+let clipLt = null;  // {name, bytes} or null
+async function clipLtFor(jp, name) {
+  try {
+    const j = await jp;
+    if (j && typeof j.lt === 'string' && j.lt) clipLt = { name, bytes: Uint8Array.from(atob(j.lt), ch => ch.charCodeAt(0)) };
+  } catch (e) { console.warn('clip:', e); }
+}
+// the link's t / e are an estimate (the live session's frames less a fixed lag); the clip JSON has the clip by the
+// game's fight starts ({k, da, db}: tl.fights), exact: once this replay has played to that fight start, the clip (and
+// its chat) move there
+async function clipFix(at) {
+  let s = null;
+  for (let i = 0; i < 600 && !(s && s.clip && s.tl && !s.seeking); i++) { await new Promise(r => setTimeout(r, 100)); s = session; }
+  if (!s || !s.clip) return;
+  for (let i = 0; i < 40 && s.tl.fights.length <= at.k && s.tl.end === null && session === s; i++) await requestSeek(s.tl.simMax + 600);
+  if (session !== s || s.tl.fights.length <= at.k || !s.clip) return;
+  const F = s.tl.fights[at.k], a = Math.max(1, F + at.da), b = Math.max(a + 1, F + at.db), d = a - s.clip.a;
+  if (clipChat) for (const c of clipChat) c.f += d;
+  s.clip.a = a; s.clip.b = b; marksKey = ''; overlayDirty = true;
+  if (d) console.log(`clip: moved ${d} frames to the fight start's (round ${at.k})`);
+  await requestSeek(a);
+}
+// g: the overlay canvas' context (w x h over the picture); f: the frame on screen
+function clipChatDraw(g, w, h, f) {
+  if (!clipChat || !clipChat.length || Q.get('clipchat') === '0') return;
+  const k = h / 1080, x0 = (w - h * 16 / 9) / 2, T = f / 60;
+  g.save();
+  g.beginPath(); g.rect(0, 0, w, h); g.clip();
+  g.textBaseline = 'middle'; g.lineJoin = 'round';
+  for (const c of clipChat) {
+    const dt = T - c.f / 60;
+    if (dt < 0 || dt > c.life) continue;
+    const x = c.loc === 'naka' ? 1725 - c.v * dt : (1920 - c.w) / 2;
+    const y = c.loc === 'shita' ? 1080 - c.y - c.row / 2 : c.y + c.row / 2;
+    g.font = `600 ${(c.px * k).toFixed(2)}px ${CC_FONT}`;
+    g.lineWidth = Math.max(1, 4 * k); g.strokeStyle = c.col === '#000000' ? '#FFFFFF' : '#000000';
+    g.strokeText(c.text, x0 + (x + 4) * k, y * k);
+    g.fillStyle = c.col; g.fillText(c.text, x0 + (x + 4) * k, y * k);
+  }
+  g.restore();
 }
 
 // ---- video export: the clip, or the round being watched, as a 1280x960 60 fps video (every game frame drawn 2x,
@@ -3469,7 +3734,7 @@ async function fastExport(s, c) {
       if (M._viewer_frame() === k0) break;  // the end of the replay (or of the live stream received)
       if (k < c.a) continue;
       g.drawImage(cv, 0, 0, EXPORT_W, EXPORT_H);
-      if (ui.boxes || ui.inputs) { drawOverlay(); g.drawImage(ov, 0, 0, EXPORT_W, EXPORT_H); }
+      if (ui.boxes || ui.inputs || clipChat) { drawOverlay(); g.drawImage(ov, 0, 0, EXPORT_W, EXPORT_H); }
       const vf = new VideoFrame(out, { timestamp: Math.round((k - c.a) * 1e6 / 60), duration: Math.round(1e6 / 60) });
       venc.encode(vf, { keyFrame: (k - c.a) % 120 === 0 }); vf.close();
       while (venc.encodeQueueSize > 6) await new Promise(r => setTimeout(r, 1));
@@ -3615,7 +3880,7 @@ async function exportRealtime(s, c) {
 function recDraw() {
   const r = rec;
   r.g.drawImage(document.getElementById('canvas'), 0, 0, 1280, 960);
-  if (ui.boxes || ui.inputs) r.g.drawImage(document.getElementById('overlay'), 0, 0, 1280, 960);
+  if (ui.boxes || ui.inputs || clipChat) r.g.drawImage(document.getElementById('overlay'), 0, 0, 1280, 960);
   if (r.track.requestFrame) r.track.requestFrame();
 }
 function recTick(s, f) {
@@ -3953,6 +4218,10 @@ async function main() {
   const rq = Q.get('r') || '';
   const autoload = /^[0-9a-f]{64}$/.test(rq) ? `${REPLAY_STORE}/rep/${rq}.rep`  // links from before short ids
                  : /^[A-Za-z0-9_-]{8,43}$/.test(rq) ? `${REPLAY_STORE}/s/${rq}` : Q.get('rep');
+  // a live clip (?c=): its JSON (the chat said during it, and the game's live forcing, which the replay is played with)
+  const clipJ = /^[A-Za-z0-9_-]{8,43}$/.test(Q.get('c') || '') && autoload
+    ? fetch(`${REPLAY_STORE}/c/${Q.get('c')}`).then(r => { if (!r.ok) throw new Error(`HTTP ${r.status}`); return r.json(); }) : null;
+  if (clipJ) clipChatLoad(clipJ, +(Q.get('t') || 0));
   liveJumpInit();
   liveListShow();
   if (Q.get('live')) {  // spectating: the live controls and the player block; the replay-only controls go (.replayonly)
@@ -3970,7 +4239,12 @@ async function main() {
       return startItem(Math.min(pl.items.length, Math.max(1, +(Q.get('i') || 1))) - 1);
     } catch (e) { status(`could not load the playlist: ${e.message}`); return; }
   }
-  if (autoload) { window.__mbaaRepUrl = autoload; start(new File([await (await fetch(autoload)).arrayBuffer()], autoload)); }
+  if (autoload) {
+    window.__mbaaRepUrl = autoload;
+    const file = new File([await (await fetch(autoload)).arrayBuffer()], autoload);
+    if (clipJ) await clipLtFor(clipJ, autoload);  // (before the first frame: the forcing starts at the battle's first)
+    start(file);
+  }
 }
 main().catch(e => { console.error(e); status('error: ' + e.message); });
 

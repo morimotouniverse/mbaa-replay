@@ -236,6 +236,8 @@
   #clippanel .cprange { font-variant-numeric: tabular-nums; white-space: nowrap; color: #d6f2ff; }
   #clippanel .cprange b { font-weight: 700; }  #clippanel #cplen { color: var(--muted); margin-left: 4px; }
   #clippanel .cpg { display: inline-flex; align-items: center; gap: 2px; white-space: nowrap; }
+  #clippanel #cplink.pend { animation: cppend 1.2s ease-in-out infinite alternate; }  /* (a live clip's link: made when the game ends) */
+  @keyframes cppend { from { opacity: 1; } to { opacity: .5; } }
   #clippanel .lbl { margin-right: 2px; }
   #clippanel button { height: 28px; min-width: 32px; padding: 0 7px; line-height: 1; font-size: 12px; font-variant-numeric: tabular-nums; }
   #clippanel button.txt { display: inline-flex; align-items: center; gap: 4px; font-weight: 650; }
@@ -761,8 +763,8 @@
   </div>
 </div>
 </div>
-<script src="mbaa.js?v=27c9c253ba3f"></script>
+<script src="mbaa.js?v=b6a559796ff0"></script>
 <script src="bgm_stream.js?v=407ac29e5c89"></script>
-<script src="viewer.js?v=db9553d198cf"></script>
+<script src="viewer.js?v=8832a9a34af0"></script>
 </body>
 </html>

@@ -2,7 +2,7 @@
 // plays the replay as fast as it can and reports every round start and the exact end, so the timeline shows all rounds
 // and the real length before playback reaches them. It never touches the playing session.
 self.onmessage = async e => {
-  const { files, probe, rep, v } = e.data;
+  const { files, probe, rep, v, lt } = e.data;
   importScripts('mbaa_scan.js' + (v ? `?${v}` : ''));
   const M = await MBAASCAN({ print: () => {}, printErr: () => {},
                             locateFile: p => (v && p.endsWith('.wasm') ? `${p}?${v}` : p) });
@@ -12,6 +12,7 @@ self.onmessage = async e => {
   for (const [p, d] of files) { mkdirs('/game/' + p); FS.writeFile('/game/' + p, d); }
   FS.writeFile('/game/replay.rep', rep);
   if (!M._scan_start()) { postMessage({ error: 'scan boot failed' }); return; }
+  if (lt) { FS.writeFile('/game/replay.lt', lt); M._scan_lt(); }  // (a live clip's replay: its live forcing)
   const marks = () => { const n = M._scan_mark_count(), p = M._scan_marks() >> 2, out = [];
                         for (let i = 0; i < n; i++) out.push([M.HEAP32[p + 2 * i], M.HEAP32[p + 2 * i + 1]]); return out; };
   const t0 = performance.now();
