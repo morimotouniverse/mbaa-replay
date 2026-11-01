@@ -1537,8 +1537,12 @@ function selFrame(cv, cell, p, f) {
   c.drawImage(plArt.cursor, (fr % 8) * 64, Math.floor(fr / 8) * 64, 64, 64, 0, 0, 64 * k, 64 * k);
   c.drawImage(plArt.cursor, (tag % 8) * 64, Math.floor(tag / 8) * 64, 64, 64, 0, 0, 64 * k, 64 * k);
 }
+let plAnimF = -1;
 function playersAnimate(t) {
   const box = document.getElementById('players');
+  const fNow = Math.floor(t * 60 / 2000) % 10;
+  if (fNow === plAnimF) { requestAnimationFrame(playersAnimate); return; }  // (the cursor frame changes 30 times a second)
+  plAnimF = fNow;
   if (!box.hidden && plArt) {
     const f = Math.floor(t * 60 / 2000) % 10;
     box.querySelectorAll('.pl').forEach((row, p) => selFrame(row.querySelector('.ico'), plCells[p], p, f));
@@ -2830,6 +2834,16 @@ function drawOverlay() {
 // ---- controls ----
 function fmtTime(f) { const sec = f / 60; return `${Math.floor(sec / 60)}:${(sec % 60).toFixed(1).padStart(4, '0')}`; }
 let seekDragging = false, marksKey = '';
+// (the page writes only what changed: a text or a slider rewritten every display frame costs a style / layout pass on
+// phones; the time changes 10 times a second, the slider's fill when it moves a whole pixel, the frame number only
+// where it shows)
+const uiLast = { time: '', dur: '', fc: '', px: -1, sw: 0, fcShown: true };
+// (sizes read on resize, never inside the frame: a layout read after the frame's writes would force a synchronous layout)
+const uiMeasure = () => { const sk = document.getElementById('seek'), fc = document.getElementById('fc');
+  uiLast.sw = sk ? sk.clientWidth : 0; uiLast.fcShown = !!fc && fc.offsetParent !== null; uiLast.px = -1; };
+addEventListener('resize', () => requestAnimationFrame(uiMeasure));
+if (window.ResizeObserver) addEventListener('load', () => { const tb = document.querySelector('.tbar'); if (tb) new ResizeObserver(() => uiMeasure()).observe(tb); });
+const setText = (id, k, v) => { if (uiLast[k] !== v) { uiLast[k] = v; document.getElementById(id).textContent = v; } };
 function uiLoop() {
   const s = session;
   if (s && s.tl) {
@@ -2838,11 +2852,12 @@ function uiLoop() {
     if (rec) { try { recTick(s, f); } catch (e) { recFail(e); } }
     const seek = document.getElementById('seek');
     if (+seek.max !== max) seek.max = max;
-    if (!seekDragging) seek.value = t.want !== null ? t.want : f;
-    document.getElementById('time').textContent = fmtTime(f);
-    document.getElementById('dur').textContent = `/ ${fmtTime(max)}${t.end === null ? '+' : ''}`;
-    document.getElementById('fc').textContent = `frame ${f}`;
-    seek.style.setProperty('--p', `${(100 * seek.value / Math.max(1, max)).toFixed(2)}%`);
+    if (!seekDragging) { const v = t.want !== null ? t.want : f; if (+seek.value !== v) seek.value = v; }
+    setText('time', 'time', fmtTime(f));
+    setText('dur', 'dur', `/ ${fmtTime(max)}${t.end === null ? '+' : ''}`);
+    if (uiLast.fcShown || uiLast.fc === '') setText('fc', 'fc', `frame ${f}`);
+    const px = Math.round((uiLast.sw || 1000) * seek.value / Math.max(1, max));
+    if (px !== uiLast.px) { uiLast.px = px; seek.style.setProperty('--p', `${(100 * seek.value / Math.max(1, max)).toFixed(2)}%`); }
     drawMarks(t, max);
     if (f !== lastDrawnFrame || overlayDirty) { lastDrawnFrame = f; overlayDirty = false; drawOverlay(); }
   }
