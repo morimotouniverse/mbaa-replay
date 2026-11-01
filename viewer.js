@@ -3697,7 +3697,9 @@ function fitStage() {
     for (let n = 0; n < 3; n++) { const h = trAt(r[0]); if (h === trH) break; trH = h; r = pick(trH); }
     return setW(r[0], r[1]);
   }
-  const Wwin = full ? window.innerWidth : document.documentElement.clientWidth - 32;
+  const fsChatW = full && stage.classList.contains('fschat') ? Math.round(Math.min(400, Math.max(300, window.innerWidth * 0.22))) : 0;
+  if (fsChatW) root.style.setProperty('--chatw', `${fsChatW}px`);
+  const Wwin = full ? window.innerWidth - fsChatW : document.documentElement.clientWidth - 32;
   const H = full ? window.innerHeight : window.innerHeight - 16;
   // a phone in fullscreen with FS_SIDE or more beside the full-height picture (landscape): the controls go there
   // (.sidebar); desktop (any shape, 16:9 to 32:9) keeps the bar over the picture's bottom
@@ -3776,7 +3778,7 @@ function placeControls(mob) {
   on('menub', () => b.classList.add('sheet'));
   on('sheetx', () => b.classList.remove('sheet'));
   on('profb', () => { b.classList.remove('sheet'); const d = document.querySelector('#chatsec details'); if (d) d.open = true; });
-  on('chattog', () => { chatHidden = !chatHidden; try { localStorage.setItem('mbaaChatHidden', chatHidden ? '1' : '0'); } catch (e) {} fitStage(); });
+  on('chattog', () => { chatHidden = !chatHidden; try { localStorage.setItem('mbaaChatHidden', chatHidden ? '1' : '0'); } catch (e) {} fsChatPlace(); fitStage(); });
   const typing = el => !!el && el.matches && el.matches('#chatsec input[type=text], #chatsec textarea');
   document.addEventListener('focusin', e => { if (b.classList.contains('mob') && typing(e.target) && !b.classList.contains('kbd')) { b.classList.add('kbd'); fitStage(); } });
   document.addEventListener('focusout', () => setTimeout(() => {
@@ -3810,8 +3812,22 @@ function setFs(on) {
     stage.classList.remove('idle');
     clearTimeout(fsTimer);
   }
+  fsChatPlace();
   marksKey = '';  // (the timeline's width changed: its marks are drawn again)
   fitStage();
+}
+// fullscreen with the chat shown (desktop, a chat page): the chat column moves into the fullscreen layer, on the right,
+// the picture fitted to the rest (Twitch's fullscreen chat); the chat toggle in the bar takes it out again
+function fsChatPlace() {
+  const stage = document.querySelector('.stage'), col = document.getElementById('chatcol'), b = document.body;
+  if (!stage || !col) return;
+  const want = stage.classList.contains('fs') && b.classList.contains('haschat') && !b.classList.contains('mob') && !chatHidden;
+  const home = document.getElementById('chathome');
+  if (want && !home) { col.before(Object.assign(document.createElement('div'), { id: 'chathome', hidden: true })); stage.append(col); }
+  else if (!want && home) home.replaceWith(col);
+  stage.classList.toggle('fschat', want);
+  const ct = document.getElementById('chattog');
+  if (ct) ct.classList.toggle('on', !chatHidden);
 }
 function fsWake() {
   const stage = document.querySelector('.stage');

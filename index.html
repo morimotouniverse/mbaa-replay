@@ -52,13 +52,17 @@
   /* (viewer.js fitStage: room under the picture for the whole bar) the picture at the block's top, the bar under it */
   .stage.fs.fsroom { align-items: flex-start; padding-top: var(--fstop, 0px); box-sizing: border-box; }
   .stage.fs.fsroom:not(.sidebar) .fsbar { bottom: auto; top: calc(var(--fstop, 0px) + var(--w) * 3 / 4); padding-top: 6px; background: none; transform-origin: 50% 0; }
-  .stage.fs.fsroom.idle .fsbar { opacity: 1; pointer-events: auto; }
+  /* fullscreen chat (Twitch's): the chat column inside the fullscreen picture's layer, on the right (viewer.js fsChatPlace) */
+  .stage.fs.fschat { padding-right: var(--chatw); box-sizing: border-box; }
+  .stage.fs.fschat > #chatcol { display: flex; position: absolute; right: 0; top: 0; bottom: 0; width: var(--chatw); height: auto;
+                                border-radius: 0; border-width: 0 0 0 1px; z-index: 3; }
+  .stage.fs.fschat:not(.sidebar) .fsbar { left: calc((100% - var(--chatw)) / 2); width: calc(max(var(--w), min(100% - var(--chatw), 1180px)) / var(--fk)); }
   .fsbar #transportsec { width: 100%; padding: 0; }
   .fsbar #time { font-size: 22px; }  .fsbar :is(#dur, #fc) { font-size: 13px; color: #c8c8d8; }
   .fsbar .tbar button:not(#pause) { min-height: 36px; }
   .fsbar .tbar .sk { font-size: 13.5px; }  .fsbar .tbar .vchip { font-size: 12px; height: 28px; }  .fsbar .tbar .i { width: 20px; height: 20px; }
   /* (the chat column and the menu sheet are outside the fullscreen picture: their buttons go with them) */
-  .fsbar :is(#chattog, #menub) { display: none !important; }
+  .fsbar #menub, body:is(.mob, :not(.haschat)) .fsbar #chattog { display: none !important; }  /* (desktop: the chat column's toggle stays: the fullscreen chat) */
   .stage.fs.idle .fsbar { opacity: 0; pointer-events: none; }
   .stage.fs.idle { cursor: none; }
   body.mob .fsbar .tbar button { min-width: 44px; min-height: 40px; }
@@ -738,6 +742,6 @@
 </div>
 <script src="mbaa.js?v=35b9f117f88e"></script>
 <script src="bgm_stream.js?v=407ac29e5c89"></script>
-<script src="viewer.js?v=3b4568efa60d"></script>
+<script src="viewer.js?v=f6b51293ced0"></script>
 </body>
 </html>
