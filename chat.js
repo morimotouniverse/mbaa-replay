@@ -380,8 +380,10 @@
     if (l.hist) renderSoon();
     else { logEl.append(lineEl(l)); if (logEl.children.length > MAXLINES) logEl.firstChild.remove(); }
     if (stick || l.self) logEl.scrollTop = logEl.scrollHeight;
-    // (a match channel's comments: on its timeline, tlAdd above; #melty's: as they arrive)
-    if (!l.hist && !l.sys && !isMatch(name)) danmaku(l);
+    // (a match channel's comments: on its timeline, tlAdd above, while watching back (DVR); following live, as they
+    // arrive, as #melty's: on the wall clock, so they keep crossing through the result screen, a character select and
+    // the switch to the next game, where the stream position stops or starts again)
+    if (!l.hist && !l.sys && (!isMatch(name) || following())) danmaku(l);
   }
   let renderPend = 0;  // (a match's whole history arrives line by line: one redraw for the lot)
   const renderSoon = () => { if (!renderPend) renderPend = setTimeout(() => { renderPend = 0; render(); }, 0); };
@@ -707,6 +709,7 @@
     for (const e of tl.entries) e.raw = null;
     if (tl.cv) { tl.cv.remove(); tl.cv = null; }
   }
+  function following() { const lv = api.live(); return !!(lv && lv.follow); }
   function tlKick() { if (!tl.raf && tl.inst && overOn.checked) tl.raf = requestAnimationFrame(tlFrame); }
   function tlFrame() {
     tl.raf = 0;
@@ -714,6 +717,9 @@
     const lv = api.live();
     if (!lv || lv.recs !== tl.recs) { tlDrop(); tlPlace(); return; }
     pin();
+    // (following live the comments run on the wall clock (danmaku): the timeline shows only when watching back)
+    if (tl.cv) tl.cv.style.visibility = lv.follow ? 'hidden' : '';
+    if (lv.follow) { tl.vpos = -1; tl.raf = requestAnimationFrame(tlFrame); return; }
     const dpr = Math.min(2, window.devicePixelRatio || 1);
     if (`${over.clientWidth}x${over.clientHeight}@${dpr}` !== tl.size && !tlBuild()) return;
     const now = nowOf(lv);
