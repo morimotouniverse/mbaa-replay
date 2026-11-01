@@ -439,6 +439,19 @@ function audioHooks(Module, s) {
   // through the game's track changes, stops and seeks, at a steady volume (radioLevel: the music's own level, without its fades)
   const radioOn = () => radio && !HASH;
   const play = (path, loop, loopPos, offset) => {
+    // (the "...and nothing heart" stage's music: off unless the viewer turned it on; songSub)
+    const sub = !radioOn() && songSub(path, Module.HEAP32[STAGE_ID >> 2]);
+    if (sub) {
+      if (!cache.has(sub.key)) {  // (fetched on first use: then played from where the game's track would be)
+        const t0 = actx ? actx.currentTime : 0;
+        fetchAll(man, withSiblings(man, [sub.key.replace(/\.opus$/, '.ogg')]), '', true)
+          .then(() => { if (session === s && bgmPath === '' && cache.has(sub.key)) play(path, loop, loopPos, offset + (actx ? actx.currentTime - t0 : 0)); })
+          .catch(() => {});
+        halt();
+        return;
+      }
+      path = sub.path; loop = true; loopPos = sub.loopPos;
+    }
     if (radioOn()) {
       if (bgm && bgmPath === radio.path) return;
       path = radio.path; loop = true; loopPos = radio.loopPos; offset = 0;
@@ -525,6 +538,20 @@ function bgmDecode(p) {
   return bgmDecoded.get(p);
 }
 
+// Stage 55 ("...and nothing heart", the Ryougi stage): its music (and the Kara no Kyoukai track bgmme55 the game files
+// ship) gets streams copyright-struck, so it is replaced by another stage's track unless the viewer turned it on
+// (settings: the song, remembered: mbaa-song55). Exports follow what plays. (user 2026-11-01)
+const SONG_STAGE = 55, SONG_SUB = 'bgmme30';  // (Silent Rumble, the shrine stage's)
+let songOn = false;
+try { songOn = localStorage.getItem('mbaa-song55') === '1'; } catch (e) {}
+function songSub(path, stage) {
+  if (songOn || !path) return null;
+  const m = path.match(/bgmme5([56])\.(ogg|opus)$/i);
+  if (!m || (m[1] === '6' && stage !== SONG_STAGE)) return null;
+  const sp = path.replace(/bgmme5[56]/i, SONG_SUB), key = sp.replace(/^\/game\//, '');
+  const t = stagePanel && stagePanel.tracks[SONG_SUB];
+  return { path: sp, key, loopPos: t ? t.loopPos : 0 };
+}
 // ---- a session: one wasm instance playing one replay ----
 let session = null;
 const pl = { items: [], i: -1 };  // playlist: {name, file, url?} (see startItem)
@@ -1925,6 +1952,22 @@ function liveWatching(n) {
   e.replaceChildren(...(n ? [Object.assign(document.createElement('i'), { className: 'i i-eye' }), String(n)] : []));
 }
 // the panel's "live now" list (refreshed every 15 s; hidden while nothing is live or the feed is unreachable)
+// a live match's side, as the live list and the next-match card show it: the character's select icon and moon, then the
+// player's name (no name: the character's)
+function liveSide(m, p) {
+  const el = (tag, cls, txt) => { const e = document.createElement(tag); if (cls) e.className = cls; if (txt != null) e.textContent = txt; return e; };
+  const names = (m.names || []).map(n => (n || '').trim());
+  const c = m.chara && m.chara[p], mo = m.moon && m.moon[p], sp = el('span', 'side');
+  const ico = el('canvas', 'lico'); ico.width = ico.height = 64;
+  ico.dataset.cell = iconCell(c); ico.dataset.side = p;
+  const moon = el('canvas', 'lmoon'); moon.width = 14; moon.height = 14;
+  if (plArt && iconCell(c) >= 0) { selFrame(ico, iconCell(c), p, 0); drawMoon(moon, mo); sp.append(ico, moon); }
+  const nm = el('span', 'lnm');
+  nm.append(el('span', 't', names[p] || CHARA[c] || `Player ${p + 1}`));
+  sp.append(nm);
+  sp.title = `${mo === 9 ? 'Eclipse' : MOON_NAME[mo] || ''} ${CHARA[c] || ''}`.trim();
+  return sp;
+}
 async function liveListShow() {
   const sec = document.getElementById('livesec'), ol = document.getElementById('liveitems');
   if (!LIVE_FEED) { sec.hidden = true; return; }
@@ -1954,19 +1997,7 @@ async function liveListShow() {
     a.href = `${location.pathname}?live=${m.id}` + (Q.get('liveUrl') ? `&liveUrl=${encodeURIComponent(Q.get('liveUrl'))}` : '');
     const names = (m.names || []).map(n => (n || '').trim());
     a.title = idleTip(m) || m.matchup || names.join(' vs ');
-    // each side: the character's select icon and moon, then the player's name (no name: the character's)
-    const side = p => {
-      const c = m.chara && m.chara[p], mo = m.moon && m.moon[p], sp = el('span', 'side');
-      const ico = el('canvas', 'lico'); ico.width = ico.height = 64;
-      ico.dataset.cell = iconCell(c); ico.dataset.side = p;
-      const moon = el('canvas', 'lmoon'); moon.width = 14; moon.height = 14;
-      if (plArt && iconCell(c) >= 0) { selFrame(ico, iconCell(c), p, 0); drawMoon(moon, mo); sp.append(ico, moon); }
-      const nm = el('span', 'lnm');
-      nm.append(el('span', 't', names[p] || CHARA[c] || `Player ${p + 1}`));
-      sp.append(nm);
-      sp.title = `${mo === 9 ? 'Eclipse' : MOON_NAME[mo] || ''} ${CHARA[c] || ''}`.trim();
-      return sp;
-    };
+    const side = p => liveSide(m, p);
     const v = el('span', 'lview'); badge(v, m.viewers);
     a.append(side(0), el('span', 'lvs', 'vs'), side(1), v);
     if (liveSrc && liveSrc.id === m.id) { li.className = 'cur'; liveWatching(m.viewers); }
@@ -2513,14 +2544,6 @@ function liveBegin(s) {  // play(): after viewer_play
             status('live: watching back; the next game is on (LIVE to join it)');
           }
         }
-        // the players sat at the result screen / retry menu, the stream quiet RESULT_WAIT s, another match live: the card
-        // (their choice coming in takes it down: the session goes on with them). Was: the result screen until the host
-        // left the list (~5 min idle), the page looking stuck
-        if (now && s.liveFollow && !over) {
-          const atResult = call(s, 'viewer_spectate_in_retry') || s.M.HEAP32[0x54EEE8 >> 2] === SCENE_WIN;
-          if (atResult && quietFor > RESULT_WAIT * 1000) { if (nextCardShow(s, l, 'Players are at the result screen')) nextCard.why = 'result'; }
-          else if (nextCard.s === s && nextCard.why === 'result' && quietFor < 3000) { nextCardHide(); nextCard.why = null; }
-        }
       } catch (e) {}
     }
     if (over) {
@@ -2590,12 +2613,12 @@ function liveBegin(s) {  // play(): after viewer_play
   };
   poll();
 }
-// The next live match once the one watched is over (it left the list, its host went quiet, or the players sat at the
-// result screen with another match on): a card over the picture, "Next: A vs B" with a NEXT_SECS countdown, Go now /
+// The next live match once the one watched is over (it left the list, or its host went quiet or idle 5 min: players
+// waiting at the result screen are not an end): a card over the picture, "Next: A vs B" with a NEXT_SECS countdown, Go now /
 // Stay and the other live matches; nothing live: "waiting", checked every 10 s, and the countdown when one starts.
 // Stay: no automatic move for this session (the live list still switches). A switch is in place (startLive: the page,
 // its fullscreen and chat stay) and the address follows (?live=). Was: a status line and a jump 2.5 s later.
-const NEXT_SECS = 10, RESULT_WAIT = 20;
+const NEXT_SECS = 10;
 const nextCard = { s: null, id: null, at: 0, timer: 0, raf: 0, stay: null, why: null };
 const liveName = m => m.matchup || (m.names || []).map(n => (n || '').trim()).join(' vs ');
 function nextCardHide() {
@@ -2623,20 +2646,30 @@ function nextCardShow(s, list, title) {
   const live = list.filter(m => m.id !== (s.liveSrc && s.liveSrc.id) && !liveGone(m));
   const next = liveNextMatch(live);
   el.querySelector('.nc-t').textContent = title;
+  const row = (m, cls) => {  // (the live list's row: icons, moons, names, watchers)
+    const b = document.createElement('button');
+    b.className = cls;
+    const v = document.createElement('span'); v.className = 'lview';
+    if (m.viewers) v.append(Object.assign(document.createElement('i'), { className: 'i i-eye' }), String(m.viewers));
+    const vs = document.createElement('span'); vs.className = 'lvs'; vs.textContent = 'vs';
+    b.append(liveSide(m, 0), vs, liveSide(m, 1), v);
+    b.title = liveName(m);
+    b.onclick = e => { e.stopPropagation(); liveGo(m.id); };
+    return b;
+  };
   const others = el.querySelector('.nc-o');
   others.textContent = '';
-  for (const m of live.filter(m => !next || m.id !== next.id).slice(0, 4)) {
-    const b = document.createElement('button');
-    b.textContent = liveName(m);
-    b.onclick = e => { e.stopPropagation(); liveGo(m.id); };
-    others.append(b);
-  }
+  for (const m of live.filter(m => !next || m.id !== next.id).slice(0, 5)) others.append(row(m, 'nc-row'));
+  el.querySelector('.nc-ol').hidden = !others.children.length;
+  const feat = el.querySelector('.nc-m');
+  feat.textContent = '';
+  if (next) feat.append(row(next, 'nc-row nc-next'));
   el.querySelector('.nc-go').onclick = e => { e.stopPropagation(); if (nextCard.id) liveGo(nextCard.id); };
   el.querySelector('.nc-stay').onclick = e => { e.stopPropagation(); nextCard.stay = s; nextCardHide(); status('staying on this match (the live list has the others)'); };
   for (const ev of ['pointerdown', 'click', 'touchend']) el['on' + ev] = e => e.stopPropagation();  // (never the picture's)
   el.classList.toggle('wait', !next);
   if (!next) {
-    el.querySelector('.nc-m').textContent = 'Waiting for the next live match…';
+    feat.textContent = 'Waiting for the next live match…';
     el.hidden = false;
     if (nextCard.s === s && !nextCard.id) return true;  // (waiting already)
     clearTimeout(nextCard.timer); cancelAnimationFrame(nextCard.raf);
@@ -2651,7 +2684,6 @@ function nextCardShow(s, list, title) {
     nextCard.timer = setTimeout(wait, 10000);
     return true;
   }
-  el.querySelector('.nc-m').textContent = `Next: ${liveName(next)}`;
   el.hidden = false;
   if (nextCard.s === s && nextCard.id === next.id) return true;  // (counting down to it already)
   clearTimeout(nextCard.timer); cancelAnimationFrame(nextCard.raf);
@@ -4471,6 +4503,9 @@ async function main() {
   if (clipJ) clipChatLoad(clipJ, +(Q.get('t') || 0));
   liveJumpInit();
   fsOfferInit();
+  { const el = document.getElementById('song55');  // (songSub)
+    if (el) { el.checked = songOn; el.onchange = () => { songOn = el.checked; try { localStorage.setItem('mbaa-song55', songOn ? '1' : '0'); } catch (e) {}
+      el.blur(); if (session && session.bgmSync && session.M) session.bgmSync(session.M._viewer_frame()); }; } }
   liveListShow();
   if (Q.get('live')) {  // spectating: the live controls and the player block; the replay-only controls go (.replayonly)
     document.body.classList.add('live');

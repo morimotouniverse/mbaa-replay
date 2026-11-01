@@ -189,7 +189,7 @@
   #chatsec details[open] summary::after { content: 'close ✕'; color: #fff; background: var(--accent); border-color: var(--accent); }
   #chatsec details .pdone { justify-content: flex-end; margin-top: 6px; }
   #chatsec details .pdonebtn { background: var(--accent); color: #fff; padding: 4px 16px; border-radius: 999px; }
-  #chatsec canvas.me { width: 21px; height: 28px; border-radius: 4px; }
+  #chatsec canvas.me { width: 21px; height: 28px; border-radius: 4px; flex: none; min-width: 21px; }  /* (flex: none: Firefox shrank it in the account row) */
   #chatsec canvas.me.unset { border: 1px dashed var(--line); }
   #chatsec .phint { color: var(--accent2, #8ab4ff); font-size: 12px; }
   #chatsec .prow { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; margin-top: 6px; font-size: 12px; }
@@ -380,7 +380,7 @@
   #chatcol > #matchcard { flex: none; margin-bottom: 4px; }
   #chatcol > #matchcard:has(#stageblk:not([hidden])) .view { aspect-ratio: 256 / 84; object-fit: cover; }
   #chatcol > #matchcard .trk { font-size: 11px; }
-  #chatcol > #matchcard .cardnote { position: absolute; right: 6px; bottom: 6px; z-index: 4; width: 28px; height: 28px; border-radius: 50%;
+  #chatcol > #matchcard .cardnote { position: absolute; right: 6px; top: 6px;  /* (top right: the names and moons are along the bottom) */ z-index: 4; width: 28px; height: 28px; border-radius: 50%;
     border: 1px solid var(--line); background: var(--panel); color: var(--fg); font-size: 14px; line-height: 1; cursor: pointer; padding: 0; }
   #chatcol > #matchcard .cardnote.on, #chatcol > #matchcard .cardnote:hover { border-color: var(--accent, #e04a5a); color: var(--accent, #e04a5a); }
   #chatcol > .cradio { position: absolute; left: 8px; right: 8px; top: var(--cradio-top, 8px); bottom: 64px; z-index: 6; overflow: auto;
@@ -2029,7 +2029,7 @@
       const ms = swellMilestone(s.count);
       if (ms > (s.shownMs || 0)) {
         s.shownMs = ms; s.numShow = swellNow();
-        // each milestone after the first tilts its path up a little more (flat, then climbing), up to SWELL_TILT_MAX
+        // each milestone after the first leans the emoji a little more, up to SWELL_TILT_MAX
         if (ms > 5 && s.tilt < SWELL_TILT_MAX) s.tilt = Math.min(SWELL_TILT_MAX, s.tilt + SWELL_TILT);
       }
       s.numText = String(s.count);
@@ -2059,8 +2059,8 @@
     for (const s of swells.values()) { clearTimeout(s.fadeT); if (s.on && s.M === glov.M) { s.M._viewer_ov_remove(s.gid); s.M._viewer_ov_remove(s.nid); } }
     swells.clear();
   }
-  // sizes from the picture's height, the oldest at the bottom; each swell's ride (left to right, again and again, along
-  // a path tilted up by its tilt, the emoji leaning with it), its pulse to the new size and its count
+  // sizes from the picture's height, the oldest at the bottom; each swell's ride (left to right, again and again, flat,
+  // the emoji leaning by its tilt), its pulse to the new size and its count
   function swellLayout() {
     const M = glovReady();
     if (!M) return;
@@ -2072,7 +2072,9 @@
       const topS = (G.H - yb - numH - sz) * G.k;
       const x0 = (-0.25 * G.W - G.offX) * G.k, x1 = (1.05 * G.W - G.offX) * G.k, P = SWELL_RIDE / 1000;
       const vx = (x1 - x0) / P;
-      s.vy = -Math.tan(s.tilt * Math.PI / 180) * G.W * 0.9 * G.k / P; s.rot = -s.tilt * Math.PI / 180;
+      // (the path stays flat, always left to right; a milestone only leans the emoji more. A climbing path read as the
+      // emoji turning back at each wrap: user 2026-11-01)
+      s.vy = 0; s.rot = -s.tilt * Math.PI / 180;
       // (the emoji's middle a little above its row's: its quad sits on the font's baseline)
       M._viewer_ov_move(s.gid, s.t0, x0, vx, topS - 0.1 * szS);
       M._viewer_ov_fx(s.gid, P, s.vy, s.rot, s.ds || ds, ds, t, s.ds ? 0.15 : 0, 1, 1, t, 0);

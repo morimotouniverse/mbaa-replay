@@ -18,7 +18,7 @@
 <meta name="twitter:description" content="Watch Melty Blood Actress Again Current Code replays in your browser, frame-exact.">
 <meta name="twitter:image" content="https://watch.meltyblood.org/preview.png">
 <meta name="mbaa-manifest" content="2a2e2bac19a8">
-<meta name="mbaa-chatjs" content="chat.js?v=0dca98b6f0b3">
+<meta name="mbaa-chatjs" content="chat.js?v=1fe45d4aae22">
 <link rel="manifest" href="site.webmanifest">
 <link rel="icon" href="icon-192.png">
 <link rel="apple-touch-icon" href="icon-192.png">
@@ -382,6 +382,14 @@
   /* (over the portraits: the names, the VS / watchers and the stage's name plate) */
   #matchcard:has(#stageblk:not([hidden])) .name { z-index: 2; position: relative; }
   #matchcard:has(#stageblk:not([hidden])) #players { z-index: 2; position: relative; }
+  /* (layout over the picture, user 2026-11-01: the faces stay clear. Top: VS with the watchers, the stage's name plate
+     under them, between the two figures; bottom: the names and moons on a dark band at the picture's foot) */
+  #matchcard:has(#stageblk:not([hidden])) #players { align-self: stretch; align-items: flex-end; padding: 0 8px 7px;
+    background: linear-gradient(transparent 58%, #000b 100%); border-radius: 0 0 8px 8px; }
+  #matchcard:has(#stageblk:not([hidden])) #players .vs { position: absolute; top: 5px; left: 50%; transform: translateX(-50%);
+    flex-direction: row; align-items: center; gap: 6px; padding: 0; }
+  #matchcard:has(#stageblk:not([hidden])) .name { align-self: start; margin: 26px 0 0; }
+  #matchcard:has(#stageblk:not([hidden])) #players .pl { align-self: flex-end; }
   /* with portraits the small icons go; each side: the name across, the moon and the character under it */
   #matchcard.pors:has(#stageblk:not([hidden])) #players .ico { display: none; }
   #matchcard.pors:has(#stageblk:not([hidden])) #players .pl { grid-template-columns: 18px minmax(0, 1fr); column-gap: 5px; }
@@ -401,7 +409,7 @@
   body:is(.deskchat, :not(.side)) #matchcard:has(#stageblk:not([hidden])) .name { width: auto; max-width: 46%; max-height: 22%; }
   body:is(.deskchat, :not(.side)) #matchcard.pors:has(#stageblk:not([hidden])) .por:not([hidden]) { height: 250%; top: -37%; left: 27%; }
   body:is(.deskchat, :not(.side)) #matchcard.pors:has(#stageblk:not([hidden])) .por.p2:not([hidden]) { left: 73%; }
-  body:is(.deskchat, :not(.side)) #matchcard:has(#stageblk:not([hidden])) #players { padding: 10px 14px 0; }
+  body:is(.deskchat, :not(.side)) #matchcard:has(#stageblk:not([hidden])) #players { padding: 0 14px 9px; }
   body:is(.deskchat, :not(.side)) #matchcard:has(#stageblk:not([hidden])) #players .nm { font-size: 22px; }
   body:is(.deskchat, :not(.side)) #matchcard:has(#stageblk:not([hidden])) #players .ch .mqx { font-size: 15px; }
   body:is(.deskchat, :not(.side)) #matchcard:has(#stageblk:not([hidden])) #players .moon { width: 24px; height: 24px; }
@@ -432,29 +440,49 @@
     color: #fff; text-align: center; pointer-events: none; box-shadow: 0 10px 40px #000c; }
   #catchup[hidden], #ffbadge[hidden] { display: none; }
   /* the next live match after this one ends (viewer.js nextCard): its countdown, Go now / Stay, the other live matches */
-  #nextcard { position: absolute; left: 50%; bottom: 7%; transform: translateX(-50%); z-index: 7; width: min(380px, 86%);
-    box-sizing: border-box; padding: 12px 16px 12px; border-radius: 14px; background: #0d0b16ee; border: 2px solid var(--accent);
-    color: #fff; text-align: center; box-shadow: 0 10px 40px #000c; font-size: 14px; }
+  #nextcard { position: absolute; left: 50%; bottom: 6%; transform: translateX(-50%); z-index: 7; width: min(460px, 90%);
+    box-sizing: border-box; padding: 12px 14px; border-radius: 14px; background: linear-gradient(#17131fef, #0d0b16f4);
+    border: 1px solid #ffffff1f; box-shadow: 0 0 0 1px #00000080, 0 12px 40px #000d; color: #fff; font-size: 14px;
+    backdrop-filter: blur(6px); }
   #nextcard[hidden] { display: none; }
-  #nextcard .nc-t { font-size: 13px; font-weight: 700; color: #ccc; letter-spacing: .03em; text-transform: uppercase; }
-  #nextcard .nc-m { font-size: 18px; font-weight: 800; margin: 3px 0 8px; overflow-wrap: anywhere; }
-  #nextcard .nc-bar { height: 5px; border-radius: 3px; background: #ffffff22; overflow: hidden; }
+  #nextcard .nc-t { font-size: 11px; font-weight: 800; color: var(--accent); letter-spacing: .14em; text-transform: uppercase; text-align: center; }
+  #nextcard .nc-m { margin: 6px 0 8px; text-align: center; color: #ddd; }
+  #nextcard .nc-bar { height: 3px; border-radius: 2px; background: #ffffff1a; overflow: hidden; }
   #nextcard .nc-bar i { display: block; height: 100%; width: 100%; background: var(--accent); transform-origin: left; }
   #nextcard.wait .nc-bar, #nextcard.wait .nc-go { display: none; }
   #nextcard .nc-b { display: flex; gap: 8px; justify-content: center; margin-top: 10px; }
-  #nextcard button { font: inherit; font-weight: 700; padding: 7px 16px; border-radius: 999px; border: 1px solid #ffffff44;
-    background: #ffffff14; color: #fff; cursor: pointer; min-height: 36px; }
-  #nextcard .nc-go { background: var(--accent); border-color: var(--accent); }
-  #nextcard .nc-o { display: flex; flex-wrap: wrap; gap: 6px; justify-content: center; margin-top: 8px; }
+  #nextcard .nc-b button { font: inherit; font-weight: 700; padding: 6px 18px; border-radius: 999px; border: 1px solid #ffffff33;
+    background: #ffffff10; color: #fff; cursor: pointer; min-height: 34px; font-variant-numeric: tabular-nums; }
+  #nextcard .nc-b .nc-go { background: var(--accent); border-color: var(--accent); }
+  /* a match: the live list's row (icon + moon + name | vs | name + moon + icon | watchers) */
+  #nextcard .nc-row { display: grid; grid-template-columns: minmax(0, 1fr) 22px minmax(0, 1fr) 38px; align-items: center; gap: 6px;
+    width: 100%; padding: 4px 8px; border: 0; border-radius: 8px; background: none; color: inherit; font: inherit; font-size: 12.5px;
+    cursor: pointer; text-align: left; }
+  #nextcard .nc-row:hover { background: #ffffff10; }
+  #nextcard .nc-row .side { display: flex; align-items: center; gap: 4px; min-width: 0; }
+  #nextcard .nc-row .side:nth-of-type(2) { flex-direction: row-reverse; text-align: right; }
+  #nextcard .nc-row .lico { width: 28px; height: 28px; flex: none; margin: -3px 0; }
+  #nextcard .nc-row .lmoon { width: 12px; height: 12px; flex: none; filter: drop-shadow(0 0 1px #000); }
+  #nextcard .nc-row .lnm { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; min-width: 0; }
+  #nextcard .nc-row .lvs { text-align: center; font-size: 10px; color: var(--faint); letter-spacing: .08em; }
+  #nextcard .nc-row .lview { justify-self: end; display: inline-flex; align-items: center; gap: 3px; font-size: 11px; color: #ccc; }
+  #nextcard .nc-next { font-size: 15px; font-weight: 700; padding: 6px 8px; background: #ffffff0a; }
+  #nextcard .nc-next .lico { width: 44px; height: 44px; margin: -6px 0; }
+  #nextcard .nc-next .lmoon { width: 15px; height: 15px; }
+  #nextcard .nc-ol { margin: 10px 0 2px; padding-top: 8px; border-top: 1px solid #ffffff14; font-size: 10px; font-weight: 700;
+    color: var(--faint); letter-spacing: .12em; text-transform: uppercase; }
+  #nextcard .nc-ol[hidden] { display: none; }
+  #nextcard .nc-o { display: flex; flex-direction: column; gap: 1px; max-height: 150px; overflow-y: auto; }
   #nextcard .nc-o:empty { display: none; }
-  #nextcard .nc-o button { font-size: 12px; font-weight: 600; padding: 4px 10px; min-height: 30px; }
-  @media (max-width: 600px) {  /* (phones: a strip at the picture's bottom, the picture still seen) */
-    #nextcard { bottom: 3%; width: 92%; padding: 6px 10px 7px; border-radius: 10px; font-size: 12px; }
-    #nextcard .nc-t { font-size: 10px; }
-    #nextcard .nc-m { font-size: 13px; margin: 1px 0 4px; }
+  @media (max-width: 600px) {  /* (phones: compact; the picture still seen) */
+    #nextcard { bottom: 3%; width: 94%; padding: 7px 8px; border-radius: 10px; }
+    #nextcard .nc-m { margin: 3px 0 5px; }
     #nextcard .nc-b { margin-top: 6px; }
-    #nextcard button { padding: 4px 12px; min-height: 30px; }
-    #nextcard .nc-o button { min-height: 26px; padding: 2px 8px; }
+    #nextcard .nc-b button { padding: 3px 14px; min-height: 30px; }
+    #nextcard .nc-next { font-size: 13px; }
+    #nextcard .nc-next .lico { width: 32px; height: 32px; margin: -4px 0; }
+    #nextcard .nc-o { max-height: 64px; }
+    #nextcard .nc-row { font-size: 11.5px; }
   }
   #fsoffer { position: absolute; right: 12px; top: 12px; z-index: 7; padding: 8px 14px; border-radius: 999px; border: 1px solid #ffffff44;
     background: #0d0b16dd; color: #fff; font: inherit; font-weight: 700; cursor: pointer; box-shadow: 0 3px 12px #0009; }
@@ -630,6 +658,7 @@
   <div id="nextcard" role="dialog" aria-label="Next live match" hidden>
     <div class="nc-t"></div><div class="nc-m"></div><div class="nc-bar"><i></i></div>
     <div class="nc-b"><button class="nc-go">Go now</button><button class="nc-stay">Stay</button></div>
+    <div class="nc-ol" hidden>Other live matches</div>
     <div class="nc-o"></div>
   </div>
   <video id="loadvid" muted loop playsinline preload="none" poster="opening.webp" hidden></video>
@@ -769,6 +798,7 @@
   <div class="sec" id="viewsec">
     <div class="row">
       <label class="chip replayonly" title="skip the VS intro when a replay starts"><input id="skipintro" type="checkbox">skip intro</label>
+      <label class="chip" title="The &quot;...and nothing heart&quot; stage's song gets streams copyright-struck: off, another stage's track plays there"><input id="song55" type="checkbox">Ryougi stage song</label>
       <label class="chip" title="Hitboxes (H)"><input id="boxes" type="checkbox">hitboxes</label>
       <label class="chip" title="Input display (I)"><input id="inputs" type="checkbox">inputs</label>
       <label class="chip" title="HUD: health, meter, timer, combo counters (U)"><input id="hud" type="checkbox" checked>HUD</label>
@@ -810,8 +840,8 @@
   </div>
 </div>
 </div>
-<script src="mbaa.js?v=0e49f9a5f4a3"></script>
+<script src="mbaa.js?v=9e24e622dcd8"></script>
 <script src="bgm_stream.js?v=407ac29e5c89"></script>
-<script src="viewer.js?v=42e15acbb612"></script>
+<script src="viewer.js?v=02c5afbdb8f9"></script>
 </body>
 </html>
