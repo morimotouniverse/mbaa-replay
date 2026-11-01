@@ -3008,7 +3008,7 @@ function movieVideo(b) {
     },
   };
 }
-// the loading picture: the game's opening movie (web/shell/opening.webm, from Movie/Original MBAA_OP.mpeg: 480x360, no
+// the loading picture: the game's opening movie (web/shell/opening.webm, from Movie/Original MBAA_OP.mpeg: 640x480 60 fps VP9, artifacts/opening/README.md; no
 // sound), fetched the first time a match loads; shown from the first fetch until the game draws
 function loading(on) {
   const v = document.getElementById('loadvid');
