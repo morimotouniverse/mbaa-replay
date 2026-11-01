@@ -355,6 +355,40 @@
   #chatcol > #livesec #liveitems { max-height: min(150px, 24vh); }
   body.mob #chatcol > #livesec #liveitems { max-height: 28vh; }
   body.mob.kbd #chatcol > #livesec { display: none; }
+  /* the match card at the top of the chat column (compact), its ♪ button and the radio panel over the chat */
+  #chatcol { position: relative; }
+  #chatcol > #matchcard { flex: none; margin-bottom: 4px; }
+  #chatcol > #matchcard:has(#stageblk:not([hidden])) .view { aspect-ratio: 256 / 84; object-fit: cover; }
+  #chatcol > #matchcard .trk { font-size: 11px; }
+  #chatcol > #matchcard .cardnote { position: absolute; right: 6px; bottom: 6px; z-index: 4; width: 28px; height: 28px; border-radius: 50%;
+    border: 1px solid var(--line); background: var(--panel); color: var(--fg); font-size: 14px; line-height: 1; cursor: pointer; padding: 0; }
+  #chatcol > #matchcard .cardnote.on, #chatcol > #matchcard .cardnote:hover { border-color: var(--accent, #e04a5a); color: var(--accent, #e04a5a); }
+  #chatcol > .cradio { position: absolute; left: 8px; right: 8px; top: var(--cradio-top, 8px); bottom: 64px; z-index: 6; overflow: auto;
+    background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 10px; box-shadow: 0 8px 28px rgba(0,0,0,.45); }
+  #chatcol > .cradio > #radiosec { border: 0; padding: 0; margin: 0; }
+  #chatcol > .cradio .cradiox { position: absolute; right: 6px; top: 6px; background: none; border: 0; color: var(--muted); font-size: 14px; cursor: pointer; z-index: 1; }
+  /* phones held upright: one slim row (icons, names, ♪); a tap opens the card and the radio as a bottom sheet */
+  body.mob:not(.land) #chatcol > #matchcard { cursor: pointer; }
+  body.mob:not(.land):not(.cardsheet) #chatcol > #matchcard :is(.por, #stageblk, .view, .name, .trk) { display: none !important; }
+  body.mob:not(.land):not(.cardsheet) #chatcol > #matchcard #players { flex-direction: row; align-items: center; gap: 6px; margin: 0; padding-right: 34px; }
+  body.mob:not(.land):not(.cardsheet) #chatcol > #matchcard #players .pl { flex: 1 1 0; gap: 5px; }
+  body.mob:not(.land):not(.cardsheet) #chatcol > #matchcard #players .ico { width: 28px; height: 28px; display: block; }
+  body.mob:not(.land):not(.cardsheet) #chatcol > #matchcard #players .pl:last-child { flex-direction: row-reverse; text-align: right; }
+  body.mob:not(.land):not(.cardsheet) #chatcol > #matchcard #players .ch { display: none; }
+  body.mob:not(.land):not(.cardsheet) #chatcol > #matchcard #players .vs { padding: 0; }
+  body.mob:not(.land):not(.cardsheet) #chatcol > #matchcard .cardnote { top: 50%; bottom: auto; transform: translateY(-50%); }
+  /* (over the portrait card's grid / display: contents rules) */
+  body.mob:not(.land):not(.cardsheet) #chatcol > #matchcard #players .pl { display: flex !important; align-items: center; min-width: 0; }
+  body.mob:not(.land):not(.cardsheet) #chatcol > #matchcard #players .who { display: flex !important; min-width: 0; }
+  body.mob:not(.land):not(.cardsheet) #chatcol > #matchcard #players .nm { font-size: 13px !important; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+  body.mob:not(.land):not(.cardsheet) #chatcol > #matchcard #players .ico { display: block !important; width: 28px !important; height: 28px !important; }
+  body.mob:not(.land):not(.cardsheet) #chatcol > #matchcard #players .vs { flex: none; font-size: 10px; display: block; }
+  body.mob:not(.land):not(.cardsheet) #chatcol > #matchcard #players #watching { display: none; }
+  body.mob.cardsheet #chatcol > #matchcard { position: fixed; left: 0; right: 0; bottom: 0; z-index: 60; max-height: 78vh; max-height: 78dvh; overflow: auto;
+    background: var(--panel); border-top: 1px solid var(--line); border-radius: 14px 14px 0 0; padding: 12px 12px calc(12px + env(safe-area-inset-bottom));
+    box-shadow: 0 -10px 30px rgba(0,0,0,.5); }
+  body.mob.cardsheet #chatcol > #matchcard .cardnote { display: none; }
+  body.mob.cardsheet #chatcol > #matchcard > #radiosec { position: relative; z-index: 5; margin-top: 10px; padding-top: 8px; background: var(--panel); }
   #front { position: absolute; left: 0; top: 0; pointer-events: none; z-index: 1; image-rendering: pixelated; }
   #front[hidden] { display: none; }
   #chatover { position: absolute; left: 0; top: 0; width: 100%; height: 100%; overflow: hidden; pointer-events: none; z-index: 1; }
@@ -559,6 +593,56 @@
     new MutationObserver(place).observe(document.body, { attributes: true, attributeFilter: ['class'] });
     addEventListener('resize', place);
     place();
+  }
+  // The match card (#matchcard: players, stage, BGM) at the top of the chat column while the column shows, compact; a ♪
+  // button on it opens the radio panel (#radiosec: Raito Radio, the stage's track) over the chat (closed by default).
+  // Phones held upright: the card is one slim row (icons, names, ♪); a tap opens the whole card and the radio as a
+  // bottom sheet. Back in the panel when the column is hidden.
+  {
+    const card = document.getElementById('matchcard'), radio = document.getElementById('radiosec');
+    if (card && col) {
+      const cHome = card.parentNode, cNext = card.nextSibling;
+      const rHome = radio && radio.parentNode, rNext = radio && radio.nextSibling;
+      const note = document.createElement('button');
+      note.type = 'button'; note.className = 'cardnote'; note.textContent = '♪';
+      note.title = 'music: Raito Radio and the stage\'s track'; note.setAttribute('aria-label', 'music panel'); note.setAttribute('aria-expanded', 'false');
+      const pane = document.createElement('div');  // (the radio panel over the chat)
+      pane.className = 'cradio'; pane.hidden = true; pane.setAttribute('role', 'dialog'); pane.setAttribute('aria-label', 'music');
+      const px = document.createElement('button'); px.type = 'button'; px.className = 'cradiox'; px.textContent = '✕'; px.title = 'close'; px.setAttribute('aria-label', 'close the music panel');
+      pane.append(px);
+      const portPhone = () => document.body.classList.contains('mob') && !document.body.classList.contains('land');
+      const inCol = () => getComputedStyle(col).display !== 'none';
+      const radioTo = where => { if (!radio) return; if (where) { if (radio.parentNode !== where) where.append(radio); } else if (radio.parentNode !== rHome) rHome.insertBefore(radio, rNext && rNext.parentNode === rHome ? rNext : null); };
+      const sheet = on => {
+        document.body.classList.toggle('cardsheet', on);
+        card.setAttribute('aria-expanded', String(on));
+        radioTo(on ? card : null);
+      };
+      const paneSet = on => {
+        if (portPhone()) { sheet(!document.body.classList.contains('cardsheet')); return; }
+        pane.hidden = !on; note.setAttribute('aria-expanded', String(on)); note.classList.toggle('on', on);
+        radioTo(on ? pane : null);
+      };
+      note.onclick = e => { e.stopPropagation(); paneSet(pane.hidden); note.blur(); };
+      px.onclick = () => paneSet(false);
+      card.addEventListener('click', e => { if (portPhone() && !e.target.closest('button, a, input, select, #radiosec')) sheet(!document.body.classList.contains('cardsheet')); });
+      document.addEventListener('keydown', e => { if (e.key === 'Escape') { if (!pane.hidden) paneSet(false); if (document.body.classList.contains('cardsheet')) sheet(false); } });
+      document.addEventListener('pointerdown', e => { if (document.body.classList.contains('cardsheet') && !card.contains(e.target)) sheet(false); });
+      const cplace = () => {
+        if (inCol()) {
+          if (card.parentNode !== col) { col.prepend(card); card.append(note); col.append(pane); }
+          if (!portPhone() && document.body.classList.contains('cardsheet')) sheet(false);
+          if (portPhone() && !pane.hidden) { pane.hidden = true; radioTo(null); }
+        } else if (card.parentNode === col) {
+          sheet(false); pane.hidden = true; radioTo(null); note.remove(); pane.remove();
+          cHome.insertBefore(card, cNext && cNext.parentNode === cHome ? cNext : null);
+        }
+      };
+      new MutationObserver(cplace).observe(document.body, { attributes: true, attributeFilter: ['class'] });
+      addEventListener('resize', cplace);
+      cplace();
+      window.mbaaCardMusic = paneSet;  // (tests)
+    }
   }
   const $ = s => sec.querySelector(s);
   {  // the profile panel: a done button, Esc and a click outside it close it
