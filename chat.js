@@ -44,6 +44,15 @@
 // (replays, clips, playlists, live matches) get a card (the matchup, the clip's range; metadata lazy and cached), "m:ss"
 // and a match line's time seek the picture, links never reach the overlay. The live list sits at the top of the chat
 // column while it shows (tools/chat/chat_history_check.py, viewer_tools/chat_links_check.py, chat_layout2_check.py).
+// Unread: the read point per channel (draft/read-marker MARKREAD for an account, every device; localStorage too, a
+// guest's only copy): a "new" divider, "N mentions while you were away" with jump links, "(N)" in the tab title. The
+// MOTD is #melty's topic (mods set it from the moderator's menu / the banner's ✎: bold and colours as mIRC codes, the
+// only text drawn with them; codes in lines are stripped), shown as a banner and one line on joining. Typing: the +typing
+// tag (TAGMSG). Reactions: +draft/react / +draft/unreact with +draft/reply (stored by the server only with its
+// tagmsg-storage whitelist; replayed with draft/event-playback). A names panel (away-notify; the page goes "idle" when
+// hidden a while). Lines get Discord-style formatting (render only), one-emoji lines show big with a count and stack
+// into combo rows (a click joins in), and a spammed emoji swells in the overlay's corner
+// (harness-design/web_parity/viewer_tools/chat_free_features_check.py).
 (() => {
   'use strict';
   const api = window.mbaaChatApi;
@@ -174,8 +183,8 @@
   #chatsec details[open] summary::after { content: 'close ✕'; color: #fff; background: var(--accent); border-color: var(--accent); }
   #chatsec details .pdone { justify-content: flex-end; margin-top: 6px; }
   #chatsec details .pdonebtn { background: var(--accent); color: #fff; padding: 4px 16px; border-radius: 999px; }
-  #chatsec .me { width: 21px; height: 28px; border-radius: 4px; }
-  #chatsec .me.unset { border: 1px dashed var(--line); }
+  #chatsec canvas.me { width: 21px; height: 28px; border-radius: 4px; }
+  #chatsec canvas.me.unset { border: 1px dashed var(--line); }
   #chatsec .phint { color: var(--accent2, #8ab4ff); font-size: 12px; }
   #chatsec .prow { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; margin-top: 6px; font-size: 12px; }
   #chatsec .prow input[type=text] { width: 130px; background: var(--raise); color: var(--fg); border: 1px solid var(--line); border-radius: 6px; padding: 3px 6px; font: inherit; }
@@ -346,6 +355,115 @@
   #chatover .dm { position: absolute; left: 0; top: 0; white-space: pre; line-height: 1.25; padding: 0 6px 0.12em; will-change: transform;
                   /* (room for descenders and the outline: the composited layer is the box, a line-height: 1 box cut g / j / y) */
                   paint-order: stroke fill; -webkit-text-stroke: 7px rgba(0, 0, 0, .4); }
+  /* the names panel, the MOTD banner, mentions while away, the unread divider, typing, reactions */
+  #chatsec button.cmembtn { line-height: 1.4; font-size: 11px; padding: 2px 8px; border-radius: 999px; color: var(--faint); background: none;
+                            border: 1px solid var(--line); cursor: pointer; white-space: nowrap; }
+  #chatsec button.cmembtn[aria-expanded=true] { color: #fff; background: #ffffff14; }
+  #chatsec .cmemb { max-height: 160px; overflow-y: auto; background: #00000033; border-radius: 8px; padding: 4px; font-size: 12px; overscroll-behavior: contain; }
+  #chatsec .cmemb[hidden], #chatsec .ctopic[hidden], #chatsec .cments[hidden] { display: none; }
+  #chatsec .cmemb .mh { font-size: 10px; color: var(--faint); padding: 2px 4px; }
+  #chatsec .cmemb .mm { display: flex; align-items: center; gap: 6px; padding: 2px 4px; border-radius: 5px; }
+  #chatsec .cmemb .mm.click { cursor: pointer; }
+  #chatsec .cmemb .mm.click:hover { background: #ffffff10; }
+  #chatsec .cmemb .mm b { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+  #chatsec .cmemb .mm.away b { opacity: .55; }
+  #chatsec .cmemb .mm .dot { width: 7px; height: 7px; border-radius: 50%; background: #5ad07a; flex: none; }
+  #chatsec .cmemb .mm.away .dot { background: #d0a040; }
+  #chatsec .cmemb .mm.idle .dot { background: #777; }
+  #chatsec .cmemb .tag { font-size: 9px; padding: 0 5px; border-radius: 999px; border: 1px solid var(--line); color: var(--accent2, #8ab4ff); white-space: nowrap; }
+  #chatsec .cmemb .tag.aw { color: var(--faint); }
+  #chatsec .ctopic { display: flex; gap: 6px; align-items: flex-start; font-size: 12px; line-height: 1.35; padding: 5px 8px; border-radius: 8px; background: #ffffff0c;
+                     border-left: 3px solid var(--accent2, #8ab4ff); word-break: break-word; }
+  #chatsec .ctopic .ctt { flex: 1 1 auto; min-width: 0; max-height: 5.4em; overflow-y: auto; }
+  #chatsec .ctopic .ctt.none { color: var(--faint); font-style: italic; }
+  #chatsec .ctopic button { flex: none; background: none; border: none; color: var(--faint); cursor: pointer; font-size: 12px; padding: 0 3px; }
+  #chatsec .ctopic button:hover { color: var(--fg); }
+  #chatsec .cments { display: flex; flex-wrap: wrap; align-items: center; gap: 3px 8px; font-size: 11px; padding: 4px 8px; border-radius: 8px;
+                     background: #e04a5a22; border-left: 3px solid var(--accent, #e04a5a); }
+  #chatsec .cments b { color: #fff; }
+  #chatsec .cments a { color: var(--accent2, #8ab4ff); cursor: pointer; text-decoration: underline; max-width: 170px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  #chatsec .cments button { margin-left: auto; background: none; border: none; color: var(--faint); cursor: pointer; }
+  #chatlog li.cdiv { display: flex; align-items: center; gap: 6px; color: var(--accent, #e04a5a); font-size: 10px; font-weight: 700; letter-spacing: .05em; text-transform: uppercase; }
+  #chatlog li.cdiv::before, #chatlog li.cdiv::after { content: ''; flex: 1 1 auto; height: 1px; background: var(--accent, #e04a5a); opacity: .6; }
+  #chatlog li.sys.motd { font-style: normal; color: var(--muted); }
+  #chatsec .ctyping { position: relative; z-index: 1; height: 15px; margin-top: -15px; padding: 0 8px; font-size: 10.5px; line-height: 15px; color: var(--muted);
+                      font-style: italic; pointer-events: none; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; border-radius: 0 0 8px 8px; }
+  #chatsec .ctyping:empty { visibility: hidden; }
+  #chatsec .ctyping:not(:empty) { background: linear-gradient(#0000, #000c 45%); }
+  #chatlog .creacts { display: flex; flex-wrap: wrap; gap: 3px; margin-top: 2px; }
+  #chatlog .creacts button { display: inline-flex; align-items: center; gap: 3px; font: inherit; font-size: 11px; line-height: 1; padding: 2px 6px; border-radius: 999px;
+                             border: 1px solid var(--line); background: #ffffff0a; color: var(--muted); cursor: pointer; font-variant-numeric: tabular-nums; }
+  #chatlog .creacts button .e { font-size: 13px; font-family: 'Apple Color Emoji', 'Segoe UI Emoji', 'Noto Color Emoji', sans-serif; }
+  #chatlog .creacts button.mine { border-color: var(--accent2, #8ab4ff); background: #8ab4ff26; color: #fff; }
+  #chatlog .creacts button:disabled { cursor: default; }
+  .crpop { position: fixed; z-index: 100; display: flex; gap: 2px; padding: 4px; background: var(--raise, #1c1c28); border: 1px solid var(--line);
+           border-radius: 999px; box-shadow: 0 8px 24px #000a; }
+  .crpop[hidden] { display: none; }
+  .crpop button { width: 30px; height: 30px; border: none; border-radius: 50%; background: none; cursor: pointer; font-size: 18px; line-height: 1; padding: 0;
+                  color: var(--fg, #ddd); font-family: 'Apple Color Emoji', 'Segoe UI Emoji', 'Noto Color Emoji', sans-serif; }
+  .crpop button:hover, .crpop button:focus-visible { background: #ffffff18; outline: none; }
+  /* the MOTD editor (the moderator's menu) */
+  .cmodm .motd { display: grid; gap: 6px; width: min(340px, calc(100vw - 40px)); }
+  .cmodm .motd textarea { width: 100%; box-sizing: border-box; min-height: 64px; resize: vertical; background: var(--panel, #111); color: var(--fg); border: 1px solid var(--line);
+                          border-radius: 6px; padding: 5px 7px; font: inherit; font-size: 12px; }
+  .cmodm .motd .bar { display: flex; flex-wrap: wrap; gap: 3px; align-items: center; }
+  .cmodm .motd .bar button.msw { width: 18px; height: 18px; padding: 0; border-radius: 4px; border: 1px solid #ffffff44; }
+  .cmodm .motd .prev { padding: 5px 7px; border-radius: 6px; background: #ffffff0c; min-height: 1.4em; word-break: break-word; }
+  .cmodm .motd small { color: var(--faint); font-size: 10px; }
+  .cmodm .motd small.over { color: #ff8080; }
+  .cmodm button.solid2 { background: var(--accent, #e04a5a); color: #fff; border-color: var(--accent, #e04a5a); }
+  /* the slim column: the comment style behind "Aa" (a popover over the input, the spread slider in it); the profile and
+     the account on one line (avatar, name, a ▾ menu) */
+  #chatsec .cform .cinw input { padding-right: 60px; }
+  #chatsec .cnico { position: absolute; right: 31px; top: 50%; transform: translateY(-50%); height: 26px; min-width: 26px; padding: 0 4px; border: none;
+                    border-radius: 6px; background: none; color: var(--faint); cursor: pointer; font: 700 12px/1 sans-serif; }
+  #chatsec .cnico:hover, #chatsec .cnico[aria-expanded=true] { color: var(--fg); background: #ffffff12; }
+  #chatsec .cnico:focus-visible { outline: 2px solid var(--accent2, #8ab4ff); outline-offset: -2px; }
+  body.mob #chatsec .cform .cnico { padding: 0 4px; }
+  #chatsec .cform > .ctool { position: absolute; z-index: 6; left: 0; right: 0; bottom: calc(100% + 4px); background: var(--raise, #1c1c28); border: 1px solid var(--line);
+                             border-radius: 10px; box-shadow: 0 8px 28px #000a; padding: 8px; box-sizing: border-box; overflow: visible; }
+  #chatsec .cform > .ctool[hidden] { display: none; }
+  #chatsec .cform > .ctool .cpop { top: auto; bottom: calc(100% + 4px); }
+  #chatsec .ctool .cspread { flex: 1 0 100%; box-sizing: border-box; justify-content: space-between; order: 9; }
+  #chatsec .ctool .cspread input { flex: 1 1 auto; }
+  #chatsec details > summary { display: none; }
+  #chatsec .cme { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--muted); position: relative; min-width: 0; }
+  #chatsec .cme .mynick { font-weight: 700; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+  #chatsec .cme .csign { display: contents; }
+  #chatsec .cme a.signin { display: inline-flex; align-items: center; padding: 3px 9px; border-radius: 8px; background: #5865f2; color: #fff; text-decoration: none;
+                           font-weight: 700; font-size: 11px; white-space: nowrap; }
+  #chatsec .cme button.cmenu { margin-left: auto; background: none; border: 1px solid var(--line); border-radius: 999px; color: var(--accent2, #8ab4ff); cursor: pointer;
+                               font-size: 11px; padding: 1px 9px; }
+  #chatsec .cme button.cmenu[aria-expanded=true] { color: #fff; background: #ffffff14; }
+  #chatsec .cmenupop { position: absolute; z-index: 7; right: 0; bottom: calc(100% + 4px); min-width: 160px; background: var(--raise, #1c1c28); border: 1px solid var(--line);
+                       border-radius: 10px; box-shadow: 0 8px 28px #000a; padding: 4px; display: grid; }
+  #chatsec .cmenupop[hidden] { display: none; }
+  #chatsec .cmenupop button { text-align: left; background: none; border: none; color: var(--fg); font: inherit; font-size: 12px; padding: 6px 10px; border-radius: 6px; cursor: pointer; }
+  #chatsec .cmenupop button:hover, #chatsec .cmenupop button:focus-visible { background: #ffffff14; outline: none; }
+  #chatsec .cmenupop .mh { font-size: 10px; color: var(--faint); padding: 4px 10px 2px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  /* emoji: a line of one emoji (repeated) shown once, big, with its count; a combo row of such lines; the overlay's swell */
+  #chatlog .cjumbo { display: inline-flex; align-items: center; gap: 5px; vertical-align: middle; }
+  #chatlog .cjumbo .je { font-size: 26px; line-height: 1.1; font-family: 'Apple Color Emoji', 'Segoe UI Emoji', 'Noto Color Emoji', sans-serif; }
+  #chatlog .cjumbo .jn { font-size: 12px; font-weight: 700; color: var(--muted); font-variant-numeric: tabular-nums; }
+  #chatlog .cjumbo .jw { font-size: 11px; color: var(--faint); }
+  #chatlog .cjumbo.join { cursor: pointer; border-radius: 8px; padding: 0 4px; }
+  #chatlog .cjumbo.join:hover { background: #ffffff10; }
+  #chatover .cswell { position: absolute; right: 3%; display: flex; flex-direction: column; align-items: center; pointer-events: none; transition: bottom .2s, opacity .5s; }
+  #chatover .cswell .e { line-height: 1; font-family: 'Apple Color Emoji', 'Segoe UI Emoji', 'Noto Color Emoji', sans-serif; transition: font-size .15s; }
+  #chatover .cswell .n { color: #fff; font-weight: 700; font-family: sans-serif; line-height: 1.1; font-variant-numeric: tabular-nums;
+                         text-shadow: -1px -1px 0 #000, 1px -1px 0 #000, -1px 1px 0 #000, 1px 1px 0 #000; }
+  /* Discord-style formatting in a line (render only; the IRC text stays plain) */
+  #chatlog .cmd-h { font-weight: 700; color: var(--fg, #fff); line-height: 1.25; }
+  #chatlog .cmd-h1 { font-size: 15px; }
+  #chatlog .cmd-h2 { font-size: 14px; }
+  #chatlog .cmd-h3 { font-size: 13px; }
+  #chatlog .cmd-sub { font-size: 10.5px; color: var(--faint); }
+  #chatlog .cmd-q { display: inline-block; border-left: 3px solid var(--line); padding-left: 6px; color: var(--muted); }
+  #chatlog code { font-family: ui-monospace, Consolas, monospace; font-size: .92em; background: #ffffff14; border-radius: 4px; padding: 0 4px; }
+  #chatlog .cspoil { background: #2a2a36; color: transparent; border-radius: 4px; padding: 0 2px; cursor: pointer; user-select: none; }
+  #chatlog .cspoil * { visibility: hidden; }
+  #chatlog .cspoil.open { background: #ffffff14; color: inherit; cursor: auto; user-select: text; }
+  #chatlog .cspoil.open * { visibility: visible; }
   `;
   document.head.append(css);
 
@@ -353,9 +471,14 @@
   sec.className = 'sec'; sec.id = 'chatsec';
   sec.innerHTML = `
     <div class="chead"><span class="lbl">chat</span><span class="ctabs"></span>
+      <button type="button" class="cmembtn" aria-expanded="false" aria-controls="chatmemb" title="who is here">people</button>
       <label class="tog" title="new comments cross the game picture (Nico Nico style)"><input id="chatover_on" type="checkbox"> on picture</label>
       <label class="cspread" hidden title="spread, for everyone (moderators only): how long a comment keeps its row on the picture after it would have freed it, so comments a little apart still fan out to new rows (0: Niconico's own). Moving it previews here; letting go sets it on every viewer's page">spread <input id="chatspread" type="range" min="0" max="6" step="0.1" value="1" aria-label="comment spread for everyone, seconds"><output>1.0 s</output></label></div>
+    <div class="cmemb" id="chatmemb" hidden></div>
+    <div class="ctopic" hidden></div>
+    <div class="cments" hidden role="status"></div>
     <ol id="chatlog" aria-live="polite"></ol>
+    <div class="ctyping" aria-live="polite"></div>
     <div class="ctool" role="toolbar" aria-label="how your comments look on the picture (Niconico commands)">
       <span class="cseg" data-k="pos">
         <button type="button" data-v="ue" title="top (ue): fixed at the top for 3 s" aria-label="top"><svg width="14" height="14" viewBox="0 0 14 14" fill="currentColor"><rect x="1" y="1" width="12" height="3" rx="1"/><rect x="1" y="6" width="12" height="7" rx="1" opacity=".3"/></svg></button>
@@ -382,7 +505,7 @@
     <div class="cauth" hidden></div>
     <div class="creply" hidden><span></span><button type="button" title="cancel the reply" aria-label="cancel the reply">✕</button></div>
     <form class="cform" autocomplete="off"><input id="chatcmd" type="text" maxlength="60" spellcheck="false" placeholder="commands"
-      title="Niconico commands for your comments on the picture, e.g. ue / shita (top / bottom, 3 s), big / small, a colour (red, pink, orange, yellow, green, cyan, blue, purple, white, black, white2, red2, …, or #rrggbb). Empty: scrolls, medium, your colour."><span class="cinw"><input id="chatin" type="text" maxlength="${MAXLEN}" placeholder="say something…" enterkeyhint="send" aria-autocomplete="list"><button type="button" class="cemo" title="emoji" aria-label="emoji" aria-haspopup="dialog" aria-expanded="false"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><circle cx="12" cy="12" r="9"/><path d="M8.5 14.5a4.5 4.5 0 0 0 7 0"/><circle cx="9" cy="10" r=".6" fill="currentColor"/><circle cx="15" cy="10" r=".6" fill="currentColor"/></svg></button></span>
+      title="Niconico commands for your comments on the picture, e.g. ue / shita (top / bottom, 3 s), big / small, a colour (red, pink, orange, yellow, green, cyan, blue, purple, white, black, white2, red2, …, or #rrggbb). Empty: scrolls, medium, your colour."><span class="cinw"><input id="chatin" type="text" maxlength="${MAXLEN}" placeholder="say something…" enterkeyhint="send" aria-autocomplete="list"><button type="button" class="cemo" title="emoji" aria-label="emoji" aria-haspopup="dialog" aria-expanded="false"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><circle cx="12" cy="12" r="9"/><path d="M8.5 14.5a4.5 4.5 0 0 0 7 0"/><circle cx="9" cy="10" r=".6" fill="currentColor"/><circle cx="15" cy="10" r=".6" fill="currentColor"/></svg></button><button type="button" class="cnico" title="how your comments look on the picture (position, size, font, colour)" aria-label="comment style" aria-haspopup="dialog" aria-expanded="false">Aa</button></span>
       <button type="submit" class="txt">send</button>
       <div class="epop" hidden role="dialog" aria-label="emoji"></div><div class="mpop" hidden role="listbox" aria-label="mention someone"></div></form>
     <details><summary><canvas class="me" width="42" height="56"></canvas><span class="mynick"></span><span class="cstate"></span></summary>
@@ -393,7 +516,9 @@
       <div class="prow">moon <span class="moons"></span></div>
       <div class="cgrid"></div>
       <div class="prow pdone"><button type="button" class="txt pdonebtn">done</button></div>
-    </details>`;
+    </details>
+    <div class="cme"><span class="csign"></span><button type="button" class="cmenu" aria-haspopup="menu" aria-expanded="false" title="profile and account" aria-label="profile and account menu">▾</button>
+      <div class="cmenupop" hidden role="menu"></div></div>`;
   // (the page's chat column, beside or under the picture: index.html / viewer.js fitStage; an older page: the panel)
   const controls = document.getElementById('controls'), col = document.getElementById('chatcol');
   const after = document.getElementById('livesec');
@@ -435,10 +560,33 @@
     document.addEventListener('keydown', e => { if (e.key === 'Escape' && d.open) d.open = false; });
     document.addEventListener('pointerdown', e => { if (d.open && !d.contains(e.target)) d.open = false; });
   }
+  // one line for the profile and the account: the avatar and name (moved out of the editor's summary), a guest's sign-in,
+  // and a ▾ menu (edit profile; signed in: change name, sign out), filled by authShow
+  const meRow = $('.cme'), menuBtn = $('.cmenu'), menuPop = $('.cmenupop');
+  meRow.prepend(...sec.querySelector('details > summary').childNodes);
+  function menuOpen(on) {
+    menuPop.hidden = !on; menuBtn.setAttribute('aria-expanded', String(on));
+    if (on) { const b = menuPop.querySelector('button'); if (b) b.focus(); }
+  }
+  menuBtn.onclick = () => menuOpen(menuPop.hidden);
+  document.addEventListener('pointerdown', e => { if (!menuPop.hidden && !meRow.contains(e.target)) menuOpen(false); });
+  document.addEventListener('keydown', e => { if (e.key === 'Escape' && !menuPop.hidden) { menuOpen(false); menuBtn.focus(); } });
+  function menuFill(items, head) {
+    menuPop.replaceChildren();
+    if (head) { const h = document.createElement('div'); h.className = 'mh'; h.textContent = head; menuPop.append(h); }
+    for (const [t, fn] of items) {
+      const b = document.createElement('button'); b.type = 'button'; b.setAttribute('role', 'menuitem'); b.textContent = t;
+      b.onclick = e => { e.stopPropagation(); menuOpen(false); fn(); };
+      menuPop.append(b);
+    }
+  }
+  const profEdit = () => { const d = sec.querySelector('details'); d.open = true; d.scrollIntoView({ block: 'nearest' }); };
   const logEl = $('#chatlog'), tabsEl = $('.ctabs'), input = $('#chatin'), cmdIn = $('#chatcmd'), stateEl = $('.cstate');
   // the newest line stays in view when the log's box changes size (the on-screen keyboard, a rotation, the layout)
   let logStick = true;
   logEl.addEventListener('scroll', () => { logStick = logEl.scrollHeight - logEl.scrollTop - logEl.clientHeight < 30; }, { passive: true });
+  // (scrolled down to the newest line: read)
+  logEl.addEventListener('scroll', () => { if (logStick) markRead(chans.get(key(shown))); }, { passive: true });
   if (window.ResizeObserver) new ResizeObserver(() => { if (logStick) logEl.scrollTop = logEl.scrollHeight; }).observe(logEl);
   cmdIn.value = String(store.get('mbaa-chat-cmd', '')).slice(0, 60);  // (kept, as Nico's command box is)
   cmdIn.onchange = () => store.set('mbaa-chat-cmd', cmdIn.value.trim());
@@ -482,7 +630,7 @@
   over.hidden = !overOn.checked;
   overOn.onchange = () => {
     store.set('mbaa-chat-over', overOn.checked); over.hidden = !overOn.checked;
-    if (!overOn.checked) { dmClear(nico); tlDrop(); } else tlKick();
+    if (!overOn.checked) { dmClear(nico); tlDrop(); swellClear(); } else tlKick();
     overOn.blur();
   };
 
@@ -537,10 +685,19 @@
   // empty channel); remembered across reloads ('match' by default: a new viewer sees the match they came to watch)
   let tabPref = store.get('mbaa-chat-tab', 'match') === 'general' ? 'general' : 'match';
   const key = n => n.toLowerCase();
+  // the read point of each channel (ms, server time of the newest line read): signed in, the server's read marker
+  // (draft/read-marker, MARKREAD: every device of the account); kept here too (a guest's only copy)
+  const READ_KEY = 'mbaa-chat-read';
+  const readLocal = store.get(READ_KEY, {}) || {};
   function chan(name) {
     let c = chans.get(key(name));
     if (!c) chans.set(key(name), c = { name, lines: [], names: new Set(), ops: new Set(), joined: false, histDone: false, seen: new Set(),
-                                       tries: 0, retryAt: 0, unread: 0 });
+                                       tries: 0, retryAt: 0, unread: 0,
+                                       // readTs: read up to; divTs: the read point when the viewer came back (the divider and the
+                                       // mentions are the lines after it, up to backAt); typing: nick -> {nick, until}; reacts:
+                                       // msgid -> emoji -> who -> name; topic: the MOTD (mIRC codes kept)
+                                       readTs: Number.isFinite(readLocal[key(name)]) ? readLocal[key(name)] : null, divTs: null, backAt: Infinity,
+                                       typing: new Map(), reacts: new Map(), topic: '' });
     return c;
   }
   function tabs() {
@@ -555,16 +712,20 @@
       if (c.unread && key(name) !== key(shown)) { const u = document.createElement('span'); u.className = 'cunread'; u.textContent = c.unread > 99 ? '99+' : c.unread; u.title = 'new lines'; b.append(u); }
       b.onclick = () => {
         shown = name; tabPref = name === GENERAL ? 'general' : 'match'; store.set('mbaa-chat-tab', tabPref);
+        cameBack(c);
         tabs(); render(); b.blur();
       };
       tabsEl.append(b);
     }
+    membersShow();
   }
   const clean = t => String(t).replace(/\x03\d{0,2}(,\d{1,2})?/g, '').replace(/[\x00-\x1f\x7f]/g, '');
   function lineEl(l) {
     const li = document.createElement('li');
     if (l.sys) {
       li.className = l.bot ? 'sys bot' : 'sys';
+      // (the MOTD: the only text drawn with its mIRC colours)
+      if (l.motd) { li.classList.add('motd'); li.append(l.by ? `${l.by} set the MOTD: ` : 'MOTD: ', ...mircNodes(l.motd)); return li; }
       if (l.bot) { const b = document.createElement('b'); b.textContent = BOT; li.append(b, document.createTextNode(l.text)); } else li.textContent = l.text;
       return li;
     }
@@ -577,7 +738,7 @@
     const body = document.createElement('span'); body.className = 'cbody';
     if (l.reply) {  // a reply: "↪ Name: snippet" (a click goes to the original while it is loaded)
       const q = document.createElement('span'); q.className = 'crq';
-      if (orig) { const b = document.createElement('b'); b.textContent = disp(orig.nick); q.append('↪ ', b, `: ${orig.text.slice(0, 80)}`); q.title = 'go to the message'; }
+      if (orig) { const b = document.createElement('b'); b.textContent = disp(orig.nick); q.append('↪ ', b, `: ${atText(mdPlain(orig.text), c).slice(0, 80)}`); q.title = 'go to the message'; }
       else { q.textContent = '↪ a reply to an earlier message'; q.style.cursor = 'default'; }
       q.onclick = () => flashLine(l.reply);
       body.append(q);
@@ -592,9 +753,29 @@
     if (orig && orig.irc && text.toLowerCase().startsWith(`@${orig.irc.toLowerCase()} `)) text = text.slice(orig.irc.length + 2);
     // (a match channel line carries where its sender's picture was (+mbaa/at): its time seeks there)
     if (l.at && isMatch(l.chan)) atTime(tm, l.at);
-    body.append(tm, nk, ...richText(text, l));
+    const jb = !l.action && !orig ? jumboOf(l) : null;
+    if (jb) {
+      const all = c ? comboOf(c, l) : [l], j = document.createElement('span');
+      j.className = 'cjumbo';
+      const je = document.createElement('span'); je.className = 'je'; je.textContent = jb.e; j.append(je);
+      const n = all.reduce((a, x) => a + jumboOf(x).n, 0);
+      if (n > 1) { const jn = document.createElement('span'); jn.className = 'jn'; jn.textContent = `×${n}`; j.append(jn); }
+      if (all.length > 1) {  // (a combo row: who joined)
+        li.classList.add('ccombo');
+        const who = [...new Map(all.map(x => [key(x.irc || x.nick), disp(x.nick)])).values()];
+        const jw = document.createElement('span'); jw.className = 'jw'; jw.textContent = `· ${who.slice(0, 2).join(', ')}${who.length > 2 ? ` +${who.length - 2}` : ''}`;
+        jw.title = who.join(', '); j.append(jw);
+      }
+      if (canSpeak() && l.text.length <= MAXLEN) {
+        j.classList.add('join'); j.title = 'join in: send it too'; j.setAttribute('role', 'button'); j.tabIndex = 0;
+        const go = e => { e.stopPropagation(); if (c && key(c.name) !== key(shown)) return; say(l.text.trim()); };
+        j.onclick = go; j.onkeydown = e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); go(e); } };
+      }
+      body.append(tm, nk, j);
+    } else body.append(tm, nk, ...mdNodes(text, seg => richText(emoRuns(seg), l)));
     for (const sl of linksOf(text).slice(0, 2)) body.append(linkCard(sl));
     li.append(body);
+    if (l.msgid && c) reactDraw(li, c, l.msgid);
     if (l.msgid) {
       li.dataset.msgid = l.msgid;
       const act = document.createElement('span'); act.className = 'cact';
@@ -605,6 +786,7 @@
         act.append(b);
       };
       if (!formEl.hidden && irc.registered) btn('crep', '↩', 'reply', () => replyStart(l));
+      if (c && canSpeak()) btn('creact', '☺', 'react', b => reactOpen(b, c, l));
       // channel operators: a moderator's menu on another user's line (the bot's commands); a signed-in sender: delete their
       // own line (REDACT; Ergo checks either way)
       const op = c && c.ops.has(key(irc.nick));
@@ -623,14 +805,22 @@
       if (mm.index > 0 && /[\p{L}\p{N}_]/u.test(text[mm.index - 1])) continue;  // (an e-mail address, not a mention)
       if (mm.index > i) out.push(document.createTextNode(text.slice(i, mm.index)));
       const s = document.createElement('span'); s.className = 'cat';
-      const tg = /^(.+)-(\d{4})[a-z]?$/.exec(mm[1]);
-      s.textContent = '@' + (tg ? disp(`${tg[1]}#${tg[2]}`) : mm[1]); s.title = mm[1];
+      s.textContent = '@' + atName(mm[1]); s.title = mm[1];
       if (myNames().includes(mm[1].toLowerCase())) s.classList.add('me');
       out.push(s); i = mm.index + mm[0].length;
     }
     if (i < text.length) out.push(document.createTextNode(text.slice(i)));
     return out;
   }
+  // a mentioned nick as the lines show names (an account's "Name-1234": its display name, the #tag per the setting);
+  // rendering only, the text sent keeps the IRC nick
+  function atName(n, c) {
+    c = c || chans.get(key(shown));
+    if (c && !SERVICES.has(key(n))) { const d = nameOf(n, c); if (d !== n) return disp(d); }
+    const tg = /^(.+)-(\d{4})[a-z]?$/.exec(n);
+    return tg ? disp(`${tg[1]}#${tg[2]}`) : n;
+  }
+  const atText = (t, c) => String(t).replace(AT_RE, (m, n, i, all) => i > 0 && /[\p{L}\p{N}_]/u.test(all[i - 1]) ? m : '@' + atName(n, c));
   // the names a line can call you by: the IRC nick, and signed in the account's name without its tag ("Name-1234" -> "name")
   function myNames() {
     const n = new Set([irc.nick]);
@@ -862,8 +1052,18 @@
   function render() {
     const c = chan(shown);
     c.unread = 0;
-    logEl.replaceChildren(...c.lines.map(lineEl));
-    logEl.scrollTop = logEl.scrollHeight;
+    // (the unread divider: before the first line from someone else said after the read point, while the viewer was away)
+    const els = [];
+    let div = false;
+    c.lines.forEach((l, i) => comboLink(c, l, i));
+    for (const l of c.lines) {
+      if (l.head) continue;  // (in a combo row: drawn with its first line)
+      if (!div && awayLine(c, l)) { div = true; const d = document.createElement('li'); d.className = 'cdiv'; d.textContent = 'new'; d.setAttribute('aria-label', 'new messages'); els.push(d); }
+      els.push(lineEl(l));
+    }
+    logEl.replaceChildren(...els);
+    logEl.scrollTop = logEl.scrollHeight; logStick = true;
+    markRead(c); badge(); topicShow(); mentsShow(); typingShow(); membersShow();
   }
   function addLine(name, l) {
     const c = chan(name);
@@ -872,18 +1072,25 @@
     // a reply (+draft/reply, or a line opening "@nick"): on the picture without its "@nick " (a line that is only the
     // mention: not at all); links are left out of the picture (a line that is only a link stays in the chat, with its
     // card); the chat keeps the whole line
-    if (!l.sys) l.pic = picText(l.text);
+    if (!l.sys) l.pic = picText(mdPlain(l.text));
     const onPic = !l.sys && !!dmText(l);
     if (onPic && isMatch(name)) tlAdd(l);
     // (history arrives oldest first, before any live line of that channel: kept in time order)
     if (l.hist) { let i = c.lines.length; while (i > 0 && c.lines[i - 1].time > l.time) i--; c.lines.splice(i, 0, l); }
     else c.lines.push(l);
     if (c.lines.length > MAXLINES) c.lines.splice(0, c.lines.length - MAXLINES);
-    if (key(name) !== key(shown)) { if (!l.hist && !l.sys && !l.self) { c.unread++; tabs(); } return; }
+    if (key(name) !== key(shown)) { if (!l.hist && !l.sys && !l.self) { c.unread++; tabs(); } badge(); return; }
     const stick = logEl.scrollHeight - logEl.scrollTop - logEl.clientHeight < 30;
     if (l.hist) renderSoon();
-    else { logEl.append(lineEl(l)); if (logEl.children.length > MAXLINES) logEl.firstChild.remove(); }
-    if (stick || l.self) logEl.scrollTop = logEl.scrollHeight;
+    else {
+      comboLink(c, l, c.lines.length - 1);
+      const hl = l.head && l.head.msgid && logEl.querySelector(`li[data-msgid="${CSS.escape(l.head.msgid)}"]`);
+      if (l.head && hl) hl.replaceWith(lineEl(l.head));  // (a combo row grows in place)
+      else if (l.head) renderSoon();
+      else { logEl.append(lineEl(l)); if (logEl.children.length > MAXLINES) logEl.firstChild.remove(); }
+    }
+    if (stick || l.self) { logEl.scrollTop = logEl.scrollHeight; logStick = true; }
+    if (!l.hist) { markRead(c); badge(); }
     // (a match channel's comments: on its timeline, tlAdd above, while watching back (DVR); following live, as they
     // arrive, as #melty's: on the wall clock, so they keep crossing through the result screen, a character select and
     // the switch to the next game, where the stream position stops or starts again)
@@ -899,11 +1106,415 @@
     if (!c || !msgid) return;
     c.seen.add(msgid);
     const i = c.lines.findIndex(l => l.msgid === msgid);
-    if (i >= 0) { c.lines[i].gone = true; c.lines.splice(i, 1); }
+    if (i >= 0) { const l = c.lines[i]; l.gone = true; c.lines.splice(i, 1); if (key(name) === key(shown) && (l.head || c.lines.some(x => x.head === l))) renderSoon(); }
     if (key(name) === key(shown)) { const li = logEl.querySelector(`li[data-msgid="${CSS.escape(msgid)}"]`); if (li) li.remove(); }
     for (const c of nico.list.filter(x => x.msgid === msgid)) dmRemove(nico, c);
     const e = tl.entries.find(x => x.l.msgid === msgid);
     if (e) { tl.entries = tl.entries.filter(x => x !== e); if (e.c) tlRelayout(); }
+  }
+
+  // ---- Discord-style formatting (render only: the IRC text stays as typed) ----
+  // At the line's start: "# " / "## " / "### " a header (capped at 15 px: one line can't take over the log), "-# " small
+  // text, "> " a quote. Inline: **bold**, *italic* / _italic_, __underline__, ~~strike~~, `code`, ||spoiler|| (a click
+  // shows it). A backslash keeps the next mark as text. Links are never split by the marks. Parsed to a tree, then built
+  // as DOM nodes (text nodes only, no HTML from the line) or flattened to plain text (the overlay, snippets).
+  const MD_TOK = ['`', '||', '**', '__', '~~', '*', '_'];
+  const MD_ESC = /[\\`*_~|>#-]/;
+  const wordCh = ch => !!ch && /[\p{L}\p{N}]/u.test(ch);
+  function mdClose(s, tok, from) {
+    for (let j = from; j < s.length; j++) {
+      if (s[j] === '\\' && tok !== '`') { j++; continue; }
+      if (!s.startsWith(tok, j)) continue;
+      if (tok.length === 1 && tok !== '`' && s[j + 1] === tok) { j++; continue; }  // ("**" is not a closing "*")
+      if (tok === '_' && wordCh(s[j + 1])) continue;
+      return j;
+    }
+    return -1;
+  }
+  function mdInline(s, depth = 0) {
+    const out = [];
+    let buf = '', i = 0;
+    const flush = () => { if (buf) { out.push(buf); buf = ''; } };
+    while (i < s.length) {
+      const ch = s[i];
+      if (ch === '\\' && MD_ESC.test(s[i + 1] || '')) { buf += s[i + 1]; i += 2; continue; }
+      if (ch === 'h') { URL_RE.lastIndex = 0; const um = /^https?:\/\/[^\s<>"'`]+/i.exec(s.slice(i)); if (um) { buf += um[0]; i += um[0].length; continue; } }
+      const tok = depth < 6 ? MD_TOK.find(t => s.startsWith(t, i)) : null;
+      if (tok && !(tok === '_' && wordCh(s[i - 1]))) {
+        const j = mdClose(s, tok, i + tok.length);
+        if (j > i + tok.length && s.slice(i + tok.length, j).trim()) {
+          flush();
+          const inner = s.slice(i + tok.length, j);
+          out.push(tok === '`' ? { t: tok, v: inner } : { t: tok, k: mdInline(inner, depth + 1) });
+          i = j + tok.length; continue;
+        }
+      }
+      buf += ch; i++;
+    }
+    flush();
+    return out;
+  }
+  function mdParse(text) {
+    const s = String(text || '');
+    const h = /^(#{1,3}) (?=\S)/.exec(s), sub = /^-# (?=\S)/.exec(s), q = /^> (?=\S)/.exec(s);
+    const m = h || sub || q;
+    return { cls: h ? `cmd-h cmd-h${h[1].length}` : sub ? 'cmd-sub' : q ? 'cmd-q' : '', k: mdInline(m ? s.slice(m[0].length) : s) };
+  }
+  const MD_TAG = { '**': 'b', '__': 'u', '~~': 's', '*': 'i', '_': 'i', '`': 'code' };
+  function mdBuild(items, leaf) {
+    const out = [];
+    for (const x of items) {
+      if (typeof x === 'string') { out.push(...leaf(x)); continue; }
+      if (x.t === '||') {
+        const sp = document.createElement('span'); sp.className = 'cspoil'; sp.title = 'spoiler: click to show'; sp.tabIndex = 0; sp.setAttribute('role', 'button');
+        sp.append(...mdBuild(x.k, leaf));
+        const open = e => { if (sp.classList.contains('open')) return; e.preventDefault(); e.stopPropagation(); sp.classList.add('open'); sp.removeAttribute('role'); sp.removeAttribute('title'); sp.tabIndex = -1; };
+        sp.addEventListener('click', open, true); sp.onkeydown = e => { if (e.key === 'Enter' || e.key === ' ') open(e); };
+        out.push(sp); continue;
+      }
+      const el = document.createElement(MD_TAG[x.t]);
+      if (x.t === '`') el.textContent = x.v; else el.append(...mdBuild(x.k, leaf));
+      out.push(el);
+    }
+    return out;
+  }
+  function mdNodes(text, leaf) {
+    const p = mdParse(text), kids = mdBuild(p.k, leaf);
+    if (!p.cls) return kids;
+    const w = document.createElement('span'); w.className = p.cls; w.append(...kids);
+    return [w];
+  }
+  // (spoilers stay hidden off the chat: "[spoiler]")
+  const mdFlat = items => items.map(x => typeof x === 'string' ? x : x.t === '`' ? x.v : x.t === '||' ? '[spoiler]' : mdFlat(x.k)).join('');
+  const mdPlain = text => mdFlat(mdParse(text).k);
+
+  // ---- emoji in the log: a line that is one emoji repeated shows it once, big, with "×n" (a click joins in: the same
+  // line from you); runs of 4+ of one emoji in other text show as "🏃 ×12"; consecutive such lines of the same emoji
+  // within COMBO_MS stack into one combo row (the total, who joined). Graphemes (Intl.Segmenter): ZWJ / VS16 sequences
+  // are one emoji. The overlay keeps the line as sent. ----
+  const graphemer = window.Intl && Intl.Segmenter ? new Intl.Segmenter(undefined, { granularity: 'grapheme' }) : null;
+  const graphemes = t => graphemer ? Array.from(graphemer.segment(String(t)), x => x.segment) : Array.from(String(t));
+  const isEmo = g => /\p{Extended_Pictographic}|\p{Regional_Indicator}/u.test(g);
+  const emoKey = g => g.replace(/\uFE0F/g, '');
+  const COMBO_MS = 20000;
+  function jumbo(text) {  // {e, n} for a line of one emoji (repeated), else null
+    const t = String(text || '').trim();
+    if (!t || t.length > MAXLEN * 2 || !isEmo(t)) return null;
+    const gs = graphemes(t).filter(g => !/^\s+$/.test(g));
+    if (!gs.length || !isEmo(gs[0])) return null;
+    const k = emoKey(gs[0]);
+    return gs.every(g => emoKey(g) === k) ? { e: gs[0], k, n: gs.length } : null;
+  }
+  const jumboOf = l => { if (l.jb === undefined) l.jb = !l.sys && !l.action && !l.reply ? jumbo(l.text) : null; return l.jb; };
+  function emoRuns(text) {  // "🏃🏃🏃🏃🏃" inside other text -> "🏃 ×5"
+    if (!/\p{Extended_Pictographic}/u.test(text)) return text;
+    const gs = graphemes(text), out = [];
+    for (let i = 0; i < gs.length;) {
+      let j = i + 1;
+      if (isEmo(gs[i])) while (j < gs.length && emoKey(gs[j]) === emoKey(gs[i])) j++;
+      out.push(j - i >= 4 ? `${gs[i]} ×${j - i}` : gs.slice(i, j).join(''));
+      i = j;
+    }
+    return out.join('');
+  }
+  // the combo a line joins: the previous line (not a system line) of the same emoji, within COMBO_MS
+  function comboLink(c, l, i) {
+    l.head = null;
+    const jb = jumboOf(l);
+    if (!jb) return;
+    for (let k = i - 1; k >= 0; k--) {
+      const p = c.lines[k];
+      if (p.sys) continue;
+      const pj = jumboOf(p);
+      if (pj && pj.k === jb.k && +l.time - +p.time <= COMBO_MS && +l.time >= +p.time) l.head = p.head || p;
+      return;
+    }
+  }
+  const comboOf = (c, h) => c.lines.filter(x => x === h || x.head === h);
+
+  // ---- mIRC formatting: the MOTD (the channel topic) only; every other line's codes are stripped (clean) ----
+  const MIRC = ['#ffffff', '#000000', '#00007f', '#009300', '#ff0000', '#7f0000', '#9c009c', '#fc7f00', '#ffff00', '#00fc00', '#009393', '#00ffff',
+    '#0000fc', '#ff00ff', '#7f7f7f', '#d2d2d2'];
+  const MIRC_NAME = ['white', 'black', 'navy', 'green', 'red', 'maroon', 'purple', 'orange', 'yellow', 'lime', 'teal', 'cyan', 'blue', 'pink', 'grey', 'light grey'];
+  function mircNodes(text) {
+    const out = [], plain = () => ({ b: false, i: false, u: false, s: false, fg: -1, bg: -1 });
+    let st = plain(), buf = '';
+    const flush = () => {
+      if (!buf) return;
+      if (!st.b && !st.i && !st.u && !st.s && st.fg < 0 && st.bg < 0) out.push(document.createTextNode(buf));
+      else {
+        const sp = document.createElement('span'); sp.className = 'mirc'; sp.textContent = buf;
+        if (st.b) sp.style.fontWeight = '700';
+        if (st.i) sp.style.fontStyle = 'italic';
+        const deco = [st.u && 'underline', st.s && 'line-through'].filter(Boolean).join(' ');
+        if (deco) sp.style.textDecoration = deco;
+        if (st.bg >= 0) { sp.style.background = MIRC[st.bg]; sp.style.borderRadius = '3px'; sp.style.padding = '0 2px'; }
+        // (no background: a dark colour is lifted, as names are, to read on the dark panel)
+        if (st.fg >= 0) sp.style.color = st.bg >= 0 ? MIRC[st.fg] : readable(MIRC[st.fg]);
+        out.push(sp);
+      }
+      buf = '';
+    };
+    const s = String(text || '');
+    for (let i = 0; i < s.length; i++) {
+      const ch = s[i];
+      if (ch === '\x03') {
+        flush();
+        const m = /^(\d{1,2})(?:,(\d{1,2}))?/.exec(s.slice(i + 1));
+        if (!m) { st.fg = st.bg = -1; continue; }
+        st.fg = +m[1] < 16 ? +m[1] : -1;
+        if (m[2] != null) st.bg = +m[2] < 16 ? +m[2] : -1;
+        i += m[0].length; continue;
+      }
+      const t = { '\x02': 'b', '\x1d': 'i', '\x1f': 'u', '\x1e': 's' }[ch];
+      if (t) { flush(); st[t] = !st[t]; continue; }
+      if (ch === '\x0f') { flush(); st = plain(); continue; }
+      if (/[\x00-\x1f\x7f]/.test(ch)) continue;
+      buf += ch;
+    }
+    flush();
+    return out;
+  }
+  // the MOTD editor's text: the codes as {b} {i} {u} {o} {c} {cN} {cN,M} (visible, typed or from the buttons)
+  const pad2 = n => String(+n).padStart(2, '0');
+  const motdToCodes = t => String(t).replace(/[\r\n]+/g, ' ').replace(/\{(?:(b)|(i)|(u)|(o)|c(?:(\d{1,2})(?:,(\d{1,2}))?)?)\}/g,
+    (m, b, it, u, o, fg, bg) => b ? '\x02' : it ? '\x1d' : u ? '\x1f' : o ? '\x0f' : '\x03' + (fg != null ? pad2(fg) + (bg != null ? ',' + pad2(bg) : '') : ''));
+  const motdFromCodes = t => String(t).replace(/\x03(?:(\d{1,2})(?:,(\d{1,2}))?)?/g, (m, fg, bg) => fg != null ? `{c${+fg}${bg != null ? `,${+bg}` : ''}}` : '{c}')
+    .replace(/\x02/g, '{b}').replace(/\x1d/g, '{i}').replace(/\x1f/g, '{u}').replace(/\x0f/g, '{o}').replace(/[\x00-\x1f\x7f]/g, '');
+  const TOPICLEN = 300;  // (Ergo limits.topiclen, bytes)
+
+  // ---- unread: the read point, the divider, mentions while away, the tab title ----
+  const hiddenNow = () => document.visibilityState === 'hidden';
+  const lastLine = c => { for (let i = c.lines.length - 1; i >= 0; i--) if (!c.lines[i].sys) return c.lines[i]; return null; };
+  // a line from someone else, after the read point the viewer came back to, said while they were away
+  const awayLine = (c, l) => c.divTs != null && !l.sys && !l.self && +l.time > c.divTs && +l.time <= c.backAt;
+  function isMention(c, l) {
+    if (l.self || l.sys) return false;
+    if (mentionsMe(l.text)) return true;
+    const o = l.reply && c.lines.find(x => x.msgid === l.reply);
+    return !!(o && o.self);
+  }
+  function readSave(c, t) {
+    readLocal[key(c.name)] = t;
+    const ks = Object.keys(readLocal);
+    if (ks.length > 60) for (const k of ks.slice(0, ks.length - 60)) if (k !== key(GENERAL)) delete readLocal[k];
+    store.set(READ_KEY, readLocal);
+  }
+  // read: the channel shown, the page visible, the log at its newest line
+  function markRead(c) {
+    if (!c || hiddenNow() || key(c.name) !== key(shown) || !logStick) return;
+    const l = lastLine(c);
+    if (!l) return;
+    const t = +l.time;
+    if (c.readTs != null && t <= c.readTs) return;
+    c.readTs = t; readSave(c, t);
+    if (irc.account && irc.caps.has('draft/read-marker') && c.joined && !c.mrPend) {
+      c.mrPend = setTimeout(() => {
+        c.mrPend = 0;
+        if (irc.registered && c.joined && c.readTs > (c.srvRead || 0)) irc.send(`MARKREAD ${c.name} timestamp=${new Date(c.readTs).toISOString()}`);
+      }, 1500);
+    }
+    badge();
+  }
+  // the viewer is back (the page shown again, the tab switched to): the divider and the mentions start at the read point
+  function cameBack(c) { c.firstMark = false; c.divTs = c.readTs; c.backAt = (() => { const l = lastLine(c); return l ? +l.time : -Infinity; })(); c.mentHide = false; }
+  // the tab title: "(N) " = unread lines (from others, after the read point) in the channels here
+  let baseTitle = null;
+  function badge() {
+    let n = 0;
+    for (const c of chans.values()) if (c.readTs != null) for (const l of c.lines) if (!l.sys && !l.self && +l.time > c.readTs) n++;
+    const base = document.title.replace(/^\(\d+\+?\) /, '');
+    const want = n ? `(${n > 99 ? '99+' : n}) ${base}` : base;
+    baseTitle = base;
+    if (document.title !== want) document.title = want;
+  }
+  { const te = document.querySelector('title'); if (te) new MutationObserver(() => { if (document.title.replace(/^\(\d+\+?\) /, '') !== baseTitle) badge(); }).observe(te, { childList: true, characterData: true, subtree: true }); }
+  const mentEl = $('.cments');
+  function mentsShow() {
+    const c = chan(shown);
+    const list = c.mentHide ? [] : c.lines.filter(l => l.msgid && awayLine(c, l) && isMention(c, l));
+    mentEl.hidden = !list.length;
+    if (!list.length) { mentEl.replaceChildren(); return; }
+    const b = document.createElement('b'); b.textContent = `${list.length} mention${list.length === 1 ? '' : 's'} while you were away`;
+    const links = list.slice(-5).map(l => {
+      const a = document.createElement('a'); a.tabIndex = 0; a.setAttribute('role', 'button'); a.dataset.msgid = l.msgid;
+      a.textContent = `${disp(l.nick)}: ${atText(mdPlain(l.text), c).slice(0, 48)}`; a.title = 'go to the message';
+      a.onclick = () => flashLine(l.msgid); a.onkeydown = e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); flashLine(l.msgid); } };
+      return a;
+    });
+    const x = document.createElement('button'); x.type = 'button'; x.textContent = '✕'; x.title = 'dismiss'; x.setAttribute('aria-label', 'dismiss');
+    x.onclick = () => { c.mentHide = true; mentsShow(); };
+    mentEl.replaceChildren(b, ...links, x);
+  }
+  // presence: hidden this long, the page says it is away ("idle", AWAY :idle); back, it is back
+  let idleMs = 5 * 60 * 1000, idleT = 0, idleSet = false;
+  function idleStart() {
+    clearTimeout(idleT);
+    idleT = setTimeout(() => { if (hiddenNow() && irc.registered && !idleSet) { idleSet = true; irc.send('AWAY :idle'); } }, idleMs);
+  }
+  function idleEnd() { clearTimeout(idleT); if (idleSet) { idleSet = false; if (irc.registered) irc.send('AWAY'); } }
+  document.addEventListener('visibilitychange', () => {
+    if (hiddenNow()) { idleStart(); badge(); return; }
+    idleEnd();
+    for (const c of chans.values()) cameBack(c);
+    render();
+  });
+
+  // ---- the MOTD: the channel topic (mods set it: channel operators, +t) ----
+  const topicEl = $('.ctopic');
+  function topicSet(c, t, by) {
+    c.topic = t;
+    const who = by ? disp(nameOf(by, c)) : '';
+    if (by) addLine(c.name, t ? { sys: true, motd: t, by: who, text: `${who} set the MOTD: ${clean(t)}`, time: new Date() } : { sys: true, text: `${who} cleared the MOTD`, time: new Date() });
+    else if (t && t !== c.topicSaid) addLine(c.name, { sys: true, motd: t, text: clean(t), time: new Date() });  // (one line on joining)
+    c.topicSaid = t;
+    if (key(c.name) === key(shown)) topicShow();
+  }
+  function topicShow() {
+    const c = chan(shown), op = key(c.name) === key(GENERAL) && c.ops.has(key(irc.nick));
+    topicEl.hidden = !c.topic && !op;
+    if (topicEl.hidden) { topicEl.replaceChildren(); return; }
+    const t = document.createElement('span'); t.className = 'ctt';
+    if (c.topic) { t.append(...mircNodes(c.topic)); t.title = 'MOTD'; } else { t.classList.add('none'); t.textContent = 'no MOTD set'; }
+    topicEl.replaceChildren(t);
+    if (op) {
+      const b = document.createElement('button'); b.type = 'button'; b.className = 'cmotd'; b.textContent = '✎'; b.title = 'edit the MOTD (moderators)'; b.setAttribute('aria-label', 'edit the MOTD');
+      b.onclick = e => { e.stopPropagation(); if (modFor === 'motd' && !modm.hidden) modClose(); else motdEdit(b); };
+      topicEl.append(b);
+    }
+  }
+
+  // ---- typing: "x is typing…" (+typing client tag, TAGMSG: active at most every 3 s while typing, paused, done) ----
+  const typEl = $('.ctyping');
+  const TYPE_EVERY = 3000, TYPE_TTL = 6000, TYPE_PAUSE = 5000;
+  let typSent = { chan: null, at: 0, state: 'done' }, typPauseT = 0;
+  function typSend(st, to) {
+    if (!to || !irc.account || !irc.registered || !irc.caps.has('message-tags') || !chan(to).joined) return;
+    irc.send(`@+typing=${st} TAGMSG ${to}`);
+    typSent = { chan: to, at: performance.now(), state: st };
+  }
+  function typInput() {
+    clearTimeout(typPauseT);
+    const v = input.value.trim();
+    if (!v || v.startsWith('/')) { if (typSent.state !== 'done') typSend('done', typSent.chan); return; }
+    if (typSent.state === 'active' && typSent.chan && key(typSent.chan) !== key(shown)) typSend('done', typSent.chan);
+    if (typSent.state !== 'active' || key(typSent.chan || '') !== key(shown) || performance.now() - typSent.at >= TYPE_EVERY) typSend('active', shown);
+    typPauseT = setTimeout(() => { if (typSent.state === 'active') typSend('paused', typSent.chan); }, TYPE_PAUSE);
+  }
+  input.addEventListener('input', typInput);
+  function typingShow() {
+    const c = chan(shown), now = Date.now();
+    const names = [...c.typing.values()].filter(x => x.until > now).map(x => disp(nameOf(x.nick, c)));
+    typEl.textContent = !names.length ? '' : names.length === 1 ? `${names[0]} is typing…` : names.length === 2 ? `${names[0]} and ${names[1]} are typing…`
+      : names.length === 3 ? `${names[0]}, ${names[1]} and ${names[2]} are typing…` : 'several people are typing…';
+  }
+  setInterval(() => {
+    const now = Date.now();
+    let ch = false;
+    for (const c of chans.values()) for (const [k, x] of c.typing) if (x.until <= now) { c.typing.delete(k); ch = true; }
+    if (ch) { typingShow(); membersShow(); }
+  }, 1000);
+  const typingGone = nick => { let ch = false; for (const c of chans.values()) ch = c.typing.delete(key(nick)) || ch; if (ch) typingShow(); };
+
+  // ---- reactions: +draft/react=<emoji> (and +draft/unreact) with +draft/reply=<msgid>, a TAGMSG ----
+  const REACT_QUICK = ['👍', '😂', '🔥', '❤️', '😮', '😢', '👏'];
+  const REACT_OK = e => typeof e === 'string' && e.length <= 24 && !/[\s\x00-\x1f\x7f;\\]/.test(e) && !/[A-Za-z0-9]/.test(e);
+  const myWho = () => key(irc.account || irc.nick);
+  const canSpeak = () => !!irc.account && irc.registered && !formEl.hidden;
+  function reactApply(c, msgid, e, who, name, add) {
+    let r = c.reacts.get(msgid);
+    if (!r) { if (!add) return; c.reacts.set(msgid, r = new Map()); }
+    let s = r.get(e);
+    if (add) { if (!s) { if (r.size >= 20) return; r.set(e, s = new Map()); } s.set(who, name); }
+    else if (s) { s.delete(who); if (!s.size) r.delete(e); }
+    if (key(c.name) === key(shown)) { const li = logEl.querySelector(`li[data-msgid="${CSS.escape(msgid)}"]`); if (li) reactDraw(li, c, msgid); }
+  }
+  function reactDraw(li, c, msgid) {
+    const body = li.querySelector('.cbody');
+    if (!body) return;
+    let box = body.querySelector('.creacts');
+    const r = c.reacts.get(msgid);
+    if (!r || !r.size) { if (box) box.remove(); return; }
+    if (!box) { box = document.createElement('span'); box.className = 'creacts'; body.append(box); }
+    box.replaceChildren(...[...r].map(([e, s]) => {
+      const b = document.createElement('button'), mine = s.has(myWho()), es = document.createElement('span');
+      b.type = 'button'; b.className = mine ? 'mine' : ''; es.className = 'e'; es.textContent = e;
+      b.append(es, String(s.size));
+      const who = [...s.values()].map(n => disp(n));
+      b.title = `${who.slice(0, 8).join(', ')}${who.length > 8 ? ` and ${who.length - 8} more` : ''} reacted with ${e}${canSpeak() ? (mine ? ' (click to take yours back)' : ' (click to add yours)') : ''}`;
+      b.setAttribute('aria-pressed', String(mine)); b.disabled = !canSpeak();
+      b.onclick = ev => { ev.stopPropagation(); react(c, msgid, e, !mine); };
+      return b;
+    }));
+  }
+  function react(c, msgid, e, add) {
+    if (!canSpeak() || !c.joined || !msgid || !REACT_OK(e) || !irc.caps.has('message-tags')) return;
+    irc.send(`@+draft/${add ? 'react' : 'unreact'}=${e};+draft/reply=${msgid} TAGMSG ${c.name}`);
+    if (!irc.caps.has('echo-message')) reactApply(c, msgid, e, myWho(), shownNick(irc.nick, irc.account, auth.name), add);
+  }
+  const rpop = document.createElement('div');
+  rpop.className = 'crpop'; rpop.hidden = true; rpop.setAttribute('role', 'menu'); rpop.setAttribute('aria-label', 'react');
+  document.body.append(rpop);
+  let rpFor = null;
+  function reactOpen(anchor, c, l) {
+    if (rpFor === l && !rpop.hidden) return reactClose();
+    rpFor = l;
+    const recent = (store.get(EMO_RECENT, []) || []).filter(REACT_OK);
+    const quick = [...new Set([...REACT_QUICK, ...recent])].slice(0, 9);
+    const btn = (txt, title, fn) => { const b = document.createElement('button'); b.type = 'button'; b.textContent = txt; b.title = title; b.setAttribute('role', 'menuitem'); b.onclick = e => { e.stopPropagation(); fn(); }; return b; };
+    rpop.replaceChildren(...quick.map(e => btn(e, `react with ${e}`, () => { react(c, l.msgid, e, true); reactClose(); })),
+      btn('＋', 'more emoji', () => { reactClose(); emoReact = { c, msgid: l.msgid }; emoOpen(true); }));
+    rpop.hidden = false;
+    const a = anchor.getBoundingClientRect(), m = rpop.getBoundingClientRect();
+    rpop.style.left = `${Math.max(8, Math.min(innerWidth - m.width - 8, a.right - m.width))}px`;
+    rpop.style.top = `${a.top - 6 - m.height >= 8 ? a.top - 6 - m.height : a.bottom + 6}px`;
+  }
+  function reactClose() { rpop.hidden = true; rpFor = null; }
+  document.addEventListener('pointerdown', e => { if (!rpop.hidden && !rpop.contains(e.target) && !e.target.closest('.creact')) reactClose(); });
+  document.addEventListener('keydown', e => { if (e.key === 'Escape' && !rpop.hidden) reactClose(); });
+  for (const ev of ['wheel', 'touchmove']) logEl.addEventListener(ev, () => { if (!rpop.hidden) reactClose(); }, { passive: true });
+
+  // ---- the names list: who is in the channel shown (display names as the lines show them; away / idle; no hosts) ----
+  const membBtn = $('.cmembtn'), membEl = $('.cmemb');
+  let membOpen = !!store.get('mbaa-chat-members', false);
+  membBtn.onclick = () => { membOpen = !membOpen; store.set('mbaa-chat-members', membOpen); membersShow(); membBtn.blur(); };
+  const SERVICES = new Set(['histserv', 'chanserv', 'nickserv']);
+  function membersShow() {
+    const c = chan(shown);
+    const people = [...c.names].filter(n => !SERVICES.has(key(n)));
+    membBtn.textContent = people.length ? `people ${people.length}` : 'people';
+    membBtn.setAttribute('aria-expanded', String(membOpen));
+    membEl.hidden = !membOpen;
+    if (!membOpen) return;
+    const rows = people.map(n => {
+      const aw = irc.away.get(key(n));
+      let col = null;
+      for (let i = c.lines.length - 1; i >= 0; i--) if (c.lines[i].irc && key(c.lines[i].irc) === key(n)) { col = c.lines[i].color; break; }
+      return { n, name: disp(nameOf(n, c)), aw, idle: aw != null && /^idle$/i.test(aw), bot: key(n) === key(BOT), op: c.ops.has(key(n)), me: key(n) === key(irc.nick),
+               ty: c.typing.has(key(n)), col };
+    });
+    rows.sort((a, b) => (!!a.aw - !!b.aw) || (b.bot - a.bot) || a.name.localeCompare(b.name, undefined, { sensitivity: 'base' }));
+    const away = rows.filter(r => r.aw != null).length;
+    const h = document.createElement('div'); h.className = 'mh';
+    h.textContent = `${rows.length - away} here${away ? ` · ${away} away` : ''}`;
+    const els = rows.map(r => {
+      const d = document.createElement('div'); d.className = 'mm' + (r.aw != null ? ' away' : '') + (r.idle ? ' idle' : '');
+      const dot = document.createElement('i'); dot.className = 'dot';
+      const b = document.createElement('b'); b.textContent = r.name; if (r.col) b.style.color = readable(r.col);
+      d.append(dot, b);
+      const tag = (t, cls) => { const s = document.createElement('span'); s.className = 'tag' + (cls ? ` ${cls}` : ''); s.textContent = t; d.append(s); };
+      if (r.me) tag('you');
+      if (r.bot) tag('bot'); else if (r.op) tag('mod');
+      if (r.ty) tag('typing…');
+      if (r.aw != null) tag(r.idle ? 'idle' : 'away', 'aw');
+      d.title = r.aw != null && !r.idle && r.aw !== 'away' ? `${r.name}: away (${r.aw})` : r.name;
+      if (!r.me && !r.bot && !formEl.hidden) {
+        d.classList.add('click'); d.title += ' · click to mention';
+        d.onclick = () => { const ins = `@${r.n} `; if (input.value.length + ins.length <= MAXLEN) { input.value = (input.value && !/\s$/.test(input.value) ? input.value + ' ' : input.value) + ins; } input.focus(); };
+      }
+      return d;
+    });
+    membEl.replaceChildren(h, ...els);
   }
 
   // ---- the overlay: Niconico's own comment layout ----
@@ -998,6 +1609,17 @@
     if (on) cmdIn.focus();
   };
   cmdIn.addEventListener('input', toolShow);
+  // (behind "Aa" beside the input: a popover over the lines, with the spread slider for moderators)
+  const nicoBtn = $('.cnico');
+  $('.cform').append(tool); tool.append($('.cspread')); tool.hidden = true;
+  function toolOpen(on) {
+    tool.hidden = !on; nicoBtn.setAttribute('aria-expanded', String(on));
+    if (on) { emoOpen(false); mentionClose(); popPlace(tool, 260); tool.style.maxHeight = ''; } else popOpen(false);
+  }
+  nicoBtn.addEventListener('pointerdown', e => e.preventDefault());  // (the input keeps the focus)
+  nicoBtn.onclick = () => toolOpen(tool.hidden);
+  document.addEventListener('pointerdown', e => { if (!tool.hidden && !tool.contains(e.target) && !nicoBtn.contains(e.target)) toolOpen(false); });
+  document.addEventListener('keydown', e => { if (e.key === 'Escape' && !tool.hidden && pop.hidden) toolOpen(false); });
   toolHook = toolShow;
   toolShow();
   // ---- the overlay's renderer (danmaku) ----
@@ -1103,6 +1725,7 @@
   function danmaku(l) {
     if (!overOn.checked || document.visibilityState === 'hidden' || l.gone) return;
     pin();
+    swellFeed(l);
     if (!dmFit(nico)) return;
     const now = wallNow(), spread = spreadOf();
     for (const a of [...nico.list]) if (a.t + a.life + spread < now) dmRemove(nico, a);
@@ -1115,6 +1738,55 @@
     c.anim = e.animate([{ transform: dmXf(c, 0) }, { transform: dmXf(c, c.life) }], { duration: c.life * 1000, easing: 'linear', fill: 'both' });
     c.anim.onfinish = () => { if (c.el) { c.el.remove(); c.el = null; } c.anim = null; };
   }
+  // ---- the swell: an emoji spammed (SWELL_MIN copies within SWELL_WIN, by anyone) gets one big copy in the picture's
+  // lower right, growing with each copy (a pulse per hit, at most SWELL_MAX of the picture's height), the running count
+  // under it; it fades SWELL_FADE after the spam stops. Several at once stack upward (at most 3). Live comments only
+  // (the overlay's own layer: off with "on picture"). ----
+  const SWELL_MIN = 5, SWELL_WIN = 4000, SWELL_FADE = 3000, SWELL_MAX = 0.25, SWELL_N = 3;
+  const swells = new Map();  // emoji key -> {e, hits: [t], count, el, num, fadeT, at}
+  function swellFeed(l) {
+    const now = performance.now(), per = new Map();
+    for (const g of graphemes(l.pic != null ? l.pic : l.text)) if (isEmo(g)) { const k = emoKey(g); const x = per.get(k) || { e: g, n: 0 }; x.n++; per.set(k, x); }
+    for (const [k, { e, n }] of per) {
+      let s = swells.get(k);
+      if (!s) swells.set(k, s = { e, hits: [], count: 0, el: null });
+      s.hits = s.hits.filter(t => now - t <= SWELL_WIN);
+      for (let i = 0; i < n; i++) s.hits.push(now);
+      if (s.el) s.count += n;
+      else if (s.hits.length >= SWELL_MIN && [...swells.values()].filter(x => x.el).length < SWELL_N) {
+        s.count = s.hits.length; s.at = now;
+        s.el = document.createElement('div'); s.el.className = 'cswell'; s.el.dataset.e = k;
+        s.em = document.createElement('div'); s.em.className = 'e'; s.em.textContent = e;
+        s.num = document.createElement('div'); s.num.className = 'n';
+        s.el.append(s.em, s.num); over.append(s.el);
+      } else continue;
+      s.num.textContent = String(s.count);
+      if (s.em.animate) s.em.animate([{ transform: 'scale(1.18)' }, { transform: 'scale(1)' }], { duration: 220, easing: 'ease-out' });
+      clearTimeout(s.fadeT);
+      s.el.style.opacity = '1';
+      s.fadeT = setTimeout(() => swellEnd(k), SWELL_FADE);
+    }
+    swellLayout();
+  }
+  function swellEnd(k) {
+    const s = swells.get(k);
+    if (!s || !s.el) return;
+    s.el.style.opacity = '0';
+    const el = s.el; s.el = null; s.hits = []; s.count = 0;
+    setTimeout(() => { el.remove(); swellLayout(); }, 500);
+  }
+  function swellClear() { for (const s of swells.values()) { clearTimeout(s.fadeT); if (s.el) s.el.remove(); } swells.clear(); }
+  function swellLayout() {  // (sizes from the picture's height; the oldest at the bottom)
+    const H = over.clientHeight || 360;
+    let y = H * 0.04;
+    for (const s of [...swells.values()].filter(x => x.el).sort((a, b) => a.at - b.at)) {
+      const sz = Math.min(SWELL_MAX, 0.07 + 0.006 * s.count) * H;
+      s.em.style.fontSize = `${sz.toFixed(1)}px`; s.num.style.fontSize = `${Math.max(11, H * 0.03).toFixed(1)}px`;
+      s.el.style.bottom = `${y.toFixed(1)}px`;
+      y += sz * 1.12 + Math.max(11, H * 0.03) * 1.2;
+    }
+  }
+
   // the overlay follows the picture's box (pin) on any layout change, not per frame
   { const ro = new ResizeObserver(() => { pin(); dmFit(nico); if (tl.st) dmFit(tl.st); tl.T = -1; tlKick(); });
     ro.observe(over); ro.observe(stage);
@@ -1274,9 +1946,12 @@
   setInterval(() => { if (matchChan && tl.entries.length) { tlPlace(); tlKick(); } }, 1000);
 
   // ---- IRC ----
-  const irc = { ws: null, registered: false, nick: prof.nick, caps: new Set(), batches: new Map(), retry: 0, lastSend: 0, account: null };
+  const irc = { ws: null, registered: false, nick: prof.nick, caps: new Set(), batches: new Map(), retry: 0, lastSend: -1e9, account: null, away: new Map() };
   const WANT = ['message-tags', 'server-time', 'echo-message', 'batch', 'draft/chathistory', 'chathistory', 'draft/message-redaction',
-    'multi-prefix', 'sasl', 'account-tag'];
+    'multi-prefix', 'sasl', 'account-tag',
+    // read markers (MARKREAD), presence (AWAY to channel members), history's TAGMSGs (reactions, when the server stores
+    // them: tagmsg-storage) and its joins / parts as events (dropped: history, not now)
+    'draft/read-marker', 'away-notify', 'draft/event-playback'];
   // a signed-in sender's name: "<Name>-0042" (+ a letter on a clash) -> "Name#0042"; +mbaa/name's exact display name
   // when it maps to that nick (chat_auth.py safe())
   // (as the auth-script's safe(): ASCII letters, digits, _ and accented Latin letters; anything else _)
@@ -1306,19 +1981,17 @@
   function authShow() {
     authEl.replaceChildren();
     const signedIn = !!irc.account;
+    const sign = $('.csign');
+    sign.replaceChildren();
     if (signedIn) {
-      const t = document.createElement('span');
-      t.textContent = `signed in as ${disp(shownNick(irc.account, irc.account, auth.name))}${auth.provider ? ` (with ${auth.provider})` : ''}`;
-      const b = document.createElement('button'); b.type = 'button'; b.className = 'signout'; b.textContent = 'sign out';
-      b.onclick = async () => {
+      // (the profile line's ▾ menu: edit profile, change name, sign out)
+      const signOut = async () => {
         try { await fetch(`${AUTH_URL}/logout`, { method: 'POST', credentials: 'same-origin' }); } catch (e) {}
         Object.assign(auth, { state: 'unknown', token: null });
         if (irc.ws) irc.ws.close();  // (reconnects as a guest)
       };
-      authEl.append(t, b);
-      const rn = document.createElement('button'); rn.type = 'button'; rn.className = 'signout'; rn.textContent = 'change name';
-      rn.onclick = () => { auth.renaming = true; authShow(); };
-      authEl.append(rn);
+      menuFill([['edit profile', profEdit], ['change name', () => { auth.renaming = true; authShow(); }], ['sign out', signOut]],
+        `signed in as ${disp(shownNick(irc.account, irc.account, auth.name))}${auth.provider ? ` (with ${auth.provider})` : ''}`);
       if (auth.renaming) nameForm('name', irc.account.replace(/-\d{4}[a-z]?$/, ''), 'rename');
     } else if (auth.state === 'name') {
       const t = document.createElement('span'); t.textContent = 'Pick your name (your PovertyCaster account, the same one the launcher uses):';
@@ -1327,13 +2000,14 @@
     } else if (auth.state === 'denied') {
       const t = document.createElement('span'); t.textContent = 'This account may not chat.'; authEl.append(t);
     } else if (auth.state === 'guest' || (auth.state === 'signed' && irc.registered)) {
+      // (a guest: the sign-in on the profile line; guests read)
       const a = document.createElement('a'); a.className = 'signin';
       const ret = location.pathname + location.search;
       a.href = auth.signin ? auth.signin + (auth.signin.includes('?') ? '&' : '?') + 'return=' + encodeURIComponent(ret) : '#';
-      a.textContent = `Sign in${auth.provider ? ` with ${auth.provider}` : ''} to chat`;
-      authEl.append(a);
-      const n = document.createElement('span'); n.textContent = 'guests can read'; authEl.append(n);
+      a.textContent = `Sign in${auth.provider ? ` with ${auth.provider}` : ''} to chat`; a.title = 'guests can read; sign in to chat';
+      sign.append(a);
     }
+    if (!signedIn) menuFill([['edit profile', profEdit]]);
     if (auth.err) { const e = document.createElement('span'); e.className = 'cerr'; e.textContent = auth.err; authEl.append(e); }
     authEl.hidden = !authEl.childElementCount;
     // a guest on a server with sign-in: no input (channels are +M); without sign-in (auth 'none'): as before
@@ -1422,6 +2096,12 @@
   function join(name) { const c = chan(name); if (irc.registered && !c.joined) irc.send(`JOIN ${name}`); }
   function on(m) {
     const p = m.params;
+    const hb = m.tags.batch && irc.batches.get(m.tags.batch);
+    if (hb && /chathistory/.test(hb.type)) {
+      hb.n++; if (m.tags.msgid) hb.last = m.tags.msgid;
+      // (event-playback: a channel's past joins, parts, modes and topics come as those commands: history, not now)
+      if (m.cmd !== 'PRIVMSG' && m.cmd !== 'NOTICE' && m.cmd !== 'TAGMSG') return;
+    }
     switch (m.cmd) {
       case 'PING': irc.send(`PONG :${p[p.length - 1] || ''}`); return;
       case 'CAP': {
@@ -1454,7 +2134,7 @@
         if (m.cmd !== '908') { sys('sign-in failed: chatting as a guest (reload to try again)'); auth.token = null; irc.send('CAP END'); }
         return;
       case '001':
-        irc.registered = true; irc.retry = 0; irc.nick = p[0];
+        irc.registered = true; irc.retry = 0; irc.nick = p[0]; irc.away.clear(); idleSet = false; if (hiddenNow()) idleStart();
         if (irc.nick !== prof.nick) sys(`connected as ${irc.nick}`);
         state(''); authShow();
         join(GENERAL); if (matchChan) join(matchChan);
@@ -1467,8 +2147,13 @@
       }
       case 'NICK': {
         const to = p[0];
-        for (const c of chans.values()) if (c.names.delete(m.nick)) c.names.add(to);
-        if (m.nick === irc.nick) irc.nick = to;
+        // (a channel operator keeps +o across a nick change: the ops follow the nick, or a mod who changed name loses the menu)
+        for (const c of chans.values()) { if (c.names.delete(m.nick)) c.names.add(to); if (c.ops.delete(key(m.nick))) c.ops.add(key(to)); }
+        const meNick = m.nick === irc.nick;
+        if (meNick) irc.nick = to;
+        const aw = irc.away.get(key(m.nick)); irc.away.delete(key(m.nick)); if (aw != null) irc.away.set(key(to), aw);
+        if (meNick) { spreadAdmin(); render(); }  // (the mod buttons drawn again with the new nick)
+        typingGone(m.nick); membersShow();
         return;
       }
       case 'JOIN': {
@@ -1477,9 +2162,36 @@
         c.names.add(m.nick); tabs();
         return;
       }
-      case 'PART': { const c = chan(p[0]); c.names.delete(m.nick); c.ops.delete(key(m.nick)); if (m.nick === irc.nick) { c.joined = false; c.names.clear(); } tabs(); return; }
+      case 'PART': { const c = chan(p[0]); c.names.delete(m.nick); c.typing.delete(key(m.nick)); c.ops.delete(key(m.nick)); if (m.nick === irc.nick) { c.joined = false; c.names.clear(); } tabs(); return; }
       case 'KICK': { const c = chan(p[0]); c.names.delete(p[1]); if (p[1] === irc.nick) { c.joined = false; c.names.clear(); sys(`kicked from ${p[0]}`, p[0]); } tabs(); return; }
-      case 'QUIT': for (const c of chans.values()) c.names.delete(m.nick); tabs(); return;
+      case 'QUIT': for (const c of chans.values()) { c.names.delete(m.nick); c.typing.delete(key(m.nick)); } irc.away.delete(key(m.nick)); typingShow(); tabs(); return;
+      // presence: away-notify's AWAY (a reason: away; none: back), our own (305 / 306), WHO's H / G at joining
+      case 'AWAY': if (p[0]) irc.away.set(key(m.nick), clean(p[0]).slice(0, 100)); else irc.away.delete(key(m.nick)); membersShow(); return;
+      case '305': irc.away.delete(key(irc.nick)); membersShow(); return;
+      case '306': irc.away.set(key(irc.nick), idleSet ? 'idle' : 'away'); membersShow(); return;
+      case '352': {
+        const nk = p[5], fl = p[6] || '';
+        if (!nk) return;
+        if (fl[0] === 'G') { if (!irc.away.has(key(nk))) irc.away.set(key(nk), 'away'); } else if (fl[0] === 'H') irc.away.delete(key(nk));
+        return;
+      }
+      case '315': membersShow(); return;
+      // the MOTD: the channel's topic (332 on joining, TOPIC when a mod sets it)
+      case '332': topicSet(chan(p[1]), p[2] || '', null); return;
+      case '331': { const c = chans.get(key(p[1] || '')); if (c) { c.topic = ''; if (key(c.name) === key(shown)) topicShow(); } return; }
+      case 'TOPIC': { const c = chans.get(key(p[0] || '')); if (c) topicSet(c, p[1] || '', m.nick); return; }
+      // the read marker (ours, from any device of the account): never moves back
+      case 'MARKREAD': {
+        const c = p[0] && chans.get(key(p[0])), mt = /^timestamp=(.+)$/.exec(p[1] || '');
+        const t = mt ? Date.parse(mt[1]) : NaN;
+        if (!c || !Number.isFinite(t) || !irc.account) return;  // (a guest's marker is the session's own: localStorage instead)
+        c.srvRead = Math.max(c.srvRead || 0, t);
+        // (the first marker after joining may come after the join's end: the divider starts there)
+        if (c.firstMark) { c.firstMark = false; if (c.divTs == null || t > c.divTs) { c.divTs = t; if (key(c.name) === key(shown)) renderSoon(); } }
+        if (c.readTs == null || t > c.readTs) { c.readTs = t; readSave(c, t); }
+        badge();
+        return;
+      }
       case '353': {
         const c = chan(p[2]);
         for (const n of (p[3] || '').split(' ')) {
@@ -1502,7 +2214,7 @@
           } else if ('beIkf'.includes(ch) || (ch === 'l' && add)) ai++;
         }
         if (mine) spreadAdmin();
-        if (mine && key(c.name) === key(shown)) render();
+        if (mine && key(c.name) === key(shown)) render(); else if (key(c.name) === key(shown)) membersShow();
         return;
       }
       case 'REDACT': unsay(p[0], p[1]); return;
@@ -1514,6 +2226,9 @@
       }
       case '366': {
         const c = chan(p[1]); tabs();
+        if (irc.caps.has('away-notify')) irc.send(`WHO ${c.name}`);
+        // (the first join: the divider and the mentions start at the read point; history fills up to backAt)
+        if (!c.histDone) { c.divTs = c.readTs; c.backAt = Infinity; c.backHist = true; c.firstMark = true; }
         if (!c.names.has(BOT) && ![...c.names].some(n => key(n) === key(BOT))) { c.retryAt = 0; irc.send(`PRIVMSG ${BOT} :open ${c.name}`); }
         const hasHist = irc.caps.has('draft/chathistory') || irc.caps.has('chathistory');
         // joined again (a reconnect: signing in or out, the server or the network restarting): what was said while away,
@@ -1540,6 +2255,7 @@
           const c = chan(b.target);
           if (c.paging && b.n >= PAGE && b.last) irc.send(`CHATHISTORY AFTER ${c.name} msgid=${b.last} ${PAGE}`);
           else c.paging = false;
+          if (c.backHist && !c.paging) { c.backHist = false; const l = lastLine(c); c.backAt = l ? +l.time : -Infinity; if (key(c.name) === key(shown)) renderSoon(); }
         }
         return;
       }
@@ -1547,6 +2263,23 @@
         for (const t of p) { const m2 = /^CHATHISTORY=(\d+)$/.exec(t); if (m2 && +m2[1] > 0) PAGE = Math.min(PAGE, +m2[1]); }
         return;
       case 'TAGMSG': {  // (the bot's live-server notice, +mbaa/notice: shown to who is here now; Ergo keeps no TAGMSG history)
+        const tc = p[0] && p[0][0] === '#' ? chans.get(key(p[0])) : null;
+        // reactions (live, and from history when the server stores them); a TAGMSG is applied once (its msgid)
+        const rx = m.tags['+draft/react'], urx = m.tags['+draft/unreact'], rto = m.tags['+draft/reply'];
+        if (tc && (rx || urx) && /^[\w\-+/=:.]{1,100}$/.test(rto || '')) {
+          if (!(m.tags.msgid && tc.seen.has(m.tags.msgid))) {
+            if (m.tags.msgid) tc.seen.add(m.tags.msgid);
+            if (REACT_OK(rx || urx)) reactApply(tc, rto, rx || urx, key(m.tags.account || m.nick), shownNick(m.nick, m.tags.account, ''), !!rx);
+          }
+          return;
+        }
+        if (hb) return;  // (nothing else from history)
+        const ty = m.tags['+typing'] ?? m.tags['+draft/typing'];
+        if (tc && ty != null && m.nick !== irc.nick) {
+          if (ty === 'active') tc.typing.set(key(m.nick), { nick: m.nick, until: Date.now() + TYPE_TTL }); else tc.typing.delete(key(m.nick));
+          if (key(tc.name) === key(shown)) { typingShow(); membersShow(); }
+          return;
+        }
         const nt = m.tags['+mbaa/notice'];
         if (nt && key(m.nick) === key(BOT) && p[0] && p[0][0] === '#') sys(clean(nt).slice(0, 200), p[0]);
         // (the site-wide spread: to a channel, or to us on joining)
@@ -1557,7 +2290,6 @@
       case 'PRIVMSG': case 'NOTICE': {
         const target = p[0], text0 = p[1] || '';
         const bt = m.tags.batch && irc.batches.get(m.tags.batch);
-        if (bt) { bt.n++; if (m.tags.msgid) bt.last = m.tags.msgid; }
         if (m.nick === 'HistServ') return;  // (history's join / part events, as messages for clients without event-playback)
         if (target[0] !== '#') {
           if (key(m.nick) === key(BOT)) {  // (the bot: "opened #chan" -> join it now; anything else is for us to read)
@@ -1572,6 +2304,7 @@
         let text = text0, action = false;
         if (text.startsWith('\x01')) { if (!text.startsWith('\x01ACTION ')) return; action = true; text = text.slice(8).replace(/\x01$/, ''); }
         const t = m.tags, hist = !!(bt && /chathistory/.test(bt.type));
+        if (!hist) typingGone(m.nick);
         const at = /^\d{1,9}\.\d{1,7}$/.test(t['+mbaa/at'] || '') ? t['+mbaa/at'].split('.').map(Number) : null;
         const chara = /^\d{1,2}$/.test(t['+mbaa/chara'] || '') ? +t['+mbaa/chara'] : -1;
         const moon = /^[0-2]$/.test(t['+mbaa/moon'] || '') ? +t['+mbaa/moon'] : -1;
@@ -1582,6 +2315,7 @@
         return;
       }
       case 'FAIL': {
+        if (p[0] === 'MARKREAD') return;  // (the read point stays here; nothing to tell the viewer)
         // (a catch-up from a msgid the server no longer has, a deleted line: the latest lines instead; seen ones skip)
         const hc = p[0] === 'CHATHISTORY' && chans.get(key(p.find(x => x && x[0] === '#') || ''));
         if (hc && !hc.failed) { hc.failed = true; hc.paging = false; irc.send(`CHATHISTORY LATEST ${hc.name} * ${HISTORY}`); return; }
@@ -1615,6 +2349,7 @@
     const pic = isMatch(shown) ? nowOf(api.live()) : null, at = pic && pic.pos ? pic.pos : null;
     const tags = irc.caps.has('message-tags') ? `@+mbaa/color=${prof.color}${validChara(prof.chara) ? `;+mbaa/chara=${prof.chara}` : ''}${prof.moon >= 0 ? `;+mbaa/moon=${prof.moon}` : ''}${cmd ? `;+mbaa/cmd=${cmd.replace(/ /g, '\\s')}` : ''}${at ? `;+mbaa/at=${at[0]}.${at[1]}` : ''}${rp ? `;+draft/reply=${rp.msgid}` : ''}${irc.account && auth.name ? `;+mbaa/name=${auth.name.replace(/\\/g, '\\\\').replace(/;/g, '\\:').replace(/ /g, '\\s')}` : ''} ` : '';
     irc.send(`${tags}PRIVMSG ${shown} :${text}`);
+    clearTimeout(typPauseT); typSent.state = 'done';  // (a message ends typing: receivers clear it on the line)
     if (!irc.caps.has('echo-message')) {
       const action = text.startsWith('\x01ACTION ');
       addLine(shown, { nick: shownNick(irc.nick, irc.account, auth.name), irc: irc.nick, reply: rp ? rp.msgid : null, text: action ? text.slice(8, -1) : text, action, self: true, time: new Date(),
@@ -1729,7 +2464,14 @@
     emo = { list, show, search, tabOn };
     show();
   }
+  let emoReact = null;  // (the picker opened from a line's react menu: a pick reacts instead of typing)
   function emoPick(ch) {
+    if (emoReact) {
+      const r = emoReact; emoReact = null;
+      react(r.c, r.msgid, ch, true);
+      store.set(EMO_RECENT, [ch, ...(store.get(EMO_RECENT, []) || []).filter(x => x !== ch)].slice(0, 24));
+      emoOpen(false); return;
+    }
     const a = input.selectionStart ?? input.value.length, b = input.selectionEnd ?? a;
     if (input.value.length - (b - a) + ch.length > MAXLEN) return;
     input.setRangeText(ch, a, b, 'end');
@@ -1737,8 +2479,9 @@
     store.set(EMO_RECENT, [ch, ...(store.get(EMO_RECENT, []) || []).filter(x => x !== ch)].slice(0, 24));
   }
   function emoOpen(on) {
+    if (!on) emoReact = null;
     if (on && !emo) emoBuild();
-    if (on) { mentionClose(); emo.search.value = ''; emo.show(); }
+    if (on) { mentionClose(); emo.search.value = ''; emo.show(); if (!tool.hidden) toolOpen(false); }
     epop.hidden = !on; emoBtn.setAttribute('aria-expanded', String(on));
     if (on) {
       popPlace(epop, 380);
@@ -1838,7 +2581,7 @@
     replyTo = { msgid: l.msgid, irc: l.irc || null, nick: l.nick, text: l.text, chan: l.chan || shown };
     const sp = replyBar.querySelector('span'), b = document.createElement('b');
     b.textContent = disp(l.nick);
-    sp.replaceChildren('replying to ', b, `: ${l.text.slice(0, 120)}`);
+    sp.replaceChildren('replying to ', b, `: ${atText(mdPlain(l.text), chans.get(key(l.chan || shown))).slice(0, 120)}`);
     replyBar.hidden = false;
     input.focus();
   }
@@ -1877,6 +2620,7 @@
       row(button('kick from this channel', 'w', () => done(`kick ${who} ${c.name}`)));
       row(el('span', '', 'ban'), ...[['1d', '1 day'], ['1w', '1 week'], ['perm', 'permanently']].map(([d, t]) => button(d, 'mchip danger', () => confirmBan(d, t), `ban ${t}`)));
       row(button('whois (only you see it)', 'w', () => done(`whois ${who}`)));
+      if (chan(GENERAL).ops.has(key(irc.nick))) row(button('edit the MOTD…', 'w', () => motdEdit(anchor), 'the #melty topic: the banner everyone sees'));
     }
     function confirmBan(d, t) {
       modm.replaceChildren();
@@ -1899,7 +2643,52 @@
     place();
   }
   function modClose() { modm.hidden = true; modFor = null; }
-  document.addEventListener('pointerdown', e => { if (!modm.hidden && !modm.contains(e.target) && !e.target.closest('.cmod')) modClose(); });
+  // the MOTD editor: #melty's topic with bold / colours (mIRC codes, shown here as {b} {c4} … tokens), previewed; "set"
+  // sends TOPIC (channel operators may: +t; Ergo keeps a registered channel's topic)
+  function motdEdit(anchor) {
+    modFor = 'motd';
+    const c = chan(GENERAL);
+    const el = (tag, cls, text) => { const e = document.createElement(tag); if (cls) e.className = cls; if (text != null) e.textContent = text; return e; };
+    const button = (text, cls, fn, title) => { const b = el('button', cls, text); b.type = 'button'; if (title) b.title = title; b.onclick = e => { e.stopPropagation(); fn(); }; return b; };
+    const box = el('div', 'motd');
+    const h = el('div', 'mh'); h.append(el('b', '', 'MOTD (the #melty topic)'), el('small', '', 'the banner over #melty, for everyone')); box.append(h);
+    const ta = el('textarea'); ta.setAttribute('aria-label', 'MOTD text'); ta.value = motdFromCodes(c.topic || ''); ta.spellcheck = true;
+    const prev = el('div', 'prev'), cnt = el('small', 'cnt');
+    const wrap = (open, close) => {
+      const a = ta.selectionStart, b = ta.selectionEnd, mid = ta.value.slice(a, b);
+      ta.setRangeText(open + mid + close, a, b, 'end');
+      if (!mid) ta.setSelectionRange(a + open.length, a + open.length);
+      ta.focus(); upd();
+    };
+    const bar = el('div', 'bar');
+    const bb = button('', 'mchip', () => wrap('{b}', '{b}'), 'bold'); bb.append(el('b', '', 'B')); bb.dataset.k = 'b';
+    const bi = button('', 'mchip', () => wrap('{i}', '{i}'), 'italic'); bi.append(el('i', '', 'I')); bi.dataset.k = 'i';
+    const bo = button('plain', 'mchip', () => wrap('{o}', ''), 'back to plain text (ends bold and colour)'); bo.dataset.k = 'o';
+    bar.append(bb, bi, bo);
+    MIRC.forEach((col, i) => { const s = button('', 'msw', () => wrap(`{c${i}}`, '{c}'), `colour: ${MIRC_NAME[i]}`); s.style.background = col; s.dataset.c = String(i); s.setAttribute('aria-label', MIRC_NAME[i]); bar.append(s); });
+    let codes = '';
+    function upd() {
+      codes = motdToCodes(ta.value).trim();
+      prev.replaceChildren(...mircNodes(codes));
+      const n = new TextEncoder().encode(codes).length;
+      cnt.textContent = `${n} / ${TOPICLEN} bytes`; cnt.classList.toggle('over', n > TOPICLEN);
+      setB.disabled = n > TOPICLEN;
+    }
+    ta.addEventListener('input', upd);
+    ta.addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); if (!setB.disabled) setB.click(); } });
+    const setB = button('set', 'mchip solid2', () => { irc.send(`TOPIC ${c.name} :${codes}`); modClose(); }, 'set the MOTD for everyone');
+    setB.dataset.a = 'set';
+    const r = el('div', 'mr'); r.append(cnt, el('span'), button('clear', 'mchip', () => { irc.send(`TOPIC ${c.name} :`); modClose(); }, 'remove the MOTD'), button('cancel', 'mchip', modClose), setB);
+    box.append(bar, ta, el('small', '', 'select text, then B / I / a colour; or type {b} {i} {c4} {c4,1} {c} {o}'), prev, r);
+    modm.replaceChildren(box);
+    modm.hidden = false;
+    upd();
+    const a = anchor.getBoundingClientRect(), m = modm.getBoundingClientRect(), W = innerWidth, H = innerHeight;
+    modm.style.left = `${Math.max(8, Math.min(W - m.width - 8, a.right - m.width))}px`;
+    modm.style.top = `${a.bottom + 4 + m.height <= H - 8 ? a.bottom + 4 : Math.max(8, a.top - 4 - m.height)}px`;
+    ta.focus();
+  }
+  document.addEventListener('pointerdown', e => { if (!modm.hidden && !modm.contains(e.target) && !e.target.closest('.cmod, .cmotd')) modClose(); });
   document.addEventListener('keydown', e => { if (e.key === 'Escape' && !modm.hidden) modClose(); });
   // (closed when the viewer scrolls the lines; a new line arriving scrolls the log too, and that leaves it open)
   for (const ev of ['wheel', 'touchmove']) logEl.addEventListener(ev, () => { if (!modm.hidden) modClose(); }, { passive: true });
@@ -1929,5 +2718,6 @@
 
   tabs(); render();
   start();
-  window.mbaaChat = { irc, auth, nameOk, chans, prof, danmaku, say, nico, tl, clockPos, localOf, posOf, nowOf, feed: raw => on(parse(raw)), spread: () => spread, show: name => { chan(name); shown = name; tabs(); render(); }, status: () => ({ connected: irc.registered, nick: irc.nick, caps: [...irc.caps], shown, matchChan }) };  // (tests)
+  window.mbaaChat = { irc, auth, nameOk, chans, prof, danmaku, say, nico, tl, clockPos, localOf, posOf, nowOf, feed: raw => on(parse(raw)), spread: () => spread, md: mdPlain, mirc: t => mircNodes(t).map(n => n.outerHTML || n.textContent).join(''),
+    idle: ms => { idleMs = ms; }, swells: () => [...swells.values()].filter(x => x.el).map(x => ({ e: x.e, n: x.count, size: parseFloat(x.em.style.fontSize), op: x.el.style.opacity })), typingTimes: { TYPE_EVERY, TYPE_TTL }, show: name => { chan(name); shown = name; tabs(); render(); }, status: () => ({ connected: irc.registered, nick: irc.nick, caps: [...irc.caps], shown, matchChan }) };  // (tests)
 })();
