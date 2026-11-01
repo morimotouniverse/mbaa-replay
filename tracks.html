@@ -1,0 +1,156 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Name the tracks</title>
+<meta name="description" content="Raito Radio: help name the older Melty Blood games' untitled tracks.">
+<meta name="robots" content="noindex">
+<meta name="mbaa-manifest" content="c7d5223cc952">
+<meta name="theme-color" content="#0d0d14">
+<link rel="icon" href="icon-192.png">
+<!-- "Name the tracks" (web/shell/tracks.js; served by the Worker under the chat path, tools/web/track_tags.mjs) -->
+<style>
+  :root { --bg: #0d0d14; --panel: #15151f; --raise: #1d1d2a; --fg: #ececf4; --muted: #8a8aa2; --faint: #5c5c74;
+          --accent: #e04a5a; --accent2: #ffb84a; --line: #262636; --ok: #4ac07a; --w: min(100%, 960px); }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: radial-gradient(1200px 600px at 50% -10%, #1a1426, var(--bg)); background-color: var(--bg);
+         color: var(--fg); font: 13px/1.4 system-ui, -apple-system, "Segoe UI", sans-serif; display: flex; flex-direction: column;
+         align-items: center; padding: 8px 16px 96px; min-height: 100vh; }
+  .wrap { width: var(--w); display: flex; flex-direction: column; gap: 12px; }
+  a { color: var(--accent2); }
+  button { font: inherit; color: inherit; background: transparent; border: 0; border-radius: 8px; cursor: pointer; }
+  button:disabled { opacity: .45; cursor: default; }
+  button.txt { line-height: 1.2; padding: 6px 11px; font-size: 12px; background: var(--raise); }
+  button.txt:hover:not(:disabled) { background: #2a2a3c; }
+  button.primary { background: var(--accent); color: #fff; font-weight: 600; }
+  button.primary:hover:not(:disabled) { background: #ee5a6a; }
+  button.okb { background: #2b6a46; color: #fff; font-weight: 600; }
+  button.okb:hover:not(:disabled) { background: #348356; }
+  input[type=text], input[type=url] { font: inherit; color: var(--fg); background: #0f0f18; border: 1px solid var(--line); border-radius: 7px;
+         padding: 7px 9px; min-width: 0; width: 100%; }
+  input[type=text]:focus, input[type=url]:focus { outline: none; border-color: var(--accent); }
+  input[type=range] { accent-color: var(--accent); }
+  .top { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 4px 0; flex-wrap: wrap; }
+  .top .home { color: var(--muted); text-decoration: none; font-size: 12px; }
+  .top .home:hover { color: var(--fg); }
+  #who { display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--muted); }
+  #who b { color: var(--fg); font-weight: 600; }
+  #who .rev { color: var(--accent2); font-size: 11px; border: 1px solid #ffb84a55; border-radius: 999px; padding: 1px 7px; }
+  .signin { display: inline-flex; align-items: center; gap: 7px; background: #5865f2; color: #fff; text-decoration: none; border-radius: 8px;
+            padding: 6px 12px; font-weight: 600; font-size: 12px; }
+  .signin:hover { background: #6974f5; }
+  .hero { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 16px 18px; }
+  .kicker { font-size: 10px; letter-spacing: .12em; color: var(--accent); font-weight: 700; }
+  h1 { margin: 2px 0 6px; font-size: 22px; color: #fff; }
+  h2 { margin: 0; font-size: 15px; color: #fff; display: flex; align-items: center; gap: 8px; }
+  .hero p { margin: 0; color: var(--muted); max-width: 70ch; }
+  .hero .stats { margin-top: 8px; color: var(--faint); font-size: 12px; }
+  .bar { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; position: sticky; top: 0; z-index: 5; padding: 8px 0;
+         background: linear-gradient(var(--bg) 80%, transparent); }
+  .pills { display: flex; flex-wrap: wrap; gap: 4px; }
+  .pills button { font-size: 12px; padding: 4px 10px; border-radius: 999px; border: 1px solid #ffffff22; background: #ffffff08; }
+  .pills button.on { border-color: var(--accent); background: #e04a5a33; }
+  .tog { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: var(--muted); cursor: pointer; user-select: none; margin-left: auto; }
+  .tog input { accent-color: var(--accent); }
+  #count { color: var(--faint); font-size: 12px; }
+  .panel { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 12px 14px; display: flex; flex-direction: column; gap: 10px; }
+  .panel.revp { border-color: #ffb84a44; }
+  .badge { font-size: 11px; font-weight: 600; border-radius: 999px; padding: 1px 8px; background: var(--accent); color: #fff; }
+  .muted { color: var(--muted); }  .faint { color: var(--faint); }
+  #list { display: flex; flex-direction: column; gap: 8px; }
+  .trk { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 10px; display: grid;
+         grid-template-columns: 192px minmax(0, 1fr) auto; gap: 6px 12px; align-items: start; }
+  .trk.playing { border-color: var(--accent); }
+  .art { width: 100%; aspect-ratio: 256 / 96; border-radius: 6px; background: #ffffff0a center / cover no-repeat; display: grid;
+         place-items: center; font-size: 22px; color: var(--accent); overflow: hidden; }
+  .meta { min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+  .meta .t { font-size: 15px; font-weight: 650; color: #fff; display: flex; align-items: center; gap: 8px; min-width: 0; }
+  .meta .t span.n { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .meta .t.none span.n { color: var(--muted); font-weight: 500; }
+  .tag { font-size: 10px; letter-spacing: .04em; border-radius: 999px; padding: 1px 7px; flex: none; font-weight: 600; }
+  .tag.untitled { background: #ffb84a22; color: var(--accent2); }
+  .tag.comm { background: #4ac07a22; color: var(--ok); }
+  .meta .jp { color: var(--fg); opacity: .85; font-size: 13px; min-height: 1.2em; }
+  .meta .jp.none { color: var(--faint); font-size: 12px; }
+  .meta .sub { color: var(--muted); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .meta .credit { color: var(--faint); font-size: 11px; }
+  .playrow { display: flex; align-items: center; gap: 8px; margin-top: 4px; }
+  .play { width: 32px; height: 32px; border-radius: 50%; background: var(--accent); color: #fff; font-size: 12px; flex: none; display: grid; place-items: center; }
+  .play:hover { background: #ee5a6a; }
+  .play.busy { background: var(--raise); }
+  .seek { flex: 1; min-width: 60px; }
+  .tm { font-variant-numeric: tabular-nums; color: var(--muted); font-size: 11px; min-width: 76px; text-align: right; }
+  .acts { display: flex; flex-direction: column; align-items: flex-end; gap: 6px; }
+  .acts .pend { font-size: 11px; color: var(--accent2); }
+  .acts .yt { font-size: 11px; color: var(--muted); text-decoration: none; }
+  .acts .yt:hover { color: var(--fg); }
+  .acts .clr { display: flex; gap: 4px; flex-wrap: wrap; justify-content: flex-end; }
+  .acts .clr button { font-size: 10px; padding: 3px 7px; color: var(--muted); }
+  form.sug { grid-column: 1 / -1; border-top: 1px solid var(--line); padding-top: 10px; display: grid; grid-template-columns: 1fr 1fr; gap: 8px 12px; }
+  form.sug label.f { display: flex; flex-direction: column; gap: 4px; font-size: 11px; color: var(--muted); }
+  form.sug .imgrow { grid-column: 1 / -1; display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+  form.sug .imgrow .or { color: var(--faint); font-size: 11px; }
+  form.sug .imgrow input[type=url] { flex: 1; width: auto; min-width: 160px; }
+  .filebtn { position: relative; overflow: hidden; }
+  .filebtn input { position: absolute; inset: 0; opacity: 0; cursor: pointer; }
+  form.sug .crop { grid-column: 1 / -1; display: flex; gap: 12px; align-items: center; flex-wrap: wrap; }
+  form.sug .crop canvas { width: 256px; max-width: 100%; aspect-ratio: 256 / 96; border-radius: 6px; background: #000; outline: 1px solid var(--line); }
+  form.sug .crop .knobs { display: flex; flex-direction: column; gap: 4px; font-size: 11px; color: var(--muted); min-width: 180px; flex: 1; }
+  form.sug .crop .knobs label { display: grid; grid-template-columns: 64px 1fr; align-items: center; gap: 6px; }
+  form.sug .foot { grid-column: 1 / -1; display: flex; align-items: center; gap: 10px; justify-content: flex-end; }
+  form.sug .msg { margin-right: auto; font-size: 12px; color: var(--muted); }
+  form.sug .msg.err { color: #ff7b88; }  form.sug .msg.ok { color: var(--ok); }
+  .rv { display: grid; grid-template-columns: 160px minmax(0, 1fr) auto; gap: 6px 12px; align-items: center; padding: 8px; border-radius: 10px; background: #ffffff06; }
+  .rv .what { min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+  .rv .what .trkname { font-size: 12px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .rv .what .nm { font-size: 14px; font-weight: 650; color: #fff; }
+  .rv .what .nm.none { color: var(--faint); font-weight: 400; font-size: 12px; }
+  .rv .btns { display: flex; gap: 6px; align-items: center; }
+  .rv .listen { width: 30px; height: 30px; }
+  .empty { color: var(--faint); font-size: 12px; padding: 4px 0; }
+  #status { color: var(--muted); font-size: 12px; text-align: center; padding: 12px; }
+  #toast { position: fixed; left: 50%; bottom: 18px; transform: translateX(-50%); background: var(--raise); border: 1px solid var(--line);
+           border-radius: 10px; padding: 8px 14px; font-size: 12px; box-shadow: 0 8px 30px #0008; z-index: 20; max-width: calc(100% - 32px); }
+  #toast[hidden], [hidden] { display: none !important; }
+  @media (max-width: 640px) {
+    .trk { grid-template-columns: 112px minmax(0, 1fr); }
+    .acts { grid-column: 1 / -1; flex-direction: row; align-items: center; justify-content: space-between; flex-wrap: wrap; }
+    form.sug { grid-template-columns: 1fr; }
+    .rv { grid-template-columns: 96px minmax(0, 1fr); }
+    .rv .btns { grid-column: 1 / -1; justify-content: flex-end; }
+    .tog { margin-left: 0; }
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header class="top">
+    <a class="home" id="home" href="/">&larr; watch.meltyblood.org</a>
+    <div id="who"><span class="faint">checking sign-in&hellip;</span></div>
+  </header>
+  <section class="hero">
+    <div class="kicker">&#9834;&nbsp; RAITO RADIO</div>
+    <h1>Name the tracks</h1>
+    <p>Many songs from Melty Blood, Re-ACT and Act Cadenza have no known name, so Raito Radio shows them as &ldquo;Track 14&rdquo;.
+       Listen, then suggest a name, its Japanese name or a picture for its radio tile. The owner and mods review suggestions,
+       and approved ones show in Raito Radio for everyone.</p>
+    <div class="stats" id="stats"></div>
+  </section>
+  <section class="panel revp" id="review" hidden>
+    <h2><span id="revtitle">Waiting for review</span> <span class="badge" id="revn">0</span></h2>
+    <div id="revlist"></div>
+  </section>
+  <div class="bar">
+    <div class="pills" id="games"></div>
+    <label class="tog"><input type="checkbox" id="untitled" checked> untitled only</label>
+    <span id="count"></span>
+  </div>
+  <div id="list"></div>
+  <div id="status">loading the track list&hellip;</div>
+</div>
+<div id="toast" hidden></div>
+<audio id="audio" preload="auto"></audio>
+<script src="tracks.js?v=cf32ae31c959"></script>
+</body>
+</html>

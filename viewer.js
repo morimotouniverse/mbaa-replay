@@ -1571,14 +1571,32 @@ function radioOldLoad() {
     oldRadio = JSON.parse(new TextDecoder().decode(cache.get('web/radio/old.json')));
     oldRadio.byKey = {};
     for (const g of oldRadio.games) for (const t of g.tracks) oldRadio.byKey[`${g.id}:${t.id}`] = Object.assign(t, { game: g.id });
-    return oldRadio;
+    return radioOverrides(oldRadio).then(() => oldRadio);
   }));
+}
+// the community's names and tiles for the older games' tracks ("Name the tracks", tools/web/track_tags.mjs): approved by
+// the reviewers, public on the site root as /radio/overrides.json (the Worker; a local build has none), applied over
+// old.json's, so an approval needs no bundle rebuild. A tile is the Worker's /radio/img/<name>.jpg.
+async function radioOverrides(o) {
+  try {
+    const r = await fetch(new URL('/radio/overrides.json', new URL(BUNDLE, location.href)), { cache: 'no-cache', signal: AbortSignal.timeout(4000) });
+    if (!r.ok) return;
+    const j = await r.json();
+    for (const [k, v] of Object.entries((j && j.tracks) || {})) {
+      const t = o.byKey[k];
+      if (!t || !v) continue;
+      if (typeof v.title === 'string' && v.title) { t.title = v.title.slice(0, 80); t.titled = true; }
+      if (typeof v.jp === 'string' && v.jp) t.titleJp = v.jp.slice(0, 80);
+      if (typeof v.tile === 'string' && /^radio\/img\/[A-Za-z0-9_-]+\.jpg$/.test(v.tile)) t.tileUrl = new URL('/' + v.tile, r.url).href;
+    }
+  } catch (e) {}
 }
 function radioTile(f, title, src, sub) {
   const b = document.createElement('button'), img = document.createElement('div'), cap = document.createElement('span');
   b.className = 'tile'; b.dataset.f = f; b.title = sub ? `${title} — ${sub}` : title;
   img.className = 'art';
-  if (src) img.dataset.src = src; else img.textContent = '♪';
+  if (/^https?:/.test(src)) img.style.backgroundImage = `url("${src}")`;  // (a community tile: radioOverrides)
+  else if (src) img.dataset.src = src; else img.textContent = '♪';
   cap.textContent = title;
   b.append(img, cap);
   b.onclick = () => radioSet(f);
@@ -1614,7 +1632,7 @@ async function radioShowGame(g) {
   } else {
     const game = oldRadio.games.find(x => x.id === g);
     grid.replaceChildren(radioTile('', 'Match music', ''),
-      ...game.tracks.map(t => radioTile(`${g}:${t.id}`, t.title, t.tile || '', t.stageName || '')));
+      ...game.tracks.map(t => radioTile(`${g}:${t.id}`, t.title, t.tileUrl || t.tile || '', t.stageName || '')));
   }
   radioArtDone = false;
   if (!grid.hidden) radioArt();
@@ -1647,7 +1665,7 @@ function radioTrack(f) {
   }
   const t = oldRadio && oldRadio.byKey[f];
   return t && { title: t.title, key: t.f, fetch: [t.f, ...(t.dat ? [t.dat] : []), ...(t.tile ? [t.tile] : [])], loopPos: t.loopPos,
-                dat: t.dat, lights: t.lights || [], tile: t.tile, stageName: t.stageName,
+                dat: t.dat, lights: t.lights || [], tile: t.tile, tileUrl: t.tileUrl, stageName: t.stageName,
                 game: (RADIO_GAMES.find(([g]) => g === t.game) || [])[1] };
 }
 let radioPick = '';
@@ -1658,7 +1676,7 @@ async function radioSet(f) {
   document.getElementById('radiotog').textContent = `♪ ${t ? t.title : 'match music'}`;
   if (t) await fetchAll(man, t.fetch, '', true);
   if (radioPick !== f) return;  // (picked again meanwhile)
-  radio = t ? { path: `/game/${t.key}`, loopPos: t.loopPos, file: f, title: t.title, tile: t.tile, stageName: t.stageName,
+  radio = t ? { path: `/game/${t.key}`, loopPos: t.loopPos, file: f, title: t.title, tile: t.tile, tileUrl: t.tileUrl, stageName: t.stageName,
                 game: t.game, dat: t.dat && cache.has(t.dat) ? t.dat : '', lights: t.lights, stages: t.stages || null } : null;
   if (session && session.radioChanged) session.radioChanged();
   stageKey = '';
@@ -1758,11 +1776,12 @@ async function stageShow(s) {
   stageKey = key;
   const tr = radio ? radio : stagePanel.tracks[f];
   document.getElementById('trk').textContent = tr ? tr.title + (radio ? ` (radio${radio.game ? `, ${radio.game}` : ''})` : '') : '';
-  if (radio && radio.tile) {  // an older game's stage: its picture, its name for the plate
-    const view = box.querySelector('.view'), name = box.querySelector('.name'), d = cache.get(radio.tile);
-    if (view.dataset.src) URL.revokeObjectURL(view.dataset.src);
-    view.dataset.src = d ? URL.createObjectURL(new Blob([d], { type: 'image/jpeg' })) : '';
-    view.src = view.dataset.src; view.hidden = !d; view.title = radio.stageName || '';
+  if (radio && (radio.tile || radio.tileUrl)) {  // an older game's stage: its picture, its name for the plate
+    const view = box.querySelector('.view'), name = box.querySelector('.name'), d = radio.tile && cache.get(radio.tile);
+    if (view.dataset.src && view.dataset.src.startsWith('blob:')) URL.revokeObjectURL(view.dataset.src);
+    // (the stage's own render; a track with none shows its community tile)
+    view.dataset.src = d ? URL.createObjectURL(new Blob([d], { type: 'image/jpeg' })) : radio.tileUrl || '';
+    view.src = view.dataset.src; view.hidden = !view.dataset.src; view.title = radio.stageName || '';
     if (name.dataset.src) URL.revokeObjectURL(name.dataset.src);
     name.dataset.src = ''; name.removeAttribute('src'); name.hidden = true;
     if (box.hidden) requestAnimationFrame(() => marquee(document.getElementById('players')));
@@ -3636,3 +3655,44 @@ async function main() {
   if (autoload) { window.__mbaaRepUrl = autoload; start(new File([await (await fetch(autoload)).arrayBuffer()], autoload)); }
 }
 main().catch(e => { console.error(e); status('error: ' + e.message); });
+
+// New version: every deploy rewrites index.html (each page file's content hash), so the page checks it every 3 min (past
+// the Worker's and the service worker's caches) and, once it changed, reloads itself at the next safe moment, the URL
+// (the live match, the replay) and the chat's sign-in carry over:
+//   live: off the battle scene (character select, VS, result / win quote, loading, a match over) or paused;
+//   a replay: paused, or nothing playing;
+//   any: the tab hidden. Never while exporting a video or with a chat message typed and not sent.
+// A short "updating" card shows first.
+(function updateWatch() {
+  const page = () => fetch(`${location.pathname}?_v=${Date.now()}`, { cache: 'no-store' }).then(r => r.ok ? r.text() : null).catch(() => null);
+  // (a version: the static page's own script and version-meta values, the same on the document running and in a fetched copy)
+  const verOf = d => [...d.querySelectorAll('script[src^="mbaa.js"], script[src^="bgm_stream.js"], script[src^="viewer.js"], meta[name^="mbaa-"]')]
+    .map(e => e.getAttribute('src') || e.getAttribute('content')).join(' ');
+  const ver = t => t && verOf(new DOMParser().parseFromString(t, 'text/html'));
+  // (a local page has no ?v= hashes: nothing to compare)
+  const mine = /\?v=/.test(verOf(document)) ? verOf(document) : null;
+  let pending = false;
+  const safe = () => {
+    if (rec) return false;
+    const typed = document.activeElement && document.activeElement.id === 'chatin' && document.activeElement.value;
+    if (typed) return false;
+    if (document.visibilityState === 'hidden') return true;
+    const s = session;
+    if (!s || ui.paused) return true;
+    if (document.body.classList.contains('live')) { try { return s.M.HEAP32[0x54EEE8 >> 2] !== 1; } catch (e) { return false; } }
+    return false;
+  };
+  const go = () => {
+    const c = document.getElementById('catchup');
+    if (c) { c.querySelector('.cu-t').textContent = 'Updating to the new version'; c.querySelector('.cu-s').textContent = 'back in a moment';
+             c.querySelector('.cu-bar i').style.width = '100%'; c.hidden = false; }
+    setTimeout(() => location.reload(), document.visibilityState === 'hidden' ? 0 : 1200);
+  };
+  setInterval(async () => {
+    if (pending || !mine) return;
+    const v = ver(await page());
+    if (v && v !== mine) { pending = true; console.log('update: a new version is live; reloading at the next safe moment'); }
+  }, 180000);
+  setInterval(() => { if (pending && safe()) { pending = false; go(); } }, 1000);
+  window.__mbaaUpdate = { check: async () => ver(await page()), mine, force: () => { pending = true; } };  // (tests)
+})();

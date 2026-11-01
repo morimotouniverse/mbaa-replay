@@ -17,6 +17,8 @@ self.addEventListener('fetch', e => {
   // the session cookie: left to the browser. Fetched from here, the redirect was followed to another origin, which a
   // worker cannot hand to a navigation: "FetchEvent.respondWith received an error: Load failed" / ERR_FAILED)
   if (url.pathname.includes('/auth/')) return;
+  // ("Name the tracks": the signed-in user's API answers are never kept on the device)
+  if (url.pathname.includes('/tracks/api/')) return;
   e.respondWith(url.searchParams.has('v') ? versioned(r, url) : networkFirst(r));
 });
 
