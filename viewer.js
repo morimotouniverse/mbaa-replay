@@ -1979,7 +1979,13 @@ async function liveListShow() {
   // a row whose players haven't changed is kept as it is (a rebuild would restart its names' scrolling mid-way)
   const old = new Map([...ol.children].map(li => [li.dataset.key, li]));
   const badge = (v, n) => { v.title = n ? `${n} watching` : ''; v.replaceChildren(...(n ? [el('i', 'i i-eye'), String(n)] : [])); };
-  l = [...l.filter(m => !liveIdle(m)), ...l.filter(liveIdle)];
+  // (most watched on top, user 2026-11-01; idle hosts last; a tie keeps the order it had, so equal counts never swap)
+  const was = new Map([...ol.children].map((li, i) => { try { return [JSON.parse(li.dataset.key)[0], i]; } catch (e) { return [null, i]; } }));
+  const at = m => was.has(m.id) ? was.get(m.id) : 1e6 + l.indexOf(m);
+  l = [...l.filter(m => !liveIdle(m)), ...l.filter(liveIdle)]
+    .map(m => [m, liveIdle(m) ? 1 : 0]).sort((a, b) => a[1] - b[1] || (b[0].viewers || 0) - (a[0].viewers || 0) || at(a[0]) - at(b[0])).map(x => x[0]);
+  // FLIP: each kept row's place before the reorder, to slide it from there to its new place
+  const before = new Map([...ol.children].map(li => [li, li.getBoundingClientRect().top]));
   const idleTip = m => liveIdle(m) ? `idle: nothing played for ${Math.round(m.age / 60)} min (the host is still open)` : '';
   const rows = l.map(m => {
     const key = JSON.stringify([m.id, m.names, m.chara, m.moon, !!plArt]);
@@ -2009,6 +2015,14 @@ async function liveListShow() {
   // only rows out of order move)
   rows.forEach((li, i) => { if (ol.children[i] !== li) ol.insertBefore(li, ol.children[i] || null); });
   while (ol.children.length > rows.length) ol.lastElementChild.remove();
+  // (a moved row slides to its place; a new one fades in; none under reduced motion)
+  if (!matchMedia('(prefers-reduced-motion: reduce)').matches && !document.hidden)
+    for (const li of rows) {
+      const y0 = before.get(li);
+      if (y0 == null) { if (before.size) li.animate([{ opacity: 0 }, { opacity: 1 }], { duration: 300, easing: 'ease-out' }); continue; }
+      const dy = y0 - li.getBoundingClientRect().top;
+      if (Math.abs(dy) > 1) li.animate([{ transform: `translateY(${dy}px)` }, { transform: 'none' }], { duration: 420, easing: 'cubic-bezier(.2,.8,.2,1)' });
+    }
   if (!l.some(m => liveSrc && liveSrc.id === m.id)) liveWatching(0);
   marquee(ol, '.lnm:not(.mq)');
   setTimeout(liveListShow, 15000);

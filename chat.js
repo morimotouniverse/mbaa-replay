@@ -190,6 +190,10 @@
     border: 1px solid var(--line); border-radius: 999px; padding: 2px 8px; white-space: nowrap; }
   #chatsec details[open] summary::after { content: 'close ✕'; color: #fff; background: var(--accent); border-color: var(--accent); }
   #chatsec details .pdone { justify-content: flex-end; margin-top: 6px; }
+  #chatsec details .pacct { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; padding-bottom: 6px; margin-bottom: 4px; border-bottom: 1px solid var(--line); }
+  #chatsec details .pacct[hidden] { display: none; }
+  #chatsec details .pacct .pwho { font-size: 11px; color: var(--muted); flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  #chatsec details .pacct .pbtns { display: flex; gap: 6px; flex: none; }
   #chatsec details .pdonebtn { background: var(--accent); color: #fff; padding: 4px 16px; border-radius: 999px; }
   #chatsec canvas.me { width: 21px; height: 28px; border-radius: 4px; flex: none; min-width: 21px; }  /* (flex: none: Firefox shrank it in the account row) */
   #chatsec canvas.me.unset { border: 1px dashed var(--line); }
@@ -212,6 +216,7 @@
   #chatsec:not(.adv) .cform input#chatcmd { display: none; }
   #chatsec .ctool { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; position: relative; font-size: 11px; }
   #chatsec .cseg { display: inline-flex; border: 1px solid var(--line); border-radius: 8px; overflow: hidden; }
+  #chatsec .cseg[hidden] { display: none; }
   #chatsec .ctool button { background: none; border: none; color: var(--muted); font: inherit; font-size: 11px; line-height: 1;
                            min-width: 28px; height: 26px; padding: 0 6px; cursor: pointer; display: inline-flex; align-items: center; justify-content: center; }
   #chatsec .cseg button + button { border-left: 1px solid var(--line); }
@@ -448,7 +453,9 @@
   #chatsec .cments button { margin-left: auto; background: none; border: none; color: var(--faint); cursor: pointer; }
   #chatlog li.cdiv { display: flex; align-items: center; gap: 6px; color: var(--accent, #e04a5a); font-size: 10px; font-weight: 700; letter-spacing: .05em; text-transform: uppercase; }
   #chatlog li.cdiv::before, #chatlog li.cdiv::after { content: ''; flex: 1 1 auto; height: 1px; background: var(--accent, #e04a5a); opacity: .6; }
-  #chatlog li.sys.motd { font-style: normal; color: var(--muted); }
+  /* (the MOTD's text, its colour spans and links flow as one paragraph: as a flex row each link was its own column) */
+  #chatlog li.sys.motd { font-style: normal; color: var(--muted); display: block; }
+  #chatlog li.sys.motd a.motdlink { word-break: normal; overflow-wrap: anywhere; }
   #chatsec .ctyping { position: relative; z-index: 1; height: 15px; margin-top: -15px; padding: 0 8px; font-size: 10.5px; line-height: 15px; color: var(--muted);
                       font-style: italic; pointer-events: none; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; border-radius: 0 0 8px 8px; }
   #chatsec .ctyping:empty { visibility: hidden; }
@@ -599,6 +606,7 @@
       <button type="submit" class="txt">send</button>
       <div class="epop" hidden role="dialog" aria-label="emoji"></div><div class="mpop" hidden role="listbox" aria-label="mention someone"></div></form>
     <details><summary><canvas class="me" width="42" height="56"></canvas><span class="mynick"></span><span class="cstate"></span></summary>
+      <div class="prow pacct" hidden><span class="pwho"></span><span class="pbtns"></span></div>
       <div class="prow">nick <input id="chatnick" type="text" maxlength="24" spellcheck="false"></div>
       <div class="prow"><label><input id="chattags" type="checkbox"> show #tags (Name#1234)</label></div>
       <div class="prow">colour <span class="sws"></span><input id="chatcolor" type="color" title="any colour"></div>
@@ -607,7 +615,7 @@
       <div class="cgrid"></div>
       <div class="prow pdone"><button type="button" class="txt pdonebtn">done</button></div>
     </details>
-    <div class="cme"><span class="csign"></span><button type="button" class="cmenu" aria-haspopup="menu" aria-expanded="false" title="profile and account" aria-label="profile and account menu">profile ▾</button>
+    <div class="cme"><span class="csign"></span><button type="button" class="cmenu" aria-haspopup="menu" aria-expanded="false" title="your profile: name, colour, moon, character; account" aria-label="edit your profile">profile ▾</button>
       <div class="cmenupop" hidden role="menu"></div></div>`;
   // (the page's chat column, beside or under the picture: index.html / viewer.js fitStage; an older page: the panel)
   const controls = document.getElementById('controls'), col = document.getElementById('chatcol');
@@ -698,27 +706,31 @@
     const d = sec.querySelector('details');
     sec.querySelector('.pdonebtn').onclick = () => { d.open = false; };
     document.addEventListener('keydown', e => { if (e.key === 'Escape' && d.open) d.open = false; });
-    document.addEventListener('pointerdown', e => { if (d.open && !d.contains(e.target)) d.open = false; });
+    // (not the profile button's press: its click toggles the panel)
+    document.addEventListener('pointerdown', e => { if (d.open && !d.contains(e.target) && !e.target.closest('.cmenu')) d.open = false; });
   }
   // one line for the profile and the account: the avatar and name (moved out of the editor's summary), a guest's sign-in,
   // and a ▾ menu (edit profile; signed in: change name, sign out), filled by authShow
   const meRow = $('.cme'), menuBtn = $('.cmenu'), menuPop = $('.cmenupop');
   meRow.prepend(...sec.querySelector('details > summary').childNodes);
-  function menuOpen(on) {
-    menuPop.hidden = !on; menuBtn.setAttribute('aria-expanded', String(on));
-    if (on) { const b = menuPop.querySelector('button'); if (b) b.focus(); }
-  }
-  menuBtn.onclick = () => menuOpen(menuPop.hidden);
-  document.addEventListener('pointerdown', e => { if (!menuPop.hidden && !meRow.contains(e.target)) menuOpen(false); });
-  document.addEventListener('keydown', e => { if (e.key === 'Escape' && !menuPop.hidden) { menuOpen(false); menuBtn.focus(); } });
+  // (one click: "profile" opens the profile panel itself, its top row the account: who you are signed in as, change
+  // name, sign out. Was a menu first: profile -> edit profile, user 2026-11-01)
+  const profD = sec.querySelector('details');
+  menuBtn.setAttribute('aria-haspopup', 'dialog');
+  menuBtn.onclick = () => { if (profD.open) profD.open = false; else profEdit(); };
+  profD.addEventListener('toggle', () => { menuBtn.setAttribute('aria-expanded', String(profD.open)); menuBtn.firstChild.textContent = profD.open ? 'profile ▴' : 'profile ▾'; });
+  void menuPop;
   function menuFill(items, head) {
-    menuPop.replaceChildren();
-    if (head) { const h = document.createElement('div'); h.className = 'mh'; h.textContent = head; menuPop.append(h); }
+    const row = $('.pacct'), btns = $('.pbtns');
+    btns.replaceChildren();
+    $('.pwho').textContent = head || '';
     for (const [t, fn] of items) {
-      const b = document.createElement('button'); b.type = 'button'; b.setAttribute('role', 'menuitem'); b.textContent = t;
-      b.onclick = e => { e.stopPropagation(); menuOpen(false); fn(); };
-      menuPop.append(b);
+      if (t === 'edit profile') continue;  // (this is the profile panel)
+      const b = document.createElement('button'); b.type = 'button'; b.className = 'txt'; b.textContent = t;
+      b.onclick = e => { e.stopPropagation(); if (t === 'change name') profD.open = false; fn(); };
+      btns.append(b);
     }
+    row.hidden = !head && !btns.childElementCount;
   }
   const profEdit = () => { const d = sec.querySelector('details'); d.open = true; d.scrollIntoView({ block: 'nearest' }); };
   const logEl = $('#chatlog'), tabsEl = $('.ctabs'), input = $('#chatin'), cmdIn = $('#chatcmd'), stateEl = $('.cstate');
@@ -1845,6 +1857,8 @@
   }
   function toolShow() {
     const st = cmdParse(cmdIn.value);
+    // (top / bottom (ue / shita) work for mods only (dmStyle: lineOp): the buttons only for them, user 2026-11-01)
+    { const c = chans.get(key(shown)), g = tool.querySelector('.cseg[data-k="pos"]'); if (g) g.hidden = !(c && c.ops.has(key(irc.nick))); }
     tool.querySelectorAll('.cseg').forEach(g => g.querySelectorAll('button').forEach(b => b.setAttribute('aria-pressed', String(b.dataset.v === st[g.dataset.k]))));
     const hex = colorHex(st.color);
     colBtn.querySelector('.dot').style.background = hex;
@@ -1901,7 +1915,7 @@
     lab.append(cb, ' comments behind fighters'); tool.append(lab); }
   function toolOpen(on) {
     tool.hidden = !on; nicoBtn.setAttribute('aria-expanded', String(on));
-    if (on) { emoOpen(false); mentionClose(); popPlace(tool, 260); tool.style.maxHeight = ''; } else popOpen(false);
+    if (on) { emoOpen(false); mentionClose(); toolShow(); popPlace(tool, 260); tool.style.maxHeight = ''; } else popOpen(false);
   }
   nicoBtn.addEventListener('pointerdown', e => e.preventDefault());  // (the input keeps the focus)
   nicoBtn.onclick = () => toolOpen(tool.hidden);
@@ -1998,7 +2012,11 @@
   const measure = document.createElement('canvas').getContext('2d');
   // a comment's look and timing; t: when it enters, in seconds on its stage's clock
   // the overlay's text of a line: a reply's or a mention's leading "@nick" (and a ':' or ',' after it) left out
-  function dmText(l) { const t = String((l.pic != null ? l.pic : l.text) || ''); return emoThin(l.action ? t : t.replace(/^(@\S+[:,]?\s*)+/, '').trim()); }
+  function dmText(l) { const t = String((l.pic != null ? l.pic : l.text) || ''); return emoThin(atNames(l.action ? t : t.replace(/^(@\S+[:,]?\s*)+/, '').trim())); }
+  // "@Name-1234" in the overlay's text as the chat's pills show it ("@Name", the #tag per the setting), not the IRC nick
+  function atNames(t) {
+    return t.replace(AT_RE, (m, n, at, s) => (at > 0 && /[\p{L}\p{N}_]/u.test(s[at - 1])) || !/[\p{L}\p{N}]/u.test(n) ? m : '@' + atName(n));
+  }
   // the viewer's "emoji on the picture" amount (0..1): a run of the same emoji keeps that share of its copies (at least
   // one while above 0; 0: no emoji on the picture). The chat log is untouched.
   function emoThin(t) {
