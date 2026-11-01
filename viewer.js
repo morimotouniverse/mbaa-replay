@@ -2566,15 +2566,39 @@ function cardDark() {
     return sum / (d.length / 4) < 24;
   } catch (e) { return true; }
 }
+// link cards (a live match's preview, a shared replay's / playlist's): Steam's own 16:9 layout at 1280x720, P1's sidebar
+// portrait at its moon | the picture (960x720) | P2's (web/sidebar/<id>_<l|r>_<moon>.webp, the Steam release's apm_com art:
+// tools/web/sidebars_bundle.sh; a character without one: the MELTY BLOOD logo panel, default_<l|r>)
+const sideArt = new Map();
+function sidebarArt(c, m, p) {
+  const sd = p ? 'r' : 'l', id = String(c).padStart(2, '0');
+  const path = [`web/sidebar/${id}_${sd}_${m >= 0 && m <= 2 ? m : 0}.webp`, `web/sidebar/default_${sd}.webp`].find(q => man && man.files[q]);
+  if (!path) return Promise.resolve(null);
+  if (!sideArt.has(path)) sideArt.set(path, (async () => {
+    const f = man.files[path];
+    return createImageBitmap(new Blob([await fetchObject(f.o, f.z)], { type: 'image/webp' }));
+  })().catch(() => { sideArt.delete(path); return null; }));
+  return sideArt.get(path);
+}
 function grabCard() {
-  const jpeg = new Promise(res => {
+  const jpeg = (async () => {
     try {
-      const c = document.createElement('canvas'); c.width = 960; c.height = 480;
-      const g = c.getContext('2d'); g.fillStyle = '#12111c'; g.fillRect(0, 0, 960, 480);
-      g.imageSmoothingEnabled = false; g.drawImage(document.getElementById('canvas'), 160, 0, 640, 480);
-      c.toBlob(res, 'image/jpeg', 0.88);
-    } catch (e) { res(null); }
-  });
+      const c = document.createElement('canvas'); c.width = 1280; c.height = 720;
+      const g = c.getContext('2d'); g.fillStyle = '#12111c'; g.fillRect(0, 0, 1280, 720);
+      g.imageSmoothingEnabled = true; g.imageSmoothingQuality = 'high';  // (1.5x: smoothed, as Steam's own 2.25x)
+      g.drawImage(document.getElementById('canvas'), 160, 0, 960, 720);  // (now: the picture before any await)
+      const H = session && session.M && session.M.HEAP32;
+      if (H) {
+        const art = await Promise.all([0, 1].map(p => sidebarArt(H[(BSLOT + p * 0x2C + 8) >> 2], H[(BSLOT + p * 0x2C + 0x14) >> 2], p)));
+        art.forEach((a, p) => a && g.drawImage(a, p ? 1120 : 0, 0, 160, 720));
+      }
+      // (the store takes up to 256 KiB, the live feed 300 KB)
+      for (const q of [0.88, 0.8, 0.7, 0.6]) {
+        const b = await new Promise(r => c.toBlob(r, 'image/jpeg', q));
+        if (!b || b.size <= 240 << 10 || q === 0.6) return b;
+      }
+    } catch (e) { return null; }
+  })();
   return { jpeg };
 }
 async function copyTimestamp() {
@@ -2649,7 +2673,7 @@ if (document.querySelector('meta[name="mbaa-chat"]') || (/^(127\.0\.0\.1|localho
   el.src = (document.querySelector('meta[name="mbaa-chatjs"]') || { content: 'chat.js' }).content;
   document.body.append(el);
 }
-window.mbaaViewer = { startItem: i => startItem(i), seek: requestSeek, step: stepBy, pause: setPaused, frame: () => session.M._viewer_frame(),
+window.mbaaViewer = { startItem: i => startItem(i), card: () => grabCard().jpeg, seek: requestSeek, step: stepBy, pause: setPaused, frame: () => session.M._viewer_frame(),
                       tl: () => session.tl, ui, pl, cacheSize: () => cache.size, cacheMap: () => cache, phone: PHONE, lowmem: LOWMEM, bgmStream: () => bgmStreamReady, audioState: () => [actx && actx.state, session && session.mute, session && session.bgmLog && session.bgmLog.length, ui.paused], bgmMap: () => bgmDecoded, clip: () => session && session.clip,
                       stats: () => { const t = session.tl; return { kfs: t.kfs.length, kfFrames: t.kfs.map(k => k.frame),
                         kfMs: t.kfs.map(k => Math.round(k.ms * 10) / 10), kfFresh: t.kfs.map(k => k.fresh), bytes: t.bytes,
