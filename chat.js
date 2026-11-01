@@ -720,19 +720,8 @@
   // comments behind the fighters: the renderer (web/host/browser/d3d9_gl.cpp front_present) draws the picture's
   // characters and effects alone, this canvas above the comments shows them; the full picture stays on #canvas below.
   // On while comments show on the picture (and the viewer's "behind fighters" switch, on by default, is on)
-  const front = document.createElement('canvas');
-  front.id = 'front'; front.width = 640; front.height = 480; front.hidden = true; front.setAttribute('aria-hidden', 'true');
-  over.after(front);
-  const fctx = front.getContext('2d');
   let behind = store.get('mbaa-chat-behind', true);
-  window.mbaaFrontWant = () => behind && !over.hidden && !!over.querySelector('.dm, .cswell');
-  window.mbaaFrontCopy = on => {
-    if (!on) { if (!front.hidden) { fctx.clearRect(0, 0, 640, 480); front.hidden = true; } return; }
-    const cv = document.getElementById('canvas');  // (viewer.js replaces it on a GL context change)
-    fctx.clearRect(0, 0, 640, 480);
-    if (cv) fctx.drawImage(cv, 0, 0, 640, 480);
-    if (front.hidden) front.hidden = false;
-  };
+  window.mbaaFrontCopy = () => {};  // (the renderer composes the comments itself now: overlay_gl)
   // spread: a comment keeps its row for this many seconds more after it would have freed it, so slow chat still fans out
   // down the picture instead of every line taking the top row (dmPlace). Site-wide, set by the moderators: the bot sends
   // the value (TAGMSG +mbaa/spread=<s>) to each viewer as they join and to every channel when it changes; 1 s until then.
@@ -764,6 +753,7 @@
   overOn.onchange = () => {
     store.set('mbaa-chat-over', overOn.checked); over.hidden = !overOn.checked;
     if (!overOn.checked) { dmClear(nico); tlDrop(); swellClear(); } else tlKick();
+    { const M = glovReady(); if (M) M._viewer_ov_on(overOn.checked ? 1 : 0); }
     overOn.blur();
   };
 
@@ -1755,7 +1745,7 @@
   // comments behind the fighters (this browser): the characters and their effects pass in front of the text
   { const lab = document.createElement('label'); lab.className = 'cspread cbehind'; lab.title = 'the characters and their effects pass in front of the comments (this browser only)';
     const cb = document.createElement('input'); cb.type = 'checkbox'; cb.checked = behind;
-    cb.addEventListener('change', () => { behind = cb.checked; store.set('mbaa-chat-behind', behind); if (!behind) window.mbaaFrontCopy(0); cb.blur(); });
+    cb.addEventListener('change', () => { behind = cb.checked; store.set('mbaa-chat-behind', behind); const M = glovReady(); if (M) { M._viewer_ov_behind(behind ? 1 : 0); if (M._viewer_represent) M._viewer_represent(); } cb.blur(); });
     lab.append(cb, ' comments behind fighters'); tool.append(lab); }
   function toolOpen(on) {
     tool.hidden = !on; nicoBtn.setAttribute('aria-expanded', String(on));
@@ -1820,10 +1810,12 @@
     const said = dmText(l);
     const text = nicoClip(l.action ? `${disp(l.nick)} ${said}` : said);
     const [px, row] = DM_SIZE[size], [wt, fam] = DM_FONT[font], css = `${wt} ${px}px ${fam}`;
-    measure.font = css;
-    const w = Math.ceil(measure.measureText(text).width) + 8;  // (+ the outline)
+    const gw = glovMeasure(text, px * 1);
+    let w;
+    if (gw != null) w = Math.ceil(gw) + 8;
+    else { measure.font = css; w = Math.ceil(measure.measureText(text).width) + 8; }  // (+ the outline)
     let seed = 0; for (const ch of (l.msgid || text) + t) seed = (seed * 31 + ch.charCodeAt(0)) >>> 0;
-    const c = { msgid: l.msgid, text, loc, css, col, w, h: row, t, y: 0, scale: 1, seed, el: null, anim: null };
+    const c = { msgid: l.msgid, text, loc, css, px, col, w, h: row, t, y: 0, scale: 1, seed, el: null, anim: null, gid: 0, gM: null };
     if (loc === 'naka') { c.v = (1530 + 0.95 * w) / 4; c.life = (1725 + w) / c.v; }
     else { c.life = 3; const max = cmds.includes('full') ? 1920 : 1530; if (w > max) c.scale = max / w; }
     return c;
@@ -1877,11 +1869,110 @@
   }
   const dmXf = (c, dt) => `translate(${dmX(c, dt).toFixed(1)}px, ${c.y}px)${c.scale !== 1 ? ` scale(${c.scale.toFixed(4)})` : ''}`;
   function dmRemove(st, c) {
+    glovDel(c);
     if (c.anim) { c.anim.cancel(); c.anim = null; }
     if (c.el) { c.el.remove(); c.el = null; }
     const i = st.list.indexOf(c); if (i >= 0) st.list.splice(i, 1);
   }
   function dmClear(st) { for (const c of [...st.list]) dmRemove(st, c); }
+
+  // ---- the native renderer (web/host/browser/overlay_gl.cpp): the comments drawn by the game's own GL compositor ----
+  // Each comment is registered once with the session's wasm instance (its text as code points, an emoji grapheme as one
+  // code point U+100000 + its id here; colours; where it is at its time t and how fast it moves) and drawn by the
+  // renderer at every present, between the stage and the fighters when they go behind. A new instance (a new match, a
+  // restored GL context) gets the font and every comment on screen again. The font is the bundled Noto Sans JP Bold
+  // subset (fonts/chatfont.ttf, OFL), fetched the first time the overlay is wanted; emoji are drawn here once per size
+  // (the system emoji font) and kept by the renderer.
+  const glov = { M: null, font: null, fontP: null, emo: new Map(), emoList: [null], cv: '', next: 1 };
+  function glovFont() {
+    if (!glov.fontP) glov.fontP = fetch('fonts/chatfont.ttf').then(r => r.ok ? r.arrayBuffer() : null)
+      .then(b => { glov.font = b ? new Uint8Array(b) : null; if (glov.font) { glovReady(); tlRelayout && tl.st && tlRelayout(); } }, () => {});
+    return glov.font;
+  }
+  const glovSession = () => { const s = window.__mbaaSession && window.__mbaaSession(); return s && s.M && s.M._viewer_ov_add ? s.M : null; };
+  // the instance to draw with, set up (font, canvas size, the emoji hook, every comment again if it is new); null: not yet
+  function glovReady() {
+    const M = glovSession();
+    if (!M || !glovFont()) return null;
+    if (glov.M !== M) {
+      glov.M = M;
+      const p = M._malloc(glov.font.length); M.HEAPU8.set(glov.font, p);
+      M._viewer_ov_font(p, glov.font.length); M._free(p);
+      M.mbaaOvEmoji = glovEmoji;
+      glov.cv = ''; tl.follow = undefined;
+      M._viewer_ov_behind(behind ? 1 : 0); M._viewer_ov_on(overOn.checked && !over.hidden ? 1 : 0);
+      for (const c of nico.list) { c.gM = null; glovPut(c, 0); }
+      if (tl.st) for (const c of tl.st.list) { c.gM = null; glovPut(c, 1); }
+    }
+    glovCanvas(M);
+    return M;
+  }
+  // the canvas's backing store at the device's pixels (its box x devicePixelRatio), so text is drawn at its real size
+  function glovCanvas(M) {
+    const cv = document.getElementById('canvas');
+    if (!cv) return;
+    const dpr = window.devicePixelRatio || 1, w = Math.max(1, Math.round(cv.clientWidth * dpr)), h = Math.max(1, Math.round(cv.clientHeight * dpr));
+    const k = `${w}x${h}`;
+    if (glov.cv === k && cv.width === w) return;
+    glov.cv = k;
+    if (cv.width !== w || cv.height !== h) { cv.width = w; cv.height = h; }
+    M._viewer_ov_canvas(w, h);
+    if (M._viewer_represent) M._viewer_represent();
+  }
+  function glovCps(text) {
+    const out = [];
+    for (const g of graphemes(text)) {
+      if (isEmo(g)) {
+        let id = glov.emo.get(g);
+        if (!id) { id = glov.emoList.length; glov.emoList.push(g); glov.emo.set(g, id); }
+        out.push(0x100000 + id);
+      } else for (const ch of g) out.push(ch.codePointAt(0));
+    }
+    return out;
+  }
+  function glovSend(M, cps) {
+    const p = M._viewer_ov_buf(cps.length);
+    M.HEAPU32 ? M.HEAPU32.set(cps, p >> 2) : new Uint32Array(M.HEAPU8.buffer, p, cps.length).set(cps);
+    return cps.length;
+  }
+  function glovMeasure(text, px) {
+    const M = glovReady();
+    if (!M) return null;
+    return M._viewer_ov_measure(glovSend(M, glovCps(text)), px);
+  }
+  const glovRgba = hex => { const m = /^#?([0-9a-f]{6})$/i.exec(hex || ''); return m ? ((parseInt(m[1], 16) << 8) | 0xFF) >>> 0 : 0xFFFFFFFF; };
+  function glovPut(c, clock) {
+    const M = glovReady();
+    if (!M) return;
+    if (c.gM === M && c.gy === c.y && c.gt === c.t) return;
+    if (c.gM === M) { M._viewer_ov_move(c.gid, c.t, dmX(c, 0), c.loc === 'naka' ? -c.v : 0, c.y); c.gy = c.y; c.gt = c.t; return; }
+    if (!c.gid) c.gid = glov.next++;
+    const black = c.col.toUpperCase() === '#000000';
+    M._viewer_ov_add(c.gid, glovSend(M, glovCps(c.text)), clock, c.t, dmX(c, 0), c.loc === 'naka' ? -c.v : 0, c.y, c.scale, c.life,
+      c.px, glovRgba(c.col), black ? 0xFFFFFF66 : 0x00000066);
+    c.gM = M; c.gy = c.y; c.gt = c.t;
+  }
+  window.mbaaOvSync = () => { const M = glovReady(); if (M) M._viewer_ov_on(overOn.checked && !over.hidden ? 1 : 0); };
+  function glovDel(c) { if (c.gM && c.gM === glov.M) c.gM._viewer_ov_remove(c.gid); c.gM = null; }
+  // an emoji's tile for the renderer: box x box RGBA at ptr, the emoji centred at font size spx
+  let glovEmoCv = null;
+  function glovEmoji(id, spx, box, ptr) {
+    const g = glov.emoList[id], M = glov.M;
+    if (!g || !M) return 0;
+    if (!glovEmoCv) glovEmoCv = document.createElement('canvas');
+    const cv = glovEmoCv; if (cv.width < box || cv.height < box) { cv.width = Math.max(cv.width, box); cv.height = Math.max(cv.height, box); }
+    const x = cv.getContext('2d', { willReadFrequently: true });
+    x.clearRect(0, 0, box, box);
+    x.font = `${spx}px "Apple Color Emoji", "Segoe UI Emoji", "Noto Color Emoji", sans-serif`;
+    x.textAlign = 'center'; x.textBaseline = 'middle';
+    x.fillText(g, box / 2, box / 2);
+    M.HEAPU8.set(x.getImageData(0, 0, box, box).data, ptr);
+    return 1;
+  }
+  { const ro = new ResizeObserver(() => { const M = glovSession(); if (M && glov.M === M) glovCanvas(M); });
+    const watch = () => { const cv = document.getElementById('canvas'); if (cv && cv !== glov.ro) { if (glov.ro) ro.unobserve(glov.ro); ro.observe(cv); glov.ro = cv; } };
+    watch(); setInterval(() => { watch(); glovReady(); }, 1000);
+    window.addEventListener('resize', () => { const M = glovSession(); if (M && glov.M === M) { glov.cv = ''; glovCanvas(M); } }); }
 
   // Live comments (nico): on the wall clock, each entering as it arrives; the compositor runs it to the end
   const nico = dmStage('dmlive');
@@ -1899,9 +1990,7 @@
     if (!c.text.trim()) return;  // (only emoji, and the emoji amount at 0)
     dmPlace(nico.list, c, spread);
     nico.list.push(c);
-    const e = dmEl(nico, c);
-    c.anim = e.animate([{ transform: dmXf(c, 0) }, { transform: dmXf(c, c.life) }], { duration: c.life * 1000, easing: 'linear', fill: 'both' });
-    c.anim.onfinish = () => { if (c.el) { c.el.remove(); c.el = null; } c.anim = null; };
+    glovPut(c, 0);
   }
   // ---- the swell: an emoji spammed (SWELL_MIN copies within SWELL_WIN, by anyone) gets one big copy in the picture's
   // lower right, growing with each copy (a pulse per hit, at most SWELL_MAX of the picture's height), the running count
@@ -1996,8 +2085,6 @@
     const L = `${gameCv.offsetLeft}px`, T = `${gameCv.offsetTop}px`, W = `${gameCv.offsetWidth}px`, H = `${gameCv.offsetHeight}px`;
     const st = over.style;
     if (st.left !== L || st.top !== T || st.width !== W || st.height !== H) Object.assign(st, { left: L, top: T, width: W, height: H });
-    const fs = front.style;
-    if (fs.left !== L || fs.top !== T || fs.width !== W || fs.height !== H) Object.assign(fs, { left: L, top: T, width: W, height: H });
   }
   // ---- the match's comment timeline ----
   // Every comment of the watched match's channel (its whole history, fetched on joining; then each new one) gets a
@@ -2097,8 +2184,9 @@
     if (!tl.st) tl.st = dmStage('dmtl');
     const cs = tl.entries.filter(e => e.c).map(e => e.c).sort((a, b) => a.t - b.t), spread = spreadOf(), done = [];
     for (const c of cs) { dmPlace(done.filter(a => a.t + a.life + spread > c.t), c, spread); done.push(c); }
-    for (const c of tl.st.list) if (!cs.includes(c) && c.el) { c.el.remove(); c.el = null; }
+    for (const c of tl.st.list) if (!cs.includes(c)) { glovDel(c); if (c.el) { c.el.remove(); c.el = null; } }
     tl.st.list = cs; tl.T = -1;
+    for (const c of cs) glovPut(c, 1);
   }
   function tlClock(lv) {
     if (tl.clockBusy || performance.now() - tl.clockAt < CLOCK_EVERY) return;
@@ -2123,19 +2211,13 @@
     if (!tl.st || over.hidden) return;
     const lv = api.live();
     if (!lv || lv.recs !== tl.recs) { tlDrop(); tlPlace(); return; }
-    tl.st.box.style.visibility = lv.follow ? 'hidden' : '';
+    const M = glovReady();
+    if (M && tl.follow !== lv.follow) { tl.follow = lv.follow; M._viewer_ov_show(1, lv.follow ? 0 : 1); }
     if (!lv.follow) {
       const now = nowOf(lv);
-      if (now && dmFit(tl.st)) {  // (mid-seek: the last picture's comments stay)
+      if (now && M) {  // (mid-seek: the last picture's comments stay)
         const T = now.local / 60;
-        if (T !== tl.T) {
-          tl.T = T;
-          for (const c of tl.st.list) {
-            const dt = T - c.t;
-            if (dt >= 0 && dt < c.life) { (c.el || dmEl(tl.st, c)).style.transform = dmXf(c, dt); }
-            else if (c.el) { c.el.remove(); c.el = null; }
-          }
-        }
+        if (T !== tl.T) { tl.T = T; M._viewer_ov_clock(T); }
       }
     }
     tl.raf = requestAnimationFrame(tlFrame);

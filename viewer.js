@@ -3126,7 +3126,7 @@ if (Q.get('perf') === 'hud') (() => {
     }
     if (f0 >= 0 && f >= f0) gfps = (f - f0) / ((now - t0) / 1000);
     f0 = f; t0 = now;
-    const cv = document.getElementById('canvas'), dm = document.querySelectorAll('#chatover .dm').length, fr = document.getElementById('front');
+    const cv = document.getElementById('canvas'), M0 = session && session.M, dm = M0 && M0._viewer_ov_count ? M0._viewer_ov_count() : 0;
     el.textContent = [
       `display ${(1000 / med).toFixed(0)} Hz  rAF p95 ${pc(iv, 0.95).toFixed(1)} ms  missed ${missed}/2s`,
       `game ${gfps.toFixed(1)} fps${ui.paused ? ' (paused)' : ''}  frame ${f}`,
@@ -3134,7 +3134,7 @@ if (Q.get('perf') === 'hud') (() => {
       `long tasks ${longs.length}/5s  worst ${longs.length ? Math.max(...longs.map(l => l[1])).toFixed(0) : 0} ms`,
       `wasm ${(heap / 1048576).toFixed(0)} MB  js ${performance.memory ? (performance.memory.usedJSHeapSize / 1048576).toFixed(0) + ' MB' : 'n/a'}`,
       `canvas ${cv ? cv.width + 'x' + cv.height : '-'} css ${cv ? cv.clientWidth + 'x' + cv.clientHeight : '-'} dpr ${devicePixelRatio}`,
-      `comments ${dm}  behind ${fr && !fr.hidden ? 'on' : 'off'}  lowmem ${typeof LOWMEM !== 'undefined' && LOWMEM ? 1 : 0}`,
+      `comments ${dm} (native)  lowmem ${typeof LOWMEM !== 'undefined' && LOWMEM ? 1 : 0}`,
       `gpu ${gpu}`.slice(0, 60),
     ].join('\n');
   }, 500);
@@ -3843,6 +3843,7 @@ async function fastExport(s, c) {
   if (!window.Mp4Muxer) await loadScript('vendor/mp4-muxer.min.js');
   const M = s.M, t0 = performance.now(), pre = Math.max(1, c.a - EXPORT_PREROLL);
   fx = { cancel: false };
+  if (M._viewer_ov_on) M._viewer_ov_on(0);  // (the chat's comments stay out of the video)
   document.getElementById('clipexp').classList.add('on');
   setPaused(true);
   const hooks = ['mbaaVoicePlay', 'mbaaVoiceParam', 'mbaaVoiceStop', 'mbaaBgmStart', 'mbaaBgmStop'], orig = {};
@@ -3914,6 +3915,7 @@ async function fastExport(s, c) {
   } finally {
     for (const h of hooks) if (orig[h]) M[h] = orig[h];
     fx = null; overlayDirty = true;
+    if (window.mbaaOvSync) window.mbaaOvSync();
     document.getElementById('clipexp').classList.remove('on');
   }
   return true;
@@ -4005,6 +4007,7 @@ async function exportRealtime(s, c) {
   const chunks = [];
   mr.ondataavailable = e => { if (e.data.size) chunks.push(e.data); };
   mr.onerror = e => recFail(e.error || e);
+  if (s.M._viewer_ov_on) s.M._viewer_ov_on(0);  // (the chat's comments stay out of the video)
   rec = { s, a: c.a, b: c.b, round: !!c.round, mr, g, out, dest, chunks, type, last: -1, save: true,
           speed: ui.speed, track: stream.getVideoTracks()[0] };
   if (ui.speed !== 1) call(s, 'viewer_speed', 1);
@@ -4038,6 +4041,7 @@ function stopRecording(save) {
   const r = rec;
   if (!r) return;
   rec = null;
+  if (window.mbaaOvSync) window.mbaaOvSync();
   setPaused(true);
   if (ui.speed !== 1 && session === r.s) call(r.s, 'viewer_speed', ui.speed);
   document.getElementById('clipexp').classList.remove('on');
