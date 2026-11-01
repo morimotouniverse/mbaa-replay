@@ -18,7 +18,7 @@
 <meta name="twitter:description" content="Watch Melty Blood Actress Again Current Code replays in your browser, frame-exact.">
 <meta name="twitter:image" content="https://watch.meltyblood.org/preview.png">
 <meta name="mbaa-manifest" content="2a2e2bac19a8">
-<meta name="mbaa-chatjs" content="chat.js?v=e0085fa5eca1">
+<meta name="mbaa-chatjs" content="chat.js?v=0dca98b6f0b3">
 <link rel="manifest" href="site.webmanifest">
 <link rel="icon" href="icon-192.png">
 <link rel="apple-touch-icon" href="icon-192.png">
@@ -338,6 +338,8 @@
   #players .nm { font-size: 14px; font-weight: 650; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   #players .ch { font-size: 11.5px; color: var(--muted); display: flex; align-items: center; gap: 4px; }
   #players .moon { width: 16px; height: 16px; flex: none; }
+  /* (a tight dark rim plus a soft shadow under it: the moon stays readable over a bright stage picture) */
+  #players .moon { filter: drop-shadow(0 0 1px rgba(0, 0, 0, .95)) drop-shadow(0 1px 2px rgba(0, 0, 0, .7)); }
   #players .vs { font-size: 10px; color: var(--faint); letter-spacing: .12em; padding-left: 72px; }
   /* the match card: once the stage is known, both players over its select-screen picture (P1 left, P2 right), the name
      plate along its bottom, the song under it */

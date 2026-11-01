@@ -365,7 +365,7 @@
   #livesec .lvtog { display: none; }
   #chatcol > #livesec .lvtog { display: inline-flex; align-items: center; gap: 6px; background: none; border: 1px solid var(--line); border-radius: 999px;
                                color: var(--fg); font: inherit; font-size: 12px; font-weight: 650; padding: 2px 10px; cursor: pointer; }
-  #chatcol > #livesec .lvtog::before { content: '\\25CF'; color: var(--accent, #e04a5a); font-size: 9px; }
+  /* ("live matches: N ▾", no red dot: told apart from the transport's LIVE button) */
   #chatcol > #livesec .lvtog .lvn { font-variant-numeric: tabular-nums; }
   #chatcol > #livesec .lvtog .lvc { color: var(--faint); font-size: 10px; }
   #chatcol > #livesec .lvtog[aria-expanded=true] .lvc { transform: rotate(180deg); }
@@ -582,13 +582,13 @@
   if (col) col.append(sec); else if (after && after.parentNode === controls) after.after(sec); else controls.append(sec);
   // The live list (viewer.js liveListShow fills #livesec; idle matches dimmed, last): at the top of the chat column
   // while the column shows (desktop, and phones, whose menu sheet was the only way to it and is behind a button), as a
-  // strip whose "live N" button opens the list (open by default on desktop, closed on phones; remembered); back in the
+  // strip whose "live matches: N ▾" button opens the list (open by default on desktop, closed on phones; remembered); back in the
   // panel when the chat column is hidden (its button, a phone on its side with chat off) or the page has none.
   if (after && col) {
     const home = after.parentNode, homeNext = after.nextSibling, head = after.querySelector('.row.spread');
     const tog = document.createElement('button');
     tog.type = 'button'; tog.className = 'lvtog'; tog.setAttribute('aria-controls', 'liveitems');
-    tog.innerHTML = '<span>live</span><span class="lvn"></span><span class="lvc" aria-hidden="true">▾</span>';
+    tog.innerHTML = '<span>live matches: <span class="lvn"></span></span><span class="lvc" aria-hidden="true">▾</span>';
     if (head) head.prepend(tog);
     const items = document.getElementById('liveitems');
     const openOf = () => { const v = store.get('mbaa-live-open', null); return v === null ? !document.body.classList.contains('mob') : !!v; };
@@ -1539,13 +1539,19 @@
   const REACT_QUICK = ['👍', '😂', '🔥', '❤️', '😮', '😢', '👏'];
   const REACT_OK = e => typeof e === 'string' && e.length <= 24 && !/[\s\x00-\x1f\x7f;\\]/.test(e) && !/[A-Za-z0-9]/.test(e);
   const myWho = () => key(irc.account || irc.nick);
+  const REACT_STACK = 9;  // (the most of one emoji one user stacks on a line)
   const canSpeak = () => !!irc.account && irc.registered && !formEl.hidden;
   function reactApply(c, msgid, e, who, name, add) {
     let r = c.reacts.get(msgid);
     if (!r) { if (!add) return; c.reacts.set(msgid, r = new Map()); }
     let s = r.get(e);
-    if (add) { if (!s) { if (r.size >= 20) return; r.set(e, s = new Map()); } s.set(who, name); }
-    else if (s) { s.delete(who); if (!s.size) r.delete(e); }
+    // (who -> {name, n}: one user can stack the same emoji on a line (each +draft/react TAGMSG adds one, each unreact
+    // takes one back), so a chip counts reactions, not people; REACT_STACK caps one user's stack)
+    if (add) {
+      if (!s) { if (r.size >= 20) return; r.set(e, s = new Map()); }
+      const w = s.get(who);
+      if (w) { w.name = name || w.name; if (w.n >= REACT_STACK) return; w.n++; } else s.set(who, { name, n: 1 });
+    } else if (s) { const w = s.get(who); if (w && --w.n <= 0) s.delete(who); if (!s.size) r.delete(e); }
     if (key(c.name) === key(shown)) { const li = logEl.querySelector(`li[data-msgid="${CSS.escape(msgid)}"]`); if (li) reactDraw(li, c, msgid); }
   }
   function reactDraw(li, c, msgid) {
@@ -1555,14 +1561,19 @@
     const r = c.reacts.get(msgid);
     if (!r || !r.size) { if (box) box.remove(); return; }
     if (!box) { box = document.createElement('span'); box.className = 'creacts'; body.append(box); }
+    // (on your own line, a click on your chip stacks one more (2x, 3x ...); right-click / long-press takes one back.
+    // On others' lines a click toggles yours as before)
+    const ln = c.lines.find(x => x.msgid === msgid), own = !!(ln && ln.self);
     box.replaceChildren(...[...r].map(([e, s]) => {
-      const b = document.createElement('button'), mine = s.has(myWho()), es = document.createElement('span');
+      const b = document.createElement('button'), me = s.get(myWho()), mine = !!me, es = document.createElement('span');
       b.type = 'button'; b.className = mine ? 'mine' : ''; es.className = 'e'; es.textContent = e;
-      b.append(es, String(s.size));
-      const who = [...s.values()].map(n => disp(n));
-      b.title = `${who.slice(0, 8).join(', ')}${who.length > 8 ? ` and ${who.length - 8} more` : ''} reacted with ${e}${canSpeak() ? (mine ? ' (click to take yours back)' : ' (click to add yours)') : ''}`;
+      b.append(es, String([...s.values()].reduce((a, w) => a + w.n, 0)));
+      const who = [...s.values()].map(w => w.n > 1 ? `${disp(w.name)} ×${w.n}` : disp(w.name));
+      const stack = own && mine && me.n < REACT_STACK;
+      b.title = `${who.slice(0, 8).join(', ')}${who.length > 8 ? ` and ${who.length - 8} more` : ''} reacted with ${e}${canSpeak() ? (stack ? ' (click to add one more, right-click or long-press to take one back)' : mine ? ' (click to take yours back)' : ' (click to add yours)') : ''}`;
       b.setAttribute('aria-pressed', String(mine)); b.disabled = !canSpeak();
-      b.onclick = ev => { ev.stopPropagation(); react(c, msgid, e, !mine); };
+      b.onclick = ev => { ev.stopPropagation(); if (own && mine) { if (stack) react(c, msgid, e, true); } else react(c, msgid, e, !mine); };
+      if (own && mine) b.oncontextmenu = ev => { ev.preventDefault(); ev.stopPropagation(); react(c, msgid, e, false); };
       return b;
     }));
   }
@@ -2852,7 +2863,11 @@
         const b = document.createElement('b'); b.textContent = x.name; d.append(b);
         if (x.name.toLowerCase() !== x.nick.toLowerCase()) { const s = document.createElement('small'); s.textContent = x.nick; d.append(s); }
       }
-      d.addEventListener('pointerdown', e => { e.preventDefault(); ment.i = i; mentionPick(); });
+      // (picked on the click, not the press: a pick hides the popover, and a touch's click comes after its pointerdown
+      // and lands on whatever is then under the finger (on a phone the match card under it opened the music sheet). The
+      // press only keeps the input's focus)
+      d.addEventListener('pointerdown', e => e.preventDefault());
+      d.addEventListener('click', e => { e.preventDefault(); e.stopPropagation(); if (ment && ment.items[i] === x) { ment.i = i; mentionPick(); } });
       mpop.append(d);
     });
     input.setAttribute('aria-activedescendant', `cment${ment.i}`);
