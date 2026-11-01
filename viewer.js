@@ -2327,7 +2327,20 @@ function liveBegin(s) {  // play(): after viewer_play
           // (the list's silent: seconds since the host last sent anything, keep-alives included, when the bridge gives
           // it: the host gone, the match over, ~30 s before its capture closes and it leaves the list)
           const next = s.liveFollow && liveNextMatch(l.filter(m => !(m.silent > 8)));
-          if (!next) { status('the match has ended'); return; }
+          if (!next) {
+            if (!s.liveFollow) { status('the match has ended'); return; }
+            // nothing else live: keep looking (every 10 s) and go to the first match that starts
+            status('the match has ended: waiting for the next live match');
+            const wait = async () => {
+              if (session !== s) return;
+              const m = liveNextMatch(await liveList().catch(() => []));
+              if (session !== s) return;
+              if (m && !(m.silent > 8)) { status(`a match is live: on to ${m.matchup || (m.names || []).join(' vs ')}`); startLive(m.id); }
+              else setTimeout(wait, 10000);
+            };
+            setTimeout(wait, 10000);
+            return;
+          }
           status(`the match has ended: on to ${next.matchup || (next.names || []).join(' vs ')}`);
           setTimeout(() => { if (session === s) startLive(next.id); }, 2500);
           return;

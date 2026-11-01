@@ -546,7 +546,7 @@
     if (nico.raf) cancelAnimationFrame(nico.raf);
     nico.raf = 0;
     if (nico.inst) try { nico.inst.destroy(); } catch (e) {}
-    nico.inst = null; nico.list = []; nico.size = ''; nico.end = 0;
+    nico.inst = null; nico.list = []; nico.q = []; nico.size = ''; nico.end = 0;
     if (nico.cv) { nico.cv.remove(); nico.cv = null; }
   }
   // (re)built for the overlay's size: the stage's layout is in its own 1920x1080 units, so a rebuild with the same
@@ -556,6 +556,7 @@
     if (!w || !h) return false;
     const now = vposNow();
     nico.list = nico.list.filter(c => c.end > now);
+    nico.q = [];  // (the build takes every listed comment, the queued ones too)
     if (nico.inst) try { nico.inst.destroy(); } catch (e) {}
     // (a fresh canvas each build: the library takes a WebGL2 context on it, and a second instance on a canvas that already
     // has one swaps in a canvas of its own, which nicoReset would then never remove)
@@ -577,6 +578,13 @@
     if (`${over.clientWidth}x${over.clientHeight}@${dpr}` !== nico.size && !nicoBuild()) return;
     const now = vposNow();
     if (now > nico.end) { nicoReset(); return; }  // (all gone: the next comment starts a fresh stage)
+    if (nico.q && nico.q.length) {
+      const raw = nico.q.shift();
+      // (a crowded picture: past NICO_ON_SCREEN comments at once a new one stays in the chat only, so the overlay's
+      // cost stays bounded; a rebuild to drop the oldest would remake every comment's image)
+      const live = nico.list.filter(c => c.end > now).length;
+      if (live > NICO_ON_SCREEN) nico.list = nico.list.filter(c => c.raw !== raw); else nico.inst.addComments(raw);
+    }
     nico.inst.drawCanvas(now);
     nico.raf = requestAnimationFrame(nicoFrame);
   }
@@ -585,9 +593,13 @@
   function nicoRaw(l, t) {
     const cmds = nicoCmds(l.cmd), fixed = cmds.includes('ue') || cmds.includes('shita');
     const mail = l.color ? [...cmds, readableHex(l.color)] : cmds;
-    return { fixed, raw: { id: ++nico.id, vpos: fixed ? t : t + 100, content: l.action ? `${disp(l.nick)} ${l.text}` : l.text, mail,
+    return { fixed, raw: { id: ++nico.id, vpos: fixed ? t : t + 100, content: nicoClip(l.action ? `${disp(l.nick)} ${l.text}` : l.text), mail,
       owner: false, premium: true, date: Math.floor(l.time.getTime() / 1000), user_id: 0, layer: -1, is_my_post: !!l.self } };
   }
+  // On the picture a comment is at most Niconico's own 75 characters (the chat keeps the whole line): a 300-character
+  // line is a ~12000 px wide text image to draw and upload, which a burst of them turned into dropped game frames
+  const NICO_MAX = 75, NICO_ON_SCREEN = 60;
+  const nicoClip = t => { const a = Array.from(t); return a.length > NICO_MAX ? a.slice(0, NICO_MAX - 1).join('') + '…' : t; };
   async function danmaku(l) {
     if (!overOn.checked || document.visibilityState === 'hidden') return;
     try { await nicoLoad(); } catch (e) { return; }
@@ -599,7 +611,8 @@
     const end = raw.vpos + (fixed ? 300 : 425) + 10;
     nico.list.push({ raw, end, msgid: l.msgid });
     nico.end = Math.max(nico.end, end);
-    if (nico.list.length > 200) nicoBuild(); else nico.inst.addComments(raw);
+    // (added from the frame loop, one per frame: a burst's text images are made over several frames, not in one)
+    (nico.q || (nico.q = [])).push(raw);
     if (!nico.raf) nico.raf = requestAnimationFrame(nicoFrame);
   }
 
