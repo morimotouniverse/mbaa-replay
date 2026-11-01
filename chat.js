@@ -1885,7 +1885,7 @@
   // (the system emoji font) and kept by the renderer.
   const glov = { M: null, font: null, fontP: null, emo: new Map(), emoList: [null], cv: '', next: 1 };
   function glovFont() {
-    if (!glov.fontP) glov.fontP = fetch('fonts/chatfont.ttf').then(r => r.ok ? r.arrayBuffer() : null)
+    if (!glov.fontP) glov.fontP = fetch('fonts/chatfont.ttf?v=1')  /* (bump v with a new font: make_chat_font.py) */.then(r => r.ok ? r.arrayBuffer() : null)
       .then(b => { glov.font = b ? new Uint8Array(b) : null; if (glov.font) { glovReady(); tlRelayout && tl.st && tlRelayout(); } }, () => {});
     return glov.font;
   }
