@@ -575,8 +575,9 @@
     const c = chan(name);
     l.chan = c.name;
     if (l.msgid) { if (c.seen.has(l.msgid)) return; c.seen.add(l.msgid); }
-    // a reply (+draft/reply, or a line opening "@nick"): talk between viewers, kept in the chat, never on the picture
-    const onPic = !l.sys && !l.reply && !/^@\S/.test(l.text);
+    // a reply (+draft/reply, or a line opening "@nick"): on the picture without its "@nick " (a line that is only the
+    // mention: not at all); the chat keeps the whole line
+    const onPic = !l.sys && !!dmText(l);
     if (onPic && isMatch(name)) tlAdd(l);
     // (history arrives oldest first, before any live line of that channel: kept in time order)
     if (l.hist) { let i = c.lines.length; while (i > 0 && c.lines[i - 1].time > l.time) i--; c.lines.splice(i, 0, l); }
@@ -729,13 +730,15 @@
   const nicoClip = t => { const a = Array.from(t); return a.length > NICO_MAX ? a.slice(0, NICO_MAX - 1).join('') + '…' : t; };
   const measure = document.createElement('canvas').getContext('2d');
   // a comment's look and timing; t: when it enters, in seconds on its stage's clock
+  // the overlay's text of a line: a reply's or a mention's leading "@nick" (and a ':' or ',' after it) left out
+  function dmText(l) { return l.action ? l.text : String(l.text || '').replace(/^(@\S+[:,]?\s*)+/, '').trim(); }
   function dmMake(l, t) {
     const cmds = nicoCmds(l.cmd);
     const loc = cmds.find(c => c === 'ue' || c === 'shita') || 'naka';
     const size = cmds.find(c => DM_SIZE[c]) || 'medium', font = cmds.find(c => DM_FONT[c]) || 'defont';
     // (Niconico takes the first colour given; none: the sender's profile colour)
     const col = cmds.map(c => DM_COLOR[c] || (COLOR_RE.test(c) ? c : null)).find(Boolean) || (l.color ? readableHex(l.color) : '#FFFFFF');
-    const text = nicoClip(l.action ? `${disp(l.nick)} ${l.text}` : l.text);
+    const text = nicoClip(l.action ? `${disp(l.nick)} ${l.text}` : dmText(l));
     const [px, row] = DM_SIZE[size], [wt, fam] = DM_FONT[font], css = `${wt} ${px}px ${fam}`;
     measure.font = css;
     const w = Math.ceil(measure.measureText(text).width) + 8;  // (+ the outline)

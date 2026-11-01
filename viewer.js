@@ -3014,7 +3014,7 @@ function loading(on) {
   const v = document.getElementById('loadvid');
   if (HASH || CAPTURE || PERF) return;
   if (on) {
-    if (!v.src) v.src = 'opening.webm';
+    if (!v.src) v.src = 'opening.webm?v=640p60';  // (the query: past the edge's copy of the old 480x360 file)
     v.hidden = false; v.play().catch(() => {});
   } else if (!v.hidden) { v.hidden = true; v.pause(); }
 }
