@@ -1511,10 +1511,10 @@ function porPath(c) {
   return base >= 0 && man && man.files[at(base)] ? at(base) : null;
 }
 async function porShow(p, c) {
-  const el = document.querySelectorAll('#matchcard .por')[p], path = porPath(c);
+  const el = document.querySelectorAll('#matchcard .por:not(.xfghost)')[p], path = porPath(c);
   if (!el) return;
   el.dataset.c = c;
-  if (!path) { el.hidden = true; document.getElementById('matchcard').classList.toggle('pors', [...document.querySelectorAll('#matchcard .por')].some(e => !e.hidden)); return; }
+  if (!path) { el.hidden = true; document.getElementById('matchcard').classList.toggle('pors', [...document.querySelectorAll('#matchcard .por:not(.xfghost)')].some(e => !e.hidden)); return; }
   try {
     if (!porUrls.has(path)) {
       await fetchAll(man, [path], '', true);
@@ -1523,9 +1523,9 @@ async function porShow(p, c) {
       porUrls.set(path, URL.createObjectURL(new Blob([d], { type: 'image/png' })));
     }
     if (+el.dataset.c !== c) return;  // (another pick meanwhile)
-    el.src = porUrls.get(path); el.hidden = false;
+    xfadeSrc(el, porUrls.get(path)); el.hidden = false;
   } catch (e) { el.hidden = true; }
-  document.getElementById('matchcard').classList.toggle('pors', [...document.querySelectorAll('#matchcard .por')].some(e => !e.hidden));
+  document.getElementById('matchcard').classList.toggle('pors', [...document.querySelectorAll('#matchcard .por:not(.xfghost)')].some(e => !e.hidden));
 }
 // the cursor frames' loop over the icons, at the select screen's rate (CharaSelectIcons_Update, CE 0x48BAB0: the next of
 // 10 frames every 2 game ticks)
@@ -1694,6 +1694,21 @@ function radioTrack(f) {
                 game: (RADIO_GAMES.find(([g]) => g === t.game) || [])[1] };
 }
 let radioPick = '';
+// floatsis: the music picked on its own, the stage left alone (off: a radio track changes only the music; remembered)
+let radioStageFollow = true;
+try { radioStageFollow = localStorage.getItem('mbaaRadioStage') !== '0'; } catch (e) {}
+(() => {
+  const cb = document.getElementById('radiostage');
+  if (!cb) return;
+  cb.checked = radioStageFollow;
+  cb.onchange = () => {
+    radioStageFollow = cb.checked;
+    try { localStorage.setItem('mbaaRadioStage', radioStageFollow ? '1' : '0'); } catch (e) {}
+    stageKey = '';
+    radioStageSync(session);
+    if (ui.paused && session && session.tl) requestSeek(curFrame());  // (paused: the frame drawn again, with its stage)
+  };
+})();
 async function radioSet(f) {
   radioPick = f;
   const t = radioTrack(f);
@@ -1758,10 +1773,10 @@ function radioFilesIn(s, id) {
 function radioStageSync(s) {
   const M = s && s.M;
   if (!M || !M._viewer_radio_stage_id || s.glLost) return;
-  const st = radio && radio.dat && !HASH ? radio : null;
+  const st = radio && radio.dat && !HASH && radioStageFollow ? radio : null;
   // an MBAACC track: its stage (the match's own when it is one of the track's: nothing to swap)
   let stage = 0;
-  if (!st && radio && radio.stages && radio.stages.length && !HASH && M._viewer_radio_stage_want_stage) {
+  if (!st && radio && radioStageFollow && radio.stages && radio.stages.length && !HASH && M._viewer_radio_stage_want_stage) {
     const own = M._viewer_radio_stage_match();
     stage = radio.stages.includes(own) ? 0 : radio.stages[0];
   }
@@ -1792,21 +1807,46 @@ async function trimAlpha(blob) {
   out.getContext('2d').drawImage(cv, x0, y0, out.width, out.height, 0, 0, out.width, out.height);
   return await new Promise(r => out.toBlob(b => r(b || blob), 'image/png'));
 }
+// A picture changing on the card (the stage, its name plate, a side's splash): the old one fades out over the new
+// (a copy of the old image laid on it, removed when faded; the old blob URL is let go after). Reduced motion: a cut.
+const XF_MS = 450;
+function xfadeSrc(img, src, revoke) {
+  const prev = img.getAttribute('src');
+  const can = prev && src && prev !== src && !img.hidden && img.offsetWidth > 0 && img.complete && img.naturalWidth > 0
+    && !(window.matchMedia && matchMedia('(prefers-reduced-motion: reduce)').matches);
+  if (!can) { if (src) img.src = src; else img.removeAttribute('src'); if (revoke) URL.revokeObjectURL(revoke); return; }
+  const g = img.cloneNode(false);
+  g.removeAttribute('id'); g.removeAttribute('title'); g.setAttribute('aria-hidden', 'true'); g.classList.add('xfghost');
+  if (getComputedStyle(img).position === 'static')
+    Object.assign(g.style, { position: 'absolute', left: `${img.offsetLeft}px`, top: `${img.offsetTop}px`, width: `${img.offsetWidth}px`, height: `${img.offsetHeight}px`, margin: '0' });
+  g.style.pointerEvents = 'none';
+  img.after(g);
+  img.src = src;
+  let done = false;
+  const go = () => {
+    if (done) return; done = true;
+    g.style.transition = `opacity ${XF_MS}ms ease`;
+    requestAnimationFrame(() => { g.style.opacity = '0'; });
+    setTimeout(() => { g.remove(); if (revoke) URL.revokeObjectURL(revoke); }, XF_MS + 80);
+  };
+  (img.decode ? img.decode() : Promise.resolve()).then(go, go);
+  setTimeout(go, 1500);  // (a decode that never settles)
+}
 async function stageShow(s) {
   const box = document.getElementById('stageblk');
   if (!stagePanel || !s || !s.M) { box.hidden = true; return; }
   const id = radio && radio.stageNow ? radio.stageNow : s.M.HEAP32[STAGE_ID >> 2], st = stagePanel.stages[id];  // (an MBAACC pick's stage)
-  const f = radio ? radio.file : trackOf(s.bgmNow) || (st && st.track), key = `${id}/${f}`;
+  const f = radio ? radio.file : trackOf(s.bgmNow) || (st && st.track), key = `${id}/${f}/${+radioStageFollow}`;
   if (key === stageKey) return;
   stageKey = key;
   const tr = radio ? radio : stagePanel.tracks[f];
   document.getElementById('trk').textContent = tr ? tr.title + (radio ? ` (radio${radio.game ? `, ${radio.game}` : ''})` : '') : '';
-  if (radio && (radio.tile || radio.tileUrl)) {  // an older game's stage: its picture, its name for the plate
+  if (radio && radioStageFollow && (radio.tile || radio.tileUrl)) {  // an older game's stage: its picture, its name for the plate
     const view = box.querySelector('.view'), name = box.querySelector('.name'), d = radio.tile && cache.get(radio.tile);
-    if (view.dataset.src && view.dataset.src.startsWith('blob:')) URL.revokeObjectURL(view.dataset.src);
+    const old = view.dataset.src && view.dataset.src.startsWith('blob:') ? view.dataset.src : '';
     // (the stage's own render; a track with none shows its community tile)
     view.dataset.src = d ? URL.createObjectURL(new Blob([d], { type: 'image/jpeg' })) : radio.tileUrl || '';
-    view.src = view.dataset.src; view.hidden = !view.dataset.src; view.title = radio.stageName || '';
+    xfadeSrc(view, view.dataset.src, old); view.hidden = !view.dataset.src; view.title = radio.stageName || '';
     if (name.dataset.src) URL.revokeObjectURL(name.dataset.src);
     name.dataset.src = ''; name.removeAttribute('src'); name.hidden = true;
     if (box.hidden) requestAnimationFrame(() => marquee(document.getElementById('players')));
@@ -1818,13 +1858,12 @@ async function stageShow(s) {
   const n = String(id).padStart(2, '0'), paths = st.art.map(k => `web/stage/${k}_${n}.png`);
   await fetchAll(man, paths, '', true);
   for (const k of ['view', 'name']) {
-    const img = box.querySelector('.' + k), d = cache.get(`web/stage/${k}_${n}.png`);
-    if (img.dataset.src) URL.revokeObjectURL(img.dataset.src);
+    const img = box.querySelector('.' + k), d = cache.get(`web/stage/${k}_${n}.png`), old = img.dataset.src || '';
     let blob = d ? new Blob([d], { type: 'image/png' }) : null;
     // the name plate's text sits left in a wider sheet cell: cropped to its drawn pixels so the plate centres on the card
     if (blob && k === 'name') try { blob = await trimAlpha(blob); } catch (e) {}
     img.dataset.src = blob ? URL.createObjectURL(blob) : '';
-    img.src = img.dataset.src; img.hidden = !d;
+    xfadeSrc(img, img.dataset.src, old); img.hidden = !d;
   }
   if (box.hidden) requestAnimationFrame(() => marquee(document.getElementById('players')));  // (the card's layout: measured again)
   box.hidden = false;

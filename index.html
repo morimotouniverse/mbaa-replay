@@ -461,6 +461,7 @@
               border-radius: 999px; padding: 6px 14px; font-size: 13px; font-weight: 600; }
   #radiotog::after { content: '  \25BE'; }  #radiosec.open #radiotog::after { content: '  \25B4'; }
   #radiosec .radiohead { gap: 10px; }
+  #radiosec .radiostg { margin-top: -2px; }
   #radiosec .rtitle { display: flex; flex-direction: column; gap: 2px; font-size: 16px; font-weight: 700; color: #fff; min-width: 0; }
   #radiosec .rtitle::before { content: '\266A  RADIO'; font-size: 10px; letter-spacing: .12em; color: var(--accent); }
   #radiosec .rtitle small { font-size: 11px; font-weight: 400; color: var(--muted); }
@@ -747,6 +748,7 @@
   </div>
   <div class="sec" id="radiosec" hidden>
     <div class="row spread radiohead"><span class="rtitle">Raito Radio<small>Raito's Melty Blood music in place of the match's</small></span><button class="txt" id="radiotog" title="Raito Radio: play any of Raito's Melty Blood tracks instead of the match's music (stays until set back to match music); an older game's stage track also shows its stage"></button></div>
+    <div class="row radiostg"><label class="chip" title="On: a track from another stage brings its stage with it. Off: only the music changes, the match's own stage stays"><input id="radiostage" type="checkbox" checked>stage changes with the music</label></div>
     <div id="radiogames" hidden></div>
     <div id="radiogrid" hidden></div>
   </div>
@@ -773,6 +775,6 @@
 </div>
 <script src="mbaa.js?v=50ad47b996fb"></script>
 <script src="bgm_stream.js?v=407ac29e5c89"></script>
-<script src="viewer.js?v=26dd2fd1642a"></script>
+<script src="viewer.js?v=848bc42b7c81"></script>
 </body>
 </html>
