@@ -2756,6 +2756,20 @@ function drawMarks(t, max) {
     if (next - xs[i] >= room) g.fillText(`R${r + 1}`, xs[i] + 2 * dpr, games > 1 ? H * 0.42 : 0);
   });
 }
+// the seek actions with a key and a button (the bar, the phone sheet): 1 s = 60 frames, 5 s = 300
+const ACT = {
+  start: () => requestSeek(1),
+  end: () => { if (session && session.tl) requestSeek(tlMax(session.tl)); },
+  back5: () => stepBy(-300, false), back1s: () => stepBy(-60, false), fwd1s: () => stepBy(60, false), fwd5: () => stepBy(300, false),
+};
+const VIEW_TOGGLES = ['boxes', 'inputs', 'hud', 'names', 'music'];
+function flipView(id) { const el = document.getElementById(id); el.checked = !el.checked; el.onchange(); }
+function syncChips() {
+  for (const b of document.querySelectorAll('[data-flip]')) {
+    const on = document.getElementById(b.dataset.flip).checked;
+    b.classList.toggle('on', on); b.setAttribute('aria-pressed', String(on));
+  }
+}
 function controls() {
   const seek = document.getElementById('seek');
   seek.addEventListener('pointerdown', () => { seekDragging = true; });
@@ -2778,8 +2792,13 @@ function controls() {
   });
   btn('prevr', () => jumpRound(-1)); btn('nextr', () => jumpRound(1));
   btn('clipa', () => setClip('a')); btn('clipb', () => setClip('b')); btn('clipx', clearClip); btn('cliploop', toggleLoop); btn('clipexp', exportVideo);
-  btn('helpb', toggleHelp); btn('mute', toggleMute);
-  document.getElementById('help').onclick = toggleHelp;
+  btn('helpb', toggleHelp); btn('helpx', toggleHelp); btn('mute', toggleMute);
+  document.getElementById('help').addEventListener('click', e => { if (e.target === e.currentTarget) toggleHelp(); });  // (the backdrop)
+  // the seek buttons that are not frame step (the bar's on desktop, the menu sheet's on phones): one action each, as
+  // its key does
+  for (const el of document.querySelectorAll('[data-act]')) el.onclick = e => { e.currentTarget.blur(); ACT[el.dataset.act](); };
+  // the view toggles in the bar: each flips its checkbox (the state, kept in the panel / the phone sheet), as its key does
+  for (const el of document.querySelectorAll('[data-flip]')) el.onclick = e => { e.currentTarget.blur(); flipView(el.dataset.flip); };
   btn('plprev', () => startItem(pl.i - 1)); btn('plnext', () => startItem(pl.i + 1)); btn('plshare', copyPlaylist);
   btn('plsort', sortByDate);
   btn('plclear', () => { const cur = pl.items[pl.i]; pl.items = cur ? [cur] : []; pl.i = cur ? 0 : -1; renderPlaylist(); });
@@ -2789,6 +2808,7 @@ function controls() {
   stageEl.addEventListener('pointermove', e => { if (stageEl.classList.contains('fs') && e.pointerType === 'mouse') fsWake(); });
   stageEl.addEventListener('pointerdown', e => {
     if (e.target.closest('.fsbar')) { fsWake(); return; }  // (the bar's own controls)
+    if (e.target.closest('#help')) return;  // (the help over the picture: its own clicks)
     // touch: outside fullscreen a tap goes fullscreen; in it, a tap shows / hides the controls over the picture (beside
     // it they stay); pause is a button. A mouse click pauses / plays, as always.
     if (e.pointerType !== 'mouse') {
@@ -2808,7 +2828,7 @@ function controls() {
     ui.skipIntro = si.checked; try { localStorage.setItem('mbaaSkipIntro', si.checked ? '1' : '0'); } catch (e) {} si.blur();
     if (si.checked && inIntro(session)) skipIntro(session);  // (switched on during the intro: skip this one too)
   };
-  btn('back5', () => stepBy(-300, false)); btn('back1', () => stepBy(-1)); btn('fwd1', () => stepBy(1)); btn('fwd5', () => stepBy(300, false));
+  btn('back1', () => stepBy(-1)); btn('fwd1', () => stepBy(1));
   document.getElementById('speed').onchange = e => { ui.speed = +e.target.value; if (session) call(session, 'viewer_speed', ui.speed); e.target.blur(); };
   const hudEl = document.getElementById('hud'), musicEl = document.getElementById('music');
   hudEl.checked = ui.hud; musicEl.checked = ui.music;
@@ -2837,19 +2857,22 @@ function controls() {
       overlayDirty = true; el.blur();
     };
   }
+  // (each toggle's chip in the bar follows its checkbox, whoever changed it)
+  for (const id of VIEW_TOGGLES) { const el = document.getElementById(id), f = el.onchange; el.onchange = () => { f(); syncChips(); }; }
+  syncChips();
   addEventListener('keydown', e => {
     if (e.ctrlKey || e.metaKey || e.altKey) return;
     const tg = e.target;  // (typing in a text field: its keys, not the shortcuts)
     if (tg && (tg.isContentEditable || tg.tagName === 'TEXTAREA' || (tg.tagName === 'INPUT' && !/^(checkbox|range|radio|button)$/.test(tg.type)))) return;
-    const k = e.key, sec = e.shiftKey ? 300 : 60;
-    const flip = id => { const el = document.getElementById(id); el.checked = !el.checked; el.onchange(); };
+    const k = e.key;
+    const flip = flipView, live = !!(session && session.liveSrc) || document.body.classList.contains('live');
     if (k === ' ') togglePlay();
     else if (k === ',' || k === '<') stepBy(-1);
     else if (k === '.' || k === '>') stepBy(1);
-    else if (k === 'ArrowLeft') stepBy(-sec, false);
-    else if (k === 'ArrowRight') stepBy(sec, false);
-    else if (k === 'Home') requestSeek(1);
-    else if (k === 'End' && session && session.tl) requestSeek(tlMax(session.tl));
+    else if (k === 'ArrowLeft') ACT[e.shiftKey ? 'back5' : 'back1s']();
+    else if (k === 'ArrowRight') ACT[e.shiftKey ? 'fwd5' : 'fwd1s']();
+    else if (k === 'Home') ACT.start();
+    else if (k === 'End') ACT.end();
     else if (k === 'c' || k === 'C') copyTimestamp();
     else if (k === 'f' || k === 'F') toggleFullscreen();
     else if (k === '[' || k === 'PageUp') jumpRound(-1);
@@ -2857,15 +2880,16 @@ function controls() {
     else if (k === '{') setClip('a');
     else if (k === '}') setClip('b');
     else if (k === 'Escape') { if (fx) fx.cancel = true; else if (rec) stopRecording(false); else if (!document.getElementById('help').hidden) toggleHelp(); else if (!document.fullscreenElement && document.querySelector('.stage.fs')) setFs(false); else clearClip(); }
+    else if ((k === 'l' || k === 'L') && live) liveGoLive();  // (live: the LIVE button; a replay: loop)
     else if (k === 'l' || k === 'L') toggleLoop();
     else if (k === 'e' || k === 'E') exportVideo();
     else if (k === 'm' || k === 'M') toggleMute();
     else if (k === 'u' || k === 'U') flip('hud');
-    else if ((k === 'n' || k === 'N') && session && session.liveSrc) flip('names');
+    else if ((k === 't' || k === 'T') && live) flip('names');
     else if (k === 'b' || k === 'B') flip('music');
     else if (k === '?') toggleHelp();
-    else if (k === 'n' || k === 'N') startItem(pl.i + 1);
-    else if (k === 'p' || k === 'P') startItem(pl.i - 1);
+    else if ((k === 'n' || k === 'N') && !live) startItem(pl.i + 1);  // (the queue: replays only)
+    else if ((k === 'p' || k === 'P') && !live) startItem(pl.i - 1);
     else if (k === 'h' || k === 'H') flip('boxes');
     else if (k === 'i' || k === 'I') flip('inputs');
     else return;
@@ -3077,7 +3101,9 @@ function sortByDate() {
 }
 function renderPlaylist() {
   const many = pl.items.length > 1;
-  for (const id of ['plshare', 'plsort', 'plprev', 'plnext', 'plclear']) document.getElementById(id).hidden = !many;
+  for (const id of ['plshare', 'plsort', 'plclear']) document.getElementById(id).hidden = !many;
+  document.getElementById('plprev').disabled = !(pl.i > 0);
+  document.getElementById('plnext').disabled = !(pl.i + 1 < pl.items.length);
   document.getElementById('plpos').textContent = pl.items.length ? `${pl.i + 1 || '\u2013'} / ${pl.items.length}` : '';
   const ol = document.getElementById('plitems');
   let dragFrom = -1;
@@ -3086,9 +3112,10 @@ function renderPlaylist() {
     li.title = it.name; li.className = k === pl.i ? 'cur' : ''; li.draggable = true;
     const a = document.createElement('span'); a.className = 'nm'; a.textContent = nm;
     const d = document.createElement('span'); d.className = 'dt'; d.textContent = when;
-    const x = document.createElement('button'); x.title = 'remove from the queue'; x.innerHTML = '<i class="i i-x"></i>';
+    const x = document.createElement('button'); x.title = 'Remove from the queue'; x.innerHTML = '<i class="i i-x"></i>';
     x.onclick = e => { e.stopPropagation(); removeItem(k); };
-    li.append(a, d, x);
+    const g = document.createElement('span'); g.className = 'grip'; g.title = 'Drag to reorder'; g.textContent = '\u2807\u2807';
+    li.append(g, a, d, x);
     li.onclick = () => startItem(k);
     li.ondragstart = e => { dragFrom = k; li.classList.add('drag'); e.dataTransfer.effectAllowed = 'move'; e.dataTransfer.setData('text/plain', ''); };
     li.ondragend = () => li.classList.remove('drag');
@@ -3132,7 +3159,11 @@ function toggleMute() {
   if (+vol.value > 0) { unmuted = +vol.value; vol.value = 0; } else vol.value = unmuted || 100;
   vol.dispatchEvent(new Event('input'));
 }
-function toggleHelp() { const h = document.getElementById('help'); h.hidden = !h.hidden; }
+function toggleHelp() {
+  const h = document.getElementById('help');
+  h.hidden = !h.hidden;
+  if (!h.hidden) { const st = document.querySelector('.stage'); if (st.classList.contains('fs')) fsWake(); }
+}
 function clearClip() { if (session && session.clip) { session.clip = null; marksKey = ''; status('playing'); } }
 // a clip being played stops at its out point; play again from there starts it over
 function clipTick(s, f) {
@@ -3461,46 +3492,60 @@ function fitStage() {
     if (/^\d$/.test(scaleMode)) w = Math.min(w, 640 * +scaleMode / dpr);
     return setW(Math.max(w, 120), 'fit');
   }
-  const trH = !full && tr ? tr.offsetHeight + 6 : 0;  // (the transport under the picture; in fullscreen it is over it)
+  // the transport under the picture (in fullscreen it is over it): its height at a picture width, measured at that
+  // width (its bar is one row when wide, two or three when narrow), so a narrow picture's tall bar does not keep the
+  // picture narrow: the widest picture's bar first, then the chosen picture's, until they agree
+  const trAt = w => {
+    if (full || !tr) return 0;
+    const o = tr.style.width; tr.style.width = `${Math.floor(w)}px`;
+    const h = tr.offsetHeight + 6; tr.style.width = o; return h;
+  };
   if (!full && b.classList.contains('deskchat')) {
     const chatW = Math.round(Math.min(400, Math.max(300, window.innerWidth * 0.24)));
     root.style.setProperty('--chatw', `${chatW}px`);
-    const W = root.clientWidth - 32 - chatW - 12, H = window.innerHeight - 16 - trH;
-    const k = Math.floor(Math.min(W * dpr / 640, H * dpr / 480)), fit = Math.min(W, H * 4 / 3);
-    if (scaleMode === 'fit') return setW(fit, 'fit');
-    if (/^\d$/.test(scaleMode)) return setW(640 * +scaleMode / dpr, `${scaleMode}x`);
-    return k >= 1 && dpr < 2 ? setW(640 * k / dpr, `${k}x`) : setW(fit, 'fit');
+    const W = root.clientWidth - 32 - chatW - 12;
+    const pick = trH => {
+      const H = window.innerHeight - 16 - trH;
+      const k = Math.floor(Math.min(W * dpr / 640, H * dpr / 480)), fit = Math.min(W, H * 4 / 3);
+      if (scaleMode === 'fit') return [fit, 'fit'];
+      if (/^\d$/.test(scaleMode)) return [640 * +scaleMode / dpr, `${scaleMode}x`];
+      return k >= 1 && dpr < 2 ? [640 * k / dpr, `${k}x`] : [fit, 'fit'];
+    };
+    let trH = trAt(W), r = pick(trH);
+    for (let n = 0; n < 3; n++) { const h = trAt(r[0]); if (h === trH) break; trH = h; r = pick(trH); }
+    return setW(r[0], r[1]);
   }
   const Wwin = full ? window.innerWidth : document.documentElement.clientWidth - 32;
   const H = full ? window.innerHeight : window.innerHeight - 16;
-  // fullscreen with FS_SIDE or more beside the full-height picture (landscape): the controls go there (.sidebar)
-  const sidebar = full && Wwin - H * 4 / 3 >= FS_SIDE;
+  // a phone in fullscreen with FS_SIDE or more beside the full-height picture (landscape): the controls go there
+  // (.sidebar); desktop (any shape, 16:9 to 32:9) keeps the bar over the picture's bottom
+  const sidebar = full && b.classList.contains('mob') && Wwin - H * 4 / 3 >= FS_SIDE;
   if (stage) stage.classList.toggle('sidebar', sidebar);
   const W = sidebar ? Wwin - FS_SIDE : Wwin;
-  // controls below the picture take their stacked height; beside it, SIDE_W of width. Pick the layout with the larger picture.
-  // (the transport is under the picture in both)
-  document.body.classList.remove('side');
-  const below = full ? 0 : (ctl ? ctl.offsetHeight + 8 : 0) + trH, Hs = H - trH;
-  const kSide = Math.floor(Math.min((W - SIDE_W) * dpr / 640, Hs * dpr / 480));
-  const kBelow = Math.floor(Math.min(W * dpr / 640, (H - below) * dpr / 480));
-  // (high-density screens, auto: no whole multiples, the larger fitted picture: beside the panel, or the width with the
-  // picture and the transport in the window, the panel scrolled to below)
-  const hiAuto = !full && dpr >= 2 && scaleMode === 'auto';
-  const wSide = Math.min(W - SIDE_W, Hs * 4 / 3), wBelow = Math.min(W, 960, Math.max(320, Hs * 4 / 3));
-  const side = !full && W - SIDE_W >= 320 && (hiAuto ? wSide >= wBelow : kSide >= kBelow);
-  document.body.classList.toggle('side', side);
-  let w, label;
-  if (scaleMode === 'fit') { w = side ? Math.min(W - SIDE_W, Hs * 4 / 3) : Math.min(W, (H - below) * 4 / 3); label = 'fit'; }
-  else if (/^\d$/.test(scaleMode)) { w = 640 * +scaleMode / dpr; label = `${scaleMode}x`; }
-  else {
+  const pick = trH => {
+    // controls below the picture take their stacked height; beside it, SIDE_W of width. Pick the layout with the larger
+    // picture. (the transport is under the picture in both)
+    document.body.classList.remove('side');
+    const below = full ? 0 : (ctl ? ctl.offsetHeight + 8 : 0) + trH, Hs = H - trH;
+    const kSide = Math.floor(Math.min((W - SIDE_W) * dpr / 640, Hs * dpr / 480));
+    const kBelow = Math.floor(Math.min(W * dpr / 640, (H - below) * dpr / 480));
+    // (high-density screens, auto: no whole multiples, the larger fitted picture: beside the panel, or the width with the
+    // picture and the transport in the window, the panel scrolled to below)
+    const hiAuto = !full && dpr >= 2 && scaleMode === 'auto';
+    const wSide = Math.min(W - SIDE_W, Hs * 4 / 3), wBelow = Math.min(W, 960, Math.max(320, Hs * 4 / 3));
+    const side = !full && W - SIDE_W >= 320 && (hiAuto ? wSide >= wBelow : kSide >= kBelow);
+    document.body.classList.toggle('side', side);
+    if (scaleMode === 'fit') return [side ? Math.min(W - SIDE_W, Hs * 4 / 3) : Math.min(W, (H - below) * 4 / 3), 'fit'];
+    if (/^\d$/.test(scaleMode)) return [640 * +scaleMode / dpr, `${scaleMode}x`];
     // high-density screens (phones): a game pixel is already 2+ device pixels, uneven rows are invisible there, and a
     // whole multiple would leave a small picture: fit the width instead (beside the panel: the room there)
     // (fullscreen on such a screen: the whole screen, as large as it fits)
     const k = dpr >= 2 ? 0 : side ? kSide : kBelow;
-    w = k >= 1 ? 640 * k / dpr : full ? Math.min(W, H * 4 / 3) : side ? wSide : wBelow;
-    label = k >= 1 ? `${k}x` : 'fit';
-  }
-  setW(w, label);
+    return [k >= 1 ? 640 * k / dpr : full ? Math.min(W, H * 4 / 3) : side ? wSide : wBelow, k >= 1 ? `${k}x` : 'fit'];
+  };
+  let trH = trAt(Math.min(W, 1280)), r = pick(trH);
+  for (let n = 0; n < 3; n++) { const h = trAt(r[0]); if (h === trH) break; trH = h; r = pick(trH); }
+  setW(r[0], r[1]);
 }
 addEventListener('resize', fitStage);
 // the layout's own controls: the phone menu sheet, the chat column's show / hide, the chat profile; the on-screen
@@ -3513,13 +3558,13 @@ function placeControls(mob) {
   if (!MOVED.length) {
     const byId = id => document.getElementById(id);
     const chips = byId('boxes') && byId('boxes').closest('.row');
-    const tr = byId('tright'), pop = byId('setpop'), setb = byId('setb');
-    if (!tr || !pop || !chips) return;
+    const tr = byId('tright'), pop = byId('setpop'), setb = byId('setb'), tclip = byId('tclip');
+    if (!tr || !pop || !chips || !tclip) return;
     const sizeRow = document.createElement('div'); sizeRow.className = 'row';
     pop.append(sizeRow);
     for (const [el, to, before] of [[byId('mute'), tr, setb], [byId('vol'), tr, setb], [byId('speed'), tr, setb],
                                     [byId('pip'), tr, null], [byId('full'), tr, null], [byId('helpb'), tr, null],
-                                    [chips, pop, sizeRow], [byId('scale'), sizeRow, null]]) {
+                                    [chips, pop, sizeRow], [byId('scale'), sizeRow, null], [byId('clipgrp'), tclip, null]]) {
       if (!el) continue;
       const mark = document.createComment(el.id || 'chips');
       el.before(mark);

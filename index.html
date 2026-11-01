@@ -23,7 +23,7 @@
 <link rel="icon" href="icon-192.png">
 <link rel="apple-touch-icon" href="icon-192.png">
 <meta name="theme-color" content="#0d0d14">
-<link rel="stylesheet" href="icons.css?v=cc463c473d3a">
+<link rel="stylesheet" href="icons.css?v=4db5e6fecf18">
 <style>
   :root { --bg: #0d0d14; --panel: #15151f; --raise: #1d1d2a; --fg: #ececf4; --muted: #8a8aa2; --faint: #5c5c74;
           --accent: #e04a5a; --accent2: #ffb84a; --line: #262636; --w: min(100%, 960px); }
@@ -41,22 +41,32 @@
   .stage.fs #overlay { width: var(--w); height: auto; aspect-ratio: 4 / 3; }  /* (left / top: the picture's, viewer.js drawOverlay) */
   .fsbar { position: absolute; left: 0; right: 0; bottom: 0; padding: 18px max(12px, env(safe-area-inset-right)) max(10px, env(safe-area-inset-bottom)) max(12px, env(safe-area-inset-left));
            background: linear-gradient(transparent, #000d 40%); transition: opacity .25s; }
+  /* desktop fullscreen (any screen shape, 4:3 to 32:9): the bar over the bottom of the picture, as wide as it (a 1x
+     picture on a small screen: up to 1180 px, so the bar stays one row) */
+  .stage.fs:not(.sidebar) .fsbar { left: 50%; right: auto; width: max(var(--w), min(100%, 1180px)); transform: translateX(-50%); box-sizing: border-box;
+                                   padding: 40px 16px 12px; background: linear-gradient(transparent, #000a 35%, #000e); }
+  .fsbar #transportsec { width: 100%; padding: 0; }
+  .fsbar #time { font-size: 22px; }  .fsbar :is(#dur, #fc) { font-size: 13px; color: #c8c8d8; }
+  .fsbar .tbar button:not(#pause) { min-height: 36px; }
+  .fsbar .tbar .sk { font-size: 13.5px; }  .fsbar .tbar .vchip { font-size: 12px; height: 28px; }  .fsbar .tbar .i { width: 20px; height: 20px; }
+  /* (the chat column and the menu sheet are outside the fullscreen picture: their buttons go with them) */
+  .fsbar :is(#chattog, #menub) { display: none !important; }
   .stage.fs.idle .fsbar { opacity: 0; pointer-events: none; }
   .stage.fs.idle { cursor: none; }
-  .fsbar .transport button { min-width: 44px; min-height: 40px; }
-  /* landscape fullscreen (.sidebar: the room beside the 4:3 picture): the controls in a column there, always shown */
+  body.mob .fsbar .tbar button { min-width: 44px; min-height: 40px; }
+  /* a phone on its side in fullscreen (.sidebar, viewer.js fitStage: phones only, the room beside the 4:3 picture): the
+     controls in a column there, always shown */
   .stage.fs.sidebar { gap: 12px; }
   .stage.fs.sidebar .fsbar { position: static; flex: 0 1 340px; min-width: 200px; background: none; padding: 8px max(8px, env(safe-area-inset-right)) 8px 0; }
   .stage.fs.sidebar.idle .fsbar { opacity: 1; pointer-events: auto; }
   .stage.fs.sidebar.idle { cursor: auto; }
-  .stage.fs.sidebar .transport { flex-wrap: wrap; }
-  .stage.fs.sidebar .transport button { min-width: 36px; padding-left: 2px; padding-right: 2px; }
-  /* the transport's fullscreen button: phones (beside frame step), and in fullscreen (as leave) */
-  .mobfs { display: none !important; }
-  .fsbar .mobfs { display: inline-flex !important; }
-  .mobfs .fs-out, .fs .mobfs .fs-in { display: none; }
-  .fs .mobfs .fs-out { display: inline-block; }
-  @media (pointer: coarse) { .mobfs { display: inline-flex !important; } }
+  .stage.fs.sidebar .tbar { justify-content: center; }
+  body.mob .stage.fs.sidebar .fsbar .tbar button { min-width: 36px; padding-left: 2px; padding-right: 2px; }
+  /* exactly one fullscreen button: desktop #full (in the transport's right group), phones #fsx (beside frame step; #full
+     stays in the menu sheet's markup but hidden); each shows enter or leave */
+  body:not(.mob) #fsx, body.mob #full { display: none !important; }
+  .fs-out, .stage.fs .fs-in { display: none; }
+  .stage.fs .fs-out { display: inline-block; }
   #overlay { position: absolute; left: 0; top: 0; width: 100%; height: 100%; pointer-events: none; }
   /* while a match loads: the game's opening movie (muted) over the black picture */
   #loadvid { position: absolute; left: 0; top: 0; width: 100%; aspect-ratio: 4 / 3; object-fit: cover; background: #000; pointer-events: none; }
@@ -104,39 +114,106 @@
   body.mob .stage canvas#canvas { box-shadow: none; }
   body.mob #chatcol { border-radius: 0; border-width: 1px 0 0; padding: 6px 8px 8px; box-shadow: none; }
   body.mob.land #chatcol { border-width: 0 0 0 1px; }
-  #transportsec { display: grid; grid-template-columns: auto minmax(0, 1fr); grid-template-areas: "tl tl" "clk tp";
-                           align-items: center; gap: 0 6px; }
-  body.mob #transportsec { width: 100%; padding: 2px 8px; }
+  /* The transport: the timeline and one bar (.tbar) of groups: the clock, seek (.tg-seek: start, rounds, 5 s, 1 s, frames,
+     play), view toggles (.tg-view: hitboxes, inputs, HUD, names on a live page, music), the clip (#tclip: viewer.js
+     placeControls moves #clipgrp here from the panel), and the view's own controls (#tright: volume, speed, settings,
+     picture in picture, fullscreen, help). Desktop: the bar's box is dropped (display: contents) so every group is one
+     flex item of the transport, placed by order. Wide (a 1280 px picture, fullscreen): the clock beside the timeline,
+     the four groups in one row under it. Narrow: the timeline; the clock and the right group; seek; view and clip.
+     Phones keep frame step and rounds in the bar (the rest in the menu sheet). viewer.js fitStage measures the
+     transport's height at each picture width it tries. */
+  #transportsec { display: flex; flex-direction: row; flex-wrap: wrap; align-items: center; gap: 4px 0; position: relative; container: tp / inline-size; }
+  #transportsec .timeline { flex: 1 1 100%; min-width: 0; }
+  body.mob #transportsec { width: 100%; padding: 2px 8px; gap: 2px 0; }
   body.mob.land #transportsec { border-left: 1px solid var(--line); background: var(--panel); }
-  #transportsec .timeline { grid-area: tl; }
-  #transportsec .clock { grid-area: clk; align-items: center; }
-  #transportsec .transport { grid-area: tp; justify-content: flex-end; flex-wrap: nowrap; }
+  .tbar { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 0; min-width: 0; flex: 1 1 100%; }
+  body:not(.mob) .tbar { display: contents; }
+  .tbar .clock { align-items: center; margin-right: auto; padding-right: 10px; min-width: 0; }
   #transportsec #fc { margin-left: 10px; }
-  /* desktop: the view's own controls in the transport (viewer.js placeControls moves them here from the panel; phones keep
-     them in the ⋯ sheet): volume, speed, settings (overlays, music, size in #setpop), picture in picture, fullscreen, help */
-  #tright { display: none; margin-left: 10px; padding-left: 10px; border-left: 1px solid var(--line); gap: 4px; align-items: center; }
+  .tg { display: inline-flex; align-items: center; gap: 2px; flex: none; }
+  .tbar .tg.sep { border-left: 1px solid var(--line); margin-left: 8px; padding-left: 8px; }
+  .tbar .tbreak { flex-basis: 100%; height: 0; }
+  .tbar button { min-width: 30px; height: 32px; padding: 0 5px; display: inline-flex; align-items: center; justify-content: center; gap: 1px; }
+  .tbar [hidden], #toolsec [hidden] { display: none !important; }
+  .tbar .i { width: 18px; height: 18px; vertical-align: 0; }
+  .tbar .sk { font: 650 12px/1 system-ui, -apple-system, "Segoe UI", sans-serif; font-variant-numeric: tabular-nums; color: #cfcfe0; padding: 0 4px; }
+  .tbar .rl { font: 800 10px/1 system-ui, sans-serif; margin-left: 1px; opacity: .85; }
+  /* narrow: timeline / clock .. right / seek / view + clip */
+  body:not(.mob) #transportsec .timeline { order: 0; }
+  body:not(.mob) .tbar .clock { order: 1; }  body:not(.mob) #tright { order: 2; }
+  body:not(.mob) .tbar > :is(#chattog, #menub) { order: 3; }
+  body:not(.mob) .tbar .tbreak { order: 4; }  body:not(.mob) .tg-seek { order: 5; margin: 0 auto; }
+  body:not(.mob) .tbar .tbreak.tb2 { order: 6; }
+  body:not(.mob) .tg-view { order: 7; margin-left: auto; }  body:not(.mob) #tclip { order: 8; margin-right: auto; }
+  body:not(.mob) :is(.tg-seek, .tg-view, #tright).sep { border-left: 0; margin-left: auto; padding-left: 0; }
+  body:not(.mob) #tright.sep { margin-left: 0; }
+  /* wide: clock | timeline / seek | view | clip | right */
+  @container tp (min-width: 980px) {
+    body:not(.mob) .tbar .clock { order: 0; margin-right: 0; padding-right: 14px; }
+    body:not(.mob) #transportsec .timeline { order: 1; flex: 1 1 0; }
+    body:not(.mob) .tbar .tbreak { order: 2; }  body:not(.mob) .tbar .tbreak.tb2 { display: none; }
+    body:not(.mob) .tg-seek { order: 3; margin: 0; }
+    body:not(.mob) .tg-view { order: 4; margin-left: 0; }  body:not(.mob) #tclip { order: 5; margin-right: 0; }
+    body:not(.mob) #tright { order: 6; }  body:not(.mob) .tbar > :is(#chattog, #menub) { order: 7; }
+    body:not(.mob) :is(.tg-view, #tclip).sep { border-left: 1px solid var(--line); margin-left: 10px; padding-left: 10px; }
+    body:not(.mob) #tright.sep { margin-left: auto; }
+  }
+  /* very narrow desktop window: each line centred */
+  @container tp (max-width: 600px) {
+    body:not(.mob) .tbar .clock { flex-basis: 100%; justify-content: center; margin: 0; padding: 0; }
+    body:not(.mob) #tright { margin: 0 auto; }
+    body:not(.mob) .tbar button { min-width: 26px; padding: 0 3px; }
+    body:not(.mob) .tg-seek { gap: 0; }  body:not(.mob) #pause { margin: 0 3px; }
+  }
+  /* the view toggles: always-visible chips, lit when on (viewer.js syncChips: the checkboxes stay the state) */
+  .tbar .vchip { min-width: 0; height: 26px; padding: 0 9px; border-radius: 999px; background: var(--raise);
+                 color: var(--muted); font: 750 11px/1 system-ui, -apple-system, "Segoe UI", sans-serif; letter-spacing: .05em;
+                 box-shadow: inset 0 0 0 1px #ffffff12; }
+  .tbar .vchip .i { width: 14px; height: 14px; }
+  .tbar .vchip:hover { background: #2a2a3c; color: var(--fg); }
+  .tbar .vchip.on { background: #e04a5a2e; color: #ffd6da; box-shadow: inset 0 0 0 1px #e04a5a99; }
+  .tg-view { gap: 4px; }
+  /* the hitbox colours while the HB chip is hovered / focused: over the transport's top edge (the picture's bottom),
+     centred on it, so it never leaves the window */
+  .hbwrap { display: inline-flex; }
+  .hblegend { display: none; position: absolute; z-index: 25; bottom: calc(100% + 6px); left: 50%; transform: translateX(-50%);
+              max-width: calc(100% - 8px); width: max-content; box-sizing: border-box; flex-wrap: wrap; justify-content: center;
+              background: #15151ff4; border: 1px solid var(--line); border-radius: 8px; padding: 7px 10px; box-shadow: 0 8px 24px #000a;
+              white-space: nowrap; font-size: 11.5px; gap: 4px 10px; color: var(--fg); pointer-events: none; }
+  .hbwrap:is(:hover, :focus-within) .hblegend { display: flex; }
+  .hbkey { display: inline-flex; align-items: center; gap: 5px; }
+  .hbkey::before { content: ''; width: 10px; height: 10px; border-radius: 2px; background: var(--c); box-shadow: 0 0 0 1px #0008; }
+  .tbar #clipgrp { gap: 2px; }
+  .tbar #clipgrp .lbl { display: none; }
+  .tbar #clipgrp button.txt { height: 26px; min-width: 0; padding: 0 9px; border-radius: 6px; font-weight: 650; }
+  #tright { display: none; gap: 2px; align-items: center; }
   body:not(.mob) #tright { display: inline-flex; }
-  #tright #vol { width: 84px; }
-  #tright select { height: 30px; }
-  #transportsec { position: relative; }
+  #tright #vol { width: 72px; flex: none; margin: 0 4px; }
+  #tright select { height: 28px; padding: 3px 6px; }
   #setpop { position: absolute; z-index: 20; right: 4px; bottom: calc(100% - 30px); width: min(340px, 100%); box-sizing: border-box;
             background: var(--raise, #1c1c28); border: 1px solid var(--line); border-radius: 10px; padding: 10px;
             box-shadow: 0 10px 30px #0008; display: flex; flex-direction: column; gap: 8px; }
   #setpop[hidden] { display: none; }
   #setpop .row { flex-wrap: wrap; }
+  /* (in the popover: skip intro and the size; the overlay toggles and music are the bar's chips) */
+  #setpop label:has(:is(#boxes, #inputs, #hud, #music, #names)) { display: none; }
   body.mob #setpop, body.mob #setb { display: none !important; }
-  /* (panel sections left with nothing in them once their controls moved: the clip row on a live page, the view settings) */
-  body.live:not(.mob) #toolsec, body:not(.mob) #viewsec:not(:has(#sound:not([hidden]))) { display: none; }
-  body:not(.mob) #transportsec .transport { flex-wrap: wrap; }
-  @media (max-width: 600px) { body:not(.mob) #transportsec { grid-template-columns: 100%; grid-template-areas: "clk" "tl" "tp"; }
-                              body:not(.mob) #transportsec .transport { justify-content: center; } }
+  /* (panel sections left with nothing in them once their controls moved: the clip row, the view settings) */
+  body:not(.mob) #toolsec, body:not(.mob) #viewsec:not(:has(#sound:not([hidden]))) { display: none; }
+  button:disabled { opacity: .35; cursor: default; background: none !important; }
+  /* phones: frame step, rounds and fullscreen in the bar; 1 s / 5 s, start / end, the clip and the toggles in the sheet */
   body.mob #time { font-size: 13px; }  body.mob :is(#fc, #dur) { display: none; }
   body.mob #marks { height: 12px; }
-  body.mob #transportsec .transport button { padding: 6px; }
+  body.mob .tbar { flex-wrap: nowrap; }
+  body.mob .tbar button { padding: 0 6px; min-width: 30px; }
   body.mob #pause { width: 34px; height: 34px; margin: 0 3px; }
-  body.mob :is(#back5, #fwd5) { display: none; }
-  body.mob.land #transportsec { grid-template-columns: 100%; grid-template-areas: "tl" "clk" "tp"; }
-  body.mob.land #transportsec .transport { justify-content: center; }
+  body.mob :is(.tg-view, #tclip, .tbar .deskonly, .tbar .tbreak) { display: none !important; }
+  body.mob .tbar .tg.sep { border: 0; margin: 0; padding: 0; }
+  body.mob.land .tbar { flex-wrap: wrap; justify-content: center; }
+  body.mob.land .tbar .clock { flex-basis: 100%; justify-content: center; margin: 0; padding: 0; }
+  .seekrow button.txt { min-width: 44px; height: 36px; font-weight: 650; font-variant-numeric: tabular-nums; }
+  .seekrow .i { width: 18px; height: 18px; }
+  #mlegend { font-size: 11px; color: var(--muted); gap: 4px 10px; }
   body.mob.port #chattog { display: none !important; }
   body.mob #chatcol { align-self: stretch; }
   body.mob #chatsec .chead { flex-wrap: nowrap; }  body.mob #chatsec .chead > .lbl, body.mob #chatsec .cprev { display: none; }
@@ -351,7 +428,6 @@
            box-shadow: 0 4px 14px rgba(224, 74, 90, .35); }
   #pause:hover { background: #ec5a69; }
   #pause .i { width: 1.4em; height: 1.4em; }
-  .transport { justify-content: center; gap: 0; }
   select { background: var(--raise); border: 1px solid transparent; border-radius: 8px; padding: 5px 8px; font-size: 12px; cursor: pointer; }
   select:hover { border-color: #3a3a52; }
   /* toggles as chips */
@@ -404,12 +480,27 @@
   #plitems li.cur { background: #e04a5a22; }  #plitems li.cur::before { content: '\25B6'; color: var(--accent); }
   #plitems li .nm { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   #plitems li .dt { color: var(--faint); font-size: 10.5px; white-space: nowrap; }
-  #plitems li button { padding: 3px; opacity: 0; color: var(--muted); }
-  #plitems li:hover button { opacity: 1; }
+  #plitems li button { padding: 3px; opacity: .5; color: var(--muted); }
+  #plitems li:hover button, #plitems li button:focus-visible { opacity: 1; }
+  #plitems li .grip { color: var(--faint); cursor: grab; font-size: 13px; line-height: 1; letter-spacing: -2px; padding: 0 2px; user-select: none; }
+  #plitems li:hover .grip { color: var(--muted); }
+  #plitems:not(:has(li + li)) .grip { display: none; }
   #plitems li.drag { opacity: .4; }  #plitems li.over { box-shadow: inset 0 2px 0 var(--accent); }
-  #help { position: absolute; inset: 0; background: rgba(13, 13, 20, .97); border-radius: 12px; padding: 14px; overflow-y: auto;
-          font-size: 12px; color: var(--muted); z-index: 2; }
-  #help table { border-collapse: collapse; width: 100%; }  #help td { padding: 3px 4px; vertical-align: top; }  #help td:first-child { white-space: nowrap; }
+  /* keyboard help: over the picture (inside .stage, so fullscreen shows it too); phones: the whole screen */
+  #help { position: absolute; inset: 0; z-index: 30; display: flex; align-items: center; justify-content: center; padding: 12px;
+          box-sizing: border-box; background: #07070cd0; backdrop-filter: blur(3px); cursor: default; }
+  #help[hidden] { display: none; }
+  body.mob #help { position: fixed; z-index: 120; }
+  #help .hcard { position: relative; width: min(760px, 100%); max-height: 100%; overflow-y: auto; box-sizing: border-box;
+                 background: #15151ff6; border: 1px solid var(--line); border-radius: 12px; padding: 14px 16px 12px;
+                 box-shadow: 0 16px 48px #000c; font-size: 12.5px; color: var(--muted); }
+  #help .hhead { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; color: var(--fg); font-size: 15px; font-weight: 700; }
+  #help .hhead button { margin-left: auto; }
+  #help .hcols { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 0 22px; }
+  #help h4 { margin: 8px 0 3px; font-size: 10.5px; text-transform: uppercase; letter-spacing: .08em; color: var(--accent2); }
+  #help table { border-collapse: collapse; width: 100%; table-layout: fixed; }  #help td { padding: 2px 4px; vertical-align: top; }
+  #help td:first-child { white-space: nowrap; width: 104px; padding-right: 8px; }  #help td:last-child { color: #c4c4d4; }
+  #help .legend { display: flex; flex-wrap: wrap; gap: 4px 12px; }
   kbd { font: 11px ui-monospace, Consolas, monospace; background: var(--raise); border: 1px solid #34344a; border-bottom-width: 2px;
         border-radius: 4px; padding: 0 4px; color: var(--fg); }
   .credit { font-size: 10px; margin-top: 10px; color: var(--faint); }
@@ -425,22 +516,86 @@
   <div id="catchup" role="status" hidden><div class="cu-t">Catching up to live</div><div class="cu-s"></div><div class="cu-bar"><i></i></div></div>
   <div id="ffbadge" hidden>&#9193; 2&times; catching up</div>
   <video id="loadvid" muted loop playsinline preload="none" poster="opening.webp" hidden></video>
+  <div id="help" role="dialog" aria-label="Keyboard shortcuts" hidden>
+    <div class="hcard">
+      <div class="hhead">Keyboard shortcuts<button id="helpx" title="Close (Esc or ?)"><i class="i i-x"></i></button></div>
+      <div class="hcols">
+        <div>
+          <h4>Playback</h4>
+          <table>
+            <tr><td><kbd>Space</kbd> / click</td><td>skip the VS intro, then play / pause</td></tr>
+            <tr><td><kbd>,</kbd> <kbd>.</kbd></td><td>one frame back / forward</td></tr>
+            <tr><td><kbd>&larr;</kbd> <kbd>&rarr;</kbd></td><td>1 s back / forward</td></tr>
+            <tr><td><kbd>Shift</kbd>+<kbd>&larr;</kbd> <kbd>&rarr;</kbd></td><td>5 s back / forward</td></tr>
+            <tr><td><kbd>Home</kbd> <kbd>End</kbd></td><td>start / end</td></tr>
+            <tr><td><kbd>[</kbd> <kbd>]</kbd></td><td>previous / next round (also <kbd>PgUp</kbd> <kbd>PgDn</kbd>)</td></tr>
+            <tr class="liveonly"><td><kbd>L</kbd></td><td>back to live (~4 s behind the players)</td></tr>
+          </table>
+          <h4>Clip</h4>
+          <table>
+            <tr><td><kbd>{</kbd> <kbd>}</kbd></td><td>clip in / out point</td></tr>
+            <tr class="replayonly"><td><kbd>L</kbd></td><td>loop the clip (no clip: the round)</td></tr>
+            <tr><td><kbd>E</kbd></td><td>save the clip (or the round) as a video; again to stop</td></tr>
+            <tr class="replayonly"><td><kbd>C</kbd></td><td>copy a link to this moment (to the clip when one is set)</td></tr>
+          </table>
+          <h4 class="replayonly">Queue</h4>
+          <table class="replayonly">
+            <tr><td><kbd>N</kbd> <kbd>P</kbd></td><td>next / previous replay in the queue</td></tr>
+            <tr><td>drag &#10303;</td><td>reorder; picked or dropped replays are added</td></tr>
+          </table>
+        </div>
+        <div>
+          <h4>View</h4>
+          <table>
+            <tr><td><kbd>H</kbd></td><td>hitboxes</td></tr>
+            <tr><td><kbd>I</kbd></td><td>input display</td></tr>
+            <tr><td><kbd>U</kbd></td><td>HUD (health, meter, timer)</td></tr>
+            <tr class="liveonly"><td><kbd>T</kbd></td><td>players' names on the CHALLENGER / WINS banners</td></tr>
+            <tr><td><kbd>B</kbd></td><td>music on / off (sound effects stay)</td></tr>
+            <tr><td><kbd>M</kbd></td><td>mute everything</td></tr>
+            <tr><td><kbd>F</kbd></td><td>fullscreen</td></tr>
+            <tr><td><kbd>?</kbd></td><td>this help</td></tr>
+            <tr><td><kbd>Esc</kbd></td><td>the first that applies: stop a video being saved, close this help, leave fullscreen, clear the clip</td></tr>
+          </table>
+          <h4>Hitboxes</h4>
+          <div class="legend"><span class="hbkey" style="--c:#30e030">hurt</span><span class="hbkey" style="--c:#ff2828">attack</span><span class="hbkey" style="--c:#ffe020">clash</span><span class="hbkey" style="--c:#40a0ff">shield</span><span class="hbkey" style="--c:#d8d8d8">collision</span><span class="hbkey" style="--c:#c878e6">special</span></div>
+        </div>
+      </div>
+      <div class="credit">Every button's tooltip names its key. Icons: Kenney (kenney.nl, CC0)</div>
+    </div>
+  </div>
 </div>
   <div class="sec" id="transportsec">
-    <div class="clock"><span id="time">0:00.0</span><span class="hint" id="dur"></span><span id="fc"></span><button id="livebtn" class="livebtn" title="back to live (~4 s behind the players)" hidden>LIVE</button></div>
     <div class="timeline"><canvas id="marks"></canvas><input id="seek" type="range" min="0" max="1" value="0" step="1" aria-label="seek"></div>
-    <div class="row transport">
-      <button id="prevr" title="previous round ([)"><i class="i i-prev"></i></button>
-      <button id="back5" title="back 5 s (Shift+Left)"><i class="i i-rewind"></i></button>
-      <button id="back1" title="back one frame (,)"><i class="i i-back"></i></button>
-      <button id="pause" title="pause / play (Space)"><i class="i i-pause"></i></button>
-      <button id="fwd1" title="forward one frame (.)"><i class="i i-play"></i></button>
-      <button id="fwd5" title="forward 5 s (Shift+Right)"><i class="i i-ffwd"></i></button>
-      <button id="nextr" title="next round (])"><i class="i i-next"></i></button>
-      <button id="fsx" class="mobfs" title="fullscreen (F)"><i class="i i-full fs-in"></i><i class="i i-x fs-out"></i></button>
-      <span class="grp tright" id="tright"><button id="setb" title="view settings: overlays, music, picture size" aria-expanded="false"><svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path fill-rule="evenodd" d="M10.3 2h3.4l.5 2.6 1.6.7 2.2-1.5 2.4 2.4-1.5 2.2.7 1.6 2.6.5v3.4l-2.6.5-.7 1.6 1.5 2.2-2.4 2.4-2.2-1.5-1.6.7-.5 2.6h-3.4l-.5-2.6-1.6-.7-2.2 1.5-2.4-2.4 1.5-2.2-.7-1.6L2 13.7v-3.4l2.6-.5.7-1.6-1.5-2.2 2.4-2.4 2.2 1.5 1.6-.7zM12 8.5a3.5 3.5 0 1 0 0 7 3.5 3.5 0 0 0 0-7z"/></svg></button></span>
-      <button id="chattog" class="chatonly on" title="show / hide the chat"><i class="i i-chat"></i></button>
-      <button id="menub" class="mobonly" title="menu: the match, settings, radio, live list, queue, chat profile"><i class="i i-menu"></i></button>
+    <div class="tbar">
+      <div class="clock"><span id="time">0:00.0</span><span class="hint" id="dur"></span><span id="fc"></span><button id="livebtn" class="livebtn" title="Back to live, ~4 s behind the players (L)" hidden>LIVE</button></div>
+      <span class="tg tg-seek sep">
+        <button id="tostart" class="deskonly" data-act="start" title="Start (Home)"><i class="i i-prev"></i></button>
+        <button id="prevr" title="Previous round ([ or Page Up)"><i class="i i-rewind"></i><span class="rl">R</span></button>
+        <button id="back5" class="sk deskonly" data-act="back5" title="Back 5 s (Shift+&larr;)">&minus;5s</button>
+        <button id="back1s" class="sk deskonly" data-act="back1s" title="Back 1 s (&larr;)">&minus;1s</button>
+        <button id="back1" title="Back one frame (,)"><i class="i i-back"></i></button>
+        <button id="pause" title="Play / pause (Space)"><i class="i i-pause"></i></button>
+        <button id="fwd1" title="Forward one frame (.)"><i class="i i-play"></i></button>
+        <button id="fwd1s" class="sk deskonly" data-act="fwd1s" title="Forward 1 s (&rarr;)">+1s</button>
+        <button id="fwd5" class="sk deskonly" data-act="fwd5" title="Forward 5 s (Shift+&rarr;)">+5s</button>
+        <button id="nextr" title="Next round (] or Page Down)"><span class="rl">R</span><i class="i i-ffwd"></i></button>
+        <button id="toend" class="deskonly" data-act="end" title="End (End)"><i class="i i-next"></i></button>
+      </span>
+      <span class="tg tg-view sep">
+        <span class="hbwrap"><button class="vchip" data-flip="boxes" title="Hitboxes (H)" aria-pressed="false">HB</button>
+          <span class="hblegend" role="tooltip"><span class="hbkey" style="--c:#30e030">hurt</span><span class="hbkey" style="--c:#ff2828">attack</span><span class="hbkey" style="--c:#ffe020">clash</span><span class="hbkey" style="--c:#40a0ff">shield</span><span class="hbkey" style="--c:#d8d8d8">collision</span><span class="hbkey" style="--c:#c878e6">special</span></span></span>
+        <button class="vchip" data-flip="inputs" title="Input display (I)" aria-pressed="false">IN</button>
+        <button class="vchip" data-flip="hud" title="HUD: health, meter, timer, combo counters (U)" aria-pressed="true">HUD</button>
+        <button class="vchip liveonly" data-flip="names" title="Players' names on the CHALLENGER / WINS banners (T)" aria-pressed="true">NAMES</button>
+        <button class="vchip" data-flip="music" title="Music; sound effects stay (B)" aria-pressed="true"><i class="i i-music"></i></button>
+      </span>
+      <span class="tg sep" id="tclip"></span>
+      <span class="tbreak"></span><span class="tbreak tb2"></span>
+      <span class="tg sep tright" id="tright"><button id="setb" title="Settings: skip intro, picture size" aria-expanded="false"><i class="i i-gear"></i></button></span>
+      <button id="fsx" title="Fullscreen (F)"><i class="i i-full fs-in"></i><i class="i i-smaller fs-out"></i></button>
+      <button id="chattog" class="chatonly on" title="Show / hide the chat"><i class="i i-chat"></i></button>
+      <button id="menub" class="mobonly" title="Menu: the match, seek, clip, settings, radio, live list, queue, chat profile"><i class="i i-menu"></i></button>
     </div>
     <div id="setpop" hidden></div>
   </div>
@@ -461,33 +616,43 @@
     <div id="status">loading…</div>
   </div>
   <div class="sec" id="toolsec">
+    <div class="row seekrow mobonly"><span class="lbl" style="margin-right:6px">seek</span>
+      <button class="txt" data-act="start" title="Start (Home)"><i class="i i-prev"></i></button>
+      <button class="txt" data-act="back5" title="Back 5 s (Shift+&larr;)">&minus;5s</button>
+      <button class="txt" data-act="back1s" title="Back 1 s (&larr;)">&minus;1s</button>
+      <button class="txt" data-act="fwd1s" title="Forward 1 s (&rarr;)">+1s</button>
+      <button class="txt" data-act="fwd5" title="Forward 5 s (Shift+&rarr;)">+5s</button>
+      <button class="txt" data-act="end" title="End (End)"><i class="i i-next"></i></button>
+    </div>
     <div class="row spread">
-      <span class="grp replayonly"><span class="lbl" style="margin-right:6px">clip</span>
-        <button class="txt" id="clipa" title="clip in point ({)">in</button>
-        <button class="txt" id="clipb" title="clip out point (})">out</button>
-        <button id="cliploop" title="loop the clip, or the round when no clip is set (L)"><i class="i i-loop"></i></button>
-        <button id="clipexp" title="save the clip (or the round) as a video (E)"><i class="i i-film"></i></button><button id="clipx" title="clear the clip (Esc)"><i class="i i-x"></i></button>
+      <span class="grp" id="clipgrp"><span class="lbl" style="margin-right:6px">clip</span>
+        <button class="txt" id="clipa" title="Clip in point ({)">in</button>
+        <button class="txt" id="clipb" title="Clip out point (})">out</button>
+        <button id="cliploop" class="replayonly" title="Loop the clip, or the round when no clip is set (L)"><i class="i i-loop"></i></button>
+        <button id="clipx" title="Clear the clip (Esc)"><i class="i i-x"></i></button>
+        <button id="copyt" class="replayonly" title="Copy a link to this moment, or to the clip when one is set (C)"><i class="i i-share"></i></button>
+        <button id="clipexp" title="Save the clip (or the round) as a video; again to stop (E)"><i class="i i-film"></i></button>
       </span>
       <span class="grp">
-        <button id="copyt" class="replayonly" title="copy a link to this moment, or to the clip when one is set (C)"><i class="i i-share"></i></button>
-        <button id="pip" title="picture in picture: a small window over other apps" hidden><i class="i i-pip"></i></button>
-        <button id="full" title="fullscreen, integer scaled (F)"><i class="i i-full"></i></button>
-        <button id="helpb" title="keyboard shortcuts (?)"><i class="i i-help"></i></button>
+        <button id="pip" title="Picture in picture: a small window over other apps" hidden><i class="i i-pip"></i></button>
+        <button id="full" title="Fullscreen, integer scaled (F)"><i class="i i-full fs-in"></i><i class="i i-smaller fs-out"></i></button>
+        <button id="helpb" title="Keyboard shortcuts (?)"><i class="i i-help"></i></button>
       </span>
     </div>
   </div>
   <div class="sec" id="viewsec">
     <div class="row">
       <label class="chip replayonly" title="skip the VS intro when a replay starts"><input id="skipintro" type="checkbox">skip intro</label>
-      <label class="chip" title="hitbox overlay (H)"><input id="boxes" type="checkbox">hitboxes</label>
-      <label class="chip" title="input display (I)"><input id="inputs" type="checkbox">inputs</label>
-      <label class="chip" title="the game's HUD: health, meter, timer, combo counters (U)"><input id="hud" type="checkbox" checked>HUD</label>
-      <label class="chip liveonly" title="the players' names on the CHALLENGER / WINS banner (N)"><input id="names" type="checkbox" checked>names</label>
-      <label class="chip" title="music (B); sound effects stay"><input id="music" type="checkbox" checked>music</label>
+      <label class="chip" title="Hitboxes (H)"><input id="boxes" type="checkbox">hitboxes</label>
+      <label class="chip" title="Input display (I)"><input id="inputs" type="checkbox">inputs</label>
+      <label class="chip" title="HUD: health, meter, timer, combo counters (U)"><input id="hud" type="checkbox" checked>HUD</label>
+      <label class="chip liveonly" title="Players' names on the CHALLENGER / WINS banners (T)"><input id="names" type="checkbox" checked>names</label>
+      <label class="chip" title="Music; sound effects stay (B)"><input id="music" type="checkbox" checked>music</label>
     </div>
+    <div class="row mobonly" id="mlegend"><span class="lbl">hitboxes</span><span class="hbkey" style="--c:#30e030">hurt</span><span class="hbkey" style="--c:#ff2828">attack</span><span class="hbkey" style="--c:#ffe020">clash</span><span class="hbkey" style="--c:#40a0ff">shield</span><span class="hbkey" style="--c:#d8d8d8">collision</span><span class="hbkey" style="--c:#c878e6">special</span></div>
     <div class="row">
       <select id="scale" title="picture size: auto = largest whole multiple that fits"><option value="auto">size auto</option><option value="1">size 1x</option><option value="2">size 2x</option><option value="3">size 3x</option><option value="4">size 4x</option><option value="fit">size fit</option></select>
-      <select id="speed" title="speed"><option value="1">speed 1x</option><option value="2">speed 2x</option><option value="4">speed 4x</option></select>
+      <select id="speed" title="Speed"><option value="1">1x</option><option value="2">2x</option><option value="4">4x</option></select>
       <button id="mute" title="mute (M)"><i class="i i-sound"></i></button><input id="vol" type="range" min="0" max="100" value="50" aria-label="volume">
     </div>
     <button id="sound" hidden>click for sound</button>
@@ -506,38 +671,20 @@
     <div class="row spread">
       <span class="lbl">queue <span id="plpos"></span></span>
       <span class="grp">
-        <button id="plshare" title="copy a link to this playlist" hidden><i class="i i-share"></i></button>
-        <button class="txt" id="plsort" title="sort by the date each replay was recorded (oldest first)" hidden>by date</button>
-        <button id="plprev" title="previous replay (P)" hidden><i class="i i-prev"></i></button>
-        <button id="plnext" title="next replay (N)" hidden><i class="i i-next"></i></button>
-        <button id="plclear" title="clear the queue (keeps the replay that is playing)" hidden><i class="i i-x"></i></button>
+        <button id="plshare" title="Copy a link to this playlist" hidden><i class="i i-share"></i></button>
+        <button class="txt" id="plsort" title="Sort by the date each replay was recorded (oldest first)" hidden>by date</button>
+        <button id="plprev" title="Previous replay in the queue (P)" disabled><i class="i i-prev"></i></button>
+        <button id="plnext" title="Next replay in the queue (N)" disabled><i class="i i-next"></i></button>
+        <button id="plclear" title="Clear the queue (keeps the replay that is playing)" hidden><i class="i i-x"></i></button>
       </span>
     </div>
     <ol id="plitems"></ol>
     <div class="row"><label class="filebtn" title="add one or more replays to the queue (or drop them on the page)"><i class="i i-open"></i>add replays<input id="rep" type="file" accept=".rep" multiple hidden></label><span class="hint">or drop .rep files</span></div>
   </div>
-  <div id="help" hidden>
-    <table>
-      <tr><td><kbd>Space</kbd> / click</td><td>skip the VS intro, then pause / play</td></tr>
-      <tr><td><kbd>,</kbd> <kbd>.</kbd></td><td>one frame back / forward</td></tr>
-      <tr><td><kbd>&larr;</kbd> <kbd>&rarr;</kbd></td><td>1 s back / forward (<kbd>Shift</kbd> 5 s)</td></tr>
-      <tr><td><kbd>Home</kbd> <kbd>End</kbd></td><td>start / end</td></tr>
-      <tr><td><kbd>[</kbd> <kbd>]</kbd></td><td>previous / next round</td></tr>
-      <tr><td><kbd>{</kbd> <kbd>}</kbd></td><td>clip in / out point, <kbd>L</kbd> loop, <kbd>E</kbd> save as video, <kbd>Esc</kbd> clear</td></tr>
-      <tr><td><kbd>C</kbd></td><td>copy a link to this moment (to the clip when one is set)</td></tr>
-      <tr><td><kbd>N</kbd> <kbd>P</kbd></td><td>next / previous replay in the queue</td></tr>
-      <tr><td><kbd>F</kbd></td><td>fullscreen</td></tr>
-      <tr><td><kbd>H</kbd> <kbd>I</kbd> <kbd>U</kbd></td><td>hitboxes, inputs, HUD</td></tr>
-      <tr><td><kbd>B</kbd> <kbd>M</kbd></td><td>music on / off, mute everything</td></tr>
-      <tr><td>hitboxes</td><td><span style="color:#30e030">hurt</span> <span style="color:#ff2828">attack</span> <span style="color:#ffe020">clash</span> <span style="color:#40a0ff">shield</span> <span style="color:#d8d8d8">collision</span> <span style="color:#c878e6">special</span></td></tr>
-      <tr><td>queue</td><td>picked or dropped replays are added; drag to reorder</td></tr>
-    </table>
-    <div class="credit">Icons: Kenney (kenney.nl, CC0)</div>
-  </div>
 </div>
 </div>
 <script src="mbaa.js?v=78cb9bf622fc"></script>
 <script src="bgm_stream.js?v=407ac29e5c89"></script>
-<script src="viewer.js?v=3328af9b6255"></script>
+<script src="viewer.js?v=6e671e0e8023"></script>
 </body>
 </html>
