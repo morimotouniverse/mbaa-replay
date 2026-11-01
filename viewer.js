@@ -706,6 +706,7 @@ const call = (s, f, ...a) => s.M.ccall(f, 'number', a.map(() => 'number'), a);
 
 // play from the start; with catchUp = k, step to frame k first (no pacing) and continue from there
 async function play(rep, name, catchUp = 0, want = null) {
+  { const b = document.getElementById('ffbadge'); if (b) b.hidden = true; } catchUpShow(null);  // (a new session: its own state)
   misses.clear();
   const s = await newSession(rep, name, want);
   // stage animations on, except for native comparisons (?stageAnim=0, hash runs): the oracle's settings have them off
@@ -733,9 +734,11 @@ async function play(rep, name, catchUp = 0, want = null) {
   for (let f = 0; f < catchUp && s === session;) {
     f = call(s, 'viewer_step', Math.min(240, catchUp - f));
     status(`catching up ${f}/${catchUp}`);
+    catchUpShow(catchUp - f, catchUp);
     await new Promise(r => setTimeout(r, 0));
-    if (misses.size) return refetchAndReplay(s, f);
+    if (misses.size) { catchUpShow(null); return refetchAndReplay(s, f); }
   }
+  catchUpShow(null);
   if (PERF) call(s, 'viewer_perf', 1);
   uiApply(s);
   const tq = +(Q.get('t') || 0);
@@ -1378,8 +1381,18 @@ function liveJumpInit() {
 }
 // n frames forward as fast as the game runs, nothing drawn but the last frames (seekTo's stepping; the live hold stops
 // it at the newest frame received)
+// the catch-up overlay over the picture: frames to go of the total (null: hidden)
+function catchUpShow(left, total) {
+  const el = document.getElementById('catchup');
+  if (!el) return;
+  if (left == null) { el.hidden = true; return; }
+  el.hidden = false;
+  el.querySelector('.cu-s').textContent = `${Math.max(0, Math.ceil(left / 60))} s to go`;
+  el.querySelector('.cu-bar i').style.width = `${Math.round(100 * (1 - left / Math.max(1, total)))}%`;
+}
 async function liveCatchUp(s, n) {
   const M = s.M, T = M._viewer_frame() + n, DRAW = 2;
+  catchUpShow(n, n);
   s.seeking = true; s.mute = true;
   s.stopSes(); s.bgmHalt();
   uiApply(s);
@@ -1390,9 +1403,11 @@ async function liveCatchUp(s, n) {
     if (g === f) break;
     f = g;
     status(`live: catching up (${((T - f) / 60).toFixed(0)} s to go)`);
+    catchUpShow(T - f, n);
     await new Promise(r => setTimeout(r, 0));
-    if (session !== s) return;
+    if (session !== s) { catchUpShow(null); return; }
   }
+  catchUpShow(null);
   call(s, 'viewer_suppress', 0);
   if (f < T) call(s, 'viewer_step', T - f);
   else call(s, 'viewer_represent');
@@ -1712,6 +1727,23 @@ function radioStageSync(s) {
   M.ccall('viewer_radio_stage_want', null, ['string', 'number', 'number'], [st ? st.dat : '', want, st ? st.lights.length : 0]);
 }
 requestAnimationFrame(function radioStageLoop() { try { radioStageSync(session); } catch (e) {} requestAnimationFrame(radioStageLoop); });
+// an image cropped to the box of its pixels that are not fully transparent (PNG out)
+async function trimAlpha(blob) {
+  const bm = await createImageBitmap(blob), cv = document.createElement('canvas');
+  cv.width = bm.width; cv.height = bm.height;
+  const x = cv.getContext('2d', { willReadFrequently: true });
+  x.drawImage(bm, 0, 0);
+  const px = x.getImageData(0, 0, cv.width, cv.height).data;
+  let x0 = cv.width, y0 = cv.height, x1 = -1, y1 = -1;
+  for (let y = 0; y < cv.height; ++y) for (let i = 0; i < cv.width; ++i) if (px[(y * cv.width + i) * 4 + 3] > 8) {
+    if (i < x0) x0 = i; if (i > x1) x1 = i; if (y < y0) y0 = y; if (y > y1) y1 = y;
+  }
+  if (x1 < 0) return blob;
+  const out = document.createElement('canvas');
+  out.width = x1 - x0 + 1; out.height = y1 - y0 + 1;
+  out.getContext('2d').drawImage(cv, x0, y0, out.width, out.height, 0, 0, out.width, out.height);
+  return await new Promise(r => out.toBlob(b => r(b || blob), 'image/png'));
+}
 async function stageShow(s) {
   const box = document.getElementById('stageblk');
   if (!stagePanel || !s || !s.M) { box.hidden = true; return; }
@@ -1739,7 +1771,10 @@ async function stageShow(s) {
   for (const k of ['view', 'name']) {
     const img = box.querySelector('.' + k), d = cache.get(`web/stage/${k}_${n}.png`);
     if (img.dataset.src) URL.revokeObjectURL(img.dataset.src);
-    img.dataset.src = d ? URL.createObjectURL(new Blob([d], { type: 'image/png' })) : '';
+    let blob = d ? new Blob([d], { type: 'image/png' }) : null;
+    // the name plate's text sits left in a wider sheet cell: cropped to its drawn pixels so the plate centres on the card
+    if (blob && k === 'name') try { blob = await trimAlpha(blob); } catch (e) {}
+    img.dataset.src = blob ? URL.createObjectURL(blob) : '';
     img.src = img.dataset.src; img.hidden = !d;
   }
   if (box.hidden) requestAnimationFrame(() => marquee(document.getElementById('players')));  // (the card's layout: measured again)
@@ -2377,6 +2412,7 @@ function liveBegin(s) {  // play(): after viewer_play
       // buffer (its floor: not a burst), two game frames per drawn frame until caught up
       const ff = !hold && Math.min(ahead, floor) > LIVE_BEHIND + 60;
       if (ff !== !!s.liveFF) { s.liveFF = ff; call(s, 'viewer_speed', ff ? 2 : ui.speed); }
+      { const b = document.getElementById('ffbadge'); if (b) b.hidden = !ff; }
       if (s.cssHeld || s.loadHeld) status('live: loading the next game');
       else status(hold ? `live: waiting for the stream (${(ahead / 60).toFixed(1)} s buffered)`
                   : `live: ${(ahead / 60).toFixed(1)} s behind the players` + (ff ? ' (catching up)' : ''));

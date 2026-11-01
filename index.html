@@ -193,7 +193,7 @@
     -webkit-mask: linear-gradient(#000 55%, #0008); mask: linear-gradient(#000 55%, #0008); }
   #matchcard:has(#stageblk:not([hidden])) .name { grid-area: 1 / 1; align-self: end; justify-self: center; width: 62%; margin-bottom: 4px;
     filter: drop-shadow(0 1px 2px #000); }
-  #matchcard:has(#stageblk:not([hidden])) .trk { grid-area: 2 / 1; margin-top: 4px; }
+  #matchcard:has(#stageblk:not([hidden])) .trk { grid-area: 2 / 1; margin-top: 4px; text-align: center; }
   #matchcard:has(#stageblk:not([hidden])) #players { grid-area: 1 / 1; z-index: 1; flex-direction: row; align-items: flex-start;
     justify-content: space-between; gap: 4px; margin: 0; padding: 6px 6px 0; text-shadow: 0 1px 2px #000, 0 0 6px #000; }
   /* each player a 2x2 grid: icon | name over moon | character (P2 mirrored), so both texts get the full width beside */
@@ -269,6 +269,20 @@
     color: var(--fg); font-size: 12.5px; line-height: 1.3; text-align: center; pointer-events: none;
     box-shadow: 0 4px 16px rgba(0, 0, 0, .5); }
   #livenotice[hidden] { display: none; }
+  /* live: the jump to ~4 s behind the players (viewer.js liveCatchUp: the picture is held while it runs) and the 2x
+     fast-forward after it (liveFF): both in plain sight over the picture */
+  #catchup { position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%); z-index: 6; min-width: min(320px, 80%);
+    box-sizing: border-box; padding: 16px 22px 14px; border-radius: 14px; background: #0d0b16ee; border: 2px solid var(--accent);
+    color: #fff; text-align: center; pointer-events: none; box-shadow: 0 10px 40px #000c; }
+  #catchup[hidden], #ffbadge[hidden] { display: none; }
+  #catchup .cu-t { font-size: 20px; font-weight: 800; letter-spacing: .02em; }
+  #catchup .cu-s { font-size: 14px; color: #ddd; margin: 4px 0 10px; font-variant-numeric: tabular-nums; }
+  #catchup .cu-bar { height: 6px; border-radius: 3px; background: #ffffff22; overflow: hidden; }
+  #catchup .cu-bar i { display: block; height: 100%; width: 0; background: var(--accent); transition: width .2s linear; }
+  #ffbadge { position: absolute; right: 10px; top: 10px; z-index: 6; padding: 5px 11px; border-radius: 999px; background: var(--accent);
+    color: #fff; font-size: 13px; font-weight: 800; letter-spacing: .03em; pointer-events: none; box-shadow: 0 3px 12px #0009;
+    animation: ffpulse 1s ease-in-out infinite alternate; }
+  @keyframes ffpulse { from { opacity: 1; } to { opacity: .65; } }
   #livenotice.down { border-color: var(--accent); }
   #tunepanel { position: fixed; left: 12px; bottom: 12px; z-index: 50; background: #15131fee; border: 1px solid #ffffff2a;
     border-radius: 10px; padding: 10px 12px; font-size: 12px; display: flex; flex-direction: column; gap: 4px; max-width: 300px; }
@@ -401,6 +415,8 @@
   <canvas id="overlay"></canvas>
   <div class="banner" id="banner0" hidden><span></span></div><div class="banner" id="banner1" hidden><span></span></div>
   <div id="livenotice" role="status" aria-live="polite" hidden></div>
+  <div id="catchup" role="status" hidden><div class="cu-t">Catching up to live</div><div class="cu-s"></div><div class="cu-bar"><i></i></div></div>
+  <div id="ffbadge" hidden>&#9193; 2&times; catching up</div>
   <video id="loadvid" muted loop playsinline preload="none" poster="opening.webp" hidden></video>
 </div>
   <div class="sec" id="transportsec">
@@ -515,6 +531,6 @@
 </div>
 <script src="mbaa.js?v=78cb9bf622fc"></script>
 <script src="bgm_stream.js?v=407ac29e5c89"></script>
-<script src="viewer.js?v=ca951d1046f2"></script>
+<script src="viewer.js?v=d0010347cf16"></script>
 </body>
 </html>
