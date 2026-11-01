@@ -2462,23 +2462,11 @@ function liveBegin(s) {  // play(): after viewer_play
         } else if (!now || (liveGone(now) && ahead < 15)) {
           // (the list's silent: seconds since the host last sent anything, keep-alives included, when the bridge gives
           // it: the host gone, the match over, ~30 s before its capture closes and it leaves the list; or idle: liveIdle)
-          const next = s.liveFollow && liveNextMatch(l.filter(m => !liveGone(m)));
-          if (!next) {
-            if (!s.liveFollow) { status('the match has ended'); return; }
-            // nothing else live: keep looking (every 10 s) and go to the first match that starts
-            status('the match has ended: waiting for the next live match');
-            const wait = async () => {
-              if (session !== s) return;
-              const m = liveNextMatch(await liveList().catch(() => []));
-              if (session !== s) return;
-              if (m && !liveGone(m)) { status(`a match is live: on to ${m.matchup || (m.names || []).join(' vs ')}`); startLive(m.id); }
-              else setTimeout(wait, 10000);
-            };
-            setTimeout(wait, 10000);
-            return;
-          }
-          status(`the match has ended: on to ${next.matchup || (next.names || []).join(' vs ')}`);
-          setTimeout(() => { if (session === s) startLive(next.id); }, 2500);
+          if (!s.liveFollow) { status('the match has ended'); return; }
+          // (the next one: the card's countdown, or its wait for one; nextCardShow)
+          status('the match has ended');
+          nextCardShow(s, l, 'Match over');
+          nextCard.why = null;
           return;
         }
         else if (now.game !== L.info.game) {
@@ -2524,6 +2512,14 @@ function liveBegin(s) {  // play(): after viewer_play
             L.next = true;  // (DVR: stays on this game; LIVE goes to the current one)
             status('live: watching back; the next game is on (LIVE to join it)');
           }
+        }
+        // the players sat at the result screen / retry menu, the stream quiet RESULT_WAIT s, another match live: the card
+        // (their choice coming in takes it down: the session goes on with them). Was: the result screen until the host
+        // left the list (~5 min idle), the page looking stuck
+        if (now && s.liveFollow && !over) {
+          const atResult = call(s, 'viewer_spectate_in_retry') || s.M.HEAP32[0x54EEE8 >> 2] === SCENE_WIN;
+          if (atResult && quietFor > RESULT_WAIT * 1000) { if (nextCardShow(s, l, 'Players are at the result screen')) nextCard.why = 'result'; }
+          else if (nextCard.s === s && nextCard.why === 'result' && quietFor < 3000) { nextCardHide(); nextCard.why = null; }
         }
       } catch (e) {}
     }
@@ -2593,6 +2589,84 @@ function liveBegin(s) {  // play(): after viewer_play
     setTimeout(poll, liveNet.delay());
   };
   poll();
+}
+// The next live match once the one watched is over (it left the list, its host went quiet, or the players sat at the
+// result screen with another match on): a card over the picture, "Next: A vs B" with a NEXT_SECS countdown, Go now /
+// Stay and the other live matches; nothing live: "waiting", checked every 10 s, and the countdown when one starts.
+// Stay: no automatic move for this session (the live list still switches). A switch is in place (startLive: the page,
+// its fullscreen and chat stay) and the address follows (?live=). Was: a status line and a jump 2.5 s later.
+const NEXT_SECS = 10, RESULT_WAIT = 20;
+const nextCard = { s: null, id: null, at: 0, timer: 0, raf: 0, stay: null, why: null };
+const liveName = m => m.matchup || (m.names || []).map(n => (n || '').trim()).join(' vs ');
+function nextCardHide() {
+  const el = document.getElementById('nextcard');
+  if (el) el.hidden = true;
+  clearTimeout(nextCard.timer); cancelAnimationFrame(nextCard.raf);
+  nextCard.s = null; nextCard.id = null; nextCard.why = null;
+}
+function liveGo(id) {
+  nextCardHide();
+  try {
+    const u = new URL(location.href);
+    u.searchParams.set('live', id);
+    for (const k of ['r', 'rep', 'l', 'i', 'c', 't']) u.searchParams.delete(k);
+    history.replaceState(null, '', u);
+  } catch (e) {}
+  document.body.classList.add('live');
+  return startLive(id);
+}
+// list: the live list as just read (the watched match may be in it). title: what happened ("Match over", ...)
+function nextCardShow(s, list, title) {
+  if (session !== s || nextCard.stay === s) return false;
+  const el = document.getElementById('nextcard');
+  if (!el) return false;
+  const live = list.filter(m => m.id !== (s.liveSrc && s.liveSrc.id) && !liveGone(m));
+  const next = liveNextMatch(live);
+  el.querySelector('.nc-t').textContent = title;
+  const others = el.querySelector('.nc-o');
+  others.textContent = '';
+  for (const m of live.filter(m => !next || m.id !== next.id).slice(0, 4)) {
+    const b = document.createElement('button');
+    b.textContent = liveName(m);
+    b.onclick = e => { e.stopPropagation(); liveGo(m.id); };
+    others.append(b);
+  }
+  el.querySelector('.nc-go').onclick = e => { e.stopPropagation(); if (nextCard.id) liveGo(nextCard.id); };
+  el.querySelector('.nc-stay').onclick = e => { e.stopPropagation(); nextCard.stay = s; nextCardHide(); status('staying on this match (the live list has the others)'); };
+  for (const ev of ['pointerdown', 'click', 'touchend']) el['on' + ev] = e => e.stopPropagation();  // (never the picture's)
+  el.classList.toggle('wait', !next);
+  if (!next) {
+    el.querySelector('.nc-m').textContent = 'Waiting for the next live match…';
+    el.hidden = false;
+    if (nextCard.s === s && !nextCard.id) return true;  // (waiting already)
+    clearTimeout(nextCard.timer); cancelAnimationFrame(nextCard.raf);
+    nextCard.s = s; nextCard.id = null;
+    const wait = async () => {
+      if (session !== s || nextCard.s !== s || nextCard.id) return;
+      const l = await liveList().catch(() => null);
+      if (session !== s || nextCard.s !== s) return;
+      if (l && l.some(m => m.id !== (s.liveSrc && s.liveSrc.id) && !liveGone(m))) nextCardShow(s, l, title);
+      else nextCard.timer = setTimeout(wait, 10000);
+    };
+    nextCard.timer = setTimeout(wait, 10000);
+    return true;
+  }
+  el.querySelector('.nc-m').textContent = `Next: ${liveName(next)}`;
+  el.hidden = false;
+  if (nextCard.s === s && nextCard.id === next.id) return true;  // (counting down to it already)
+  clearTimeout(nextCard.timer); cancelAnimationFrame(nextCard.raf);
+  nextCard.s = s; nextCard.id = next.id; nextCard.at = performance.now() + NEXT_SECS * 1000;
+  const bar = el.querySelector('.nc-bar i'), go = el.querySelector('.nc-go');
+  const tick = () => {
+    if (nextCard.s !== s) return;
+    const left = Math.max(0, nextCard.at - performance.now());
+    bar.style.transform = `scaleX(${left / (NEXT_SECS * 1000)})`;
+    go.textContent = `Go now (${Math.ceil(left / 1000)})`;
+    nextCard.raf = requestAnimationFrame(tick);
+  };
+  tick();
+  nextCard.timer = setTimeout(() => { if (session === s && nextCard.s === s && nextCard.id) liveGo(nextCard.id); }, NEXT_SECS * 1000);
+  return true;
 }
 // after a match leaves the list: one with either of its players (a new set of theirs), else the most watched
 function liveNextMatch(l) {
@@ -3232,6 +3306,7 @@ function loading(on) {
   } else if (!v.hidden) { v.hidden = true; v.pause(); }
 }
 async function start(file, quiet = false) {
+  nextCardHide();  // (a new session: any next-match card was the old one's)
   if (!quiet) loading(true);  // (quiet: a live switch, the last game's picture stays until the next one draws)
   // a pick on the radio lasts for its match: the next one (a switch, a playlist's next, a live game) has its own music
   if (radioPick) radioSet('');
@@ -4276,6 +4351,10 @@ function setFs(on) {
   const stage = document.querySelector('.stage'), sec = document.getElementById('transportsec');
   if (stage.classList.contains('fs') === on) return;
   stage.classList.toggle('fs', on);
+  // (remembered: a page opened again, or reloaded for a new version, offers it back: fsOfferInit; browsers enter
+  // fullscreen only on a tap)
+  try { localStorage.setItem('mbaa-fs', on ? '1' : '0'); } catch (e) {}
+  if (on) { const o = document.getElementById('fsoffer'); if (o) o.hidden = true; }
   barPlace();
   fsChatPlace();
   marksKey = '';  // (the timeline's width changed: its marks are drawn again)
@@ -4324,6 +4403,17 @@ function fsWake() {
     if (ui.paused || seekDragging || clipPanel) { fsTimer = setTimeout(idle, FS_IDLE); return; }
     stage.classList.add('idle');
   }, FS_IDLE);
+}
+// last time fullscreen: a one-tap button over the picture (20 s)
+function fsOfferInit() {
+  const o = document.getElementById('fsoffer');
+  let want = false;
+  try { want = localStorage.getItem('mbaa-fs') === '1'; } catch (e) {}
+  if (!o || !want || document.querySelector('.stage.fs')) return;
+  o.hidden = false;
+  o.onclick = e => { e.stopPropagation(); o.hidden = true; toggleFullscreen(); };
+  o.onpointerdown = e => e.stopPropagation();
+  setTimeout(() => { o.hidden = true; }, 20000);
 }
 function toggleFullscreen() {
   const stage = document.querySelector('.stage');
@@ -4380,6 +4470,7 @@ async function main() {
     ? fetch(`${REPLAY_STORE}/c/${Q.get('c')}`).then(r => { if (!r.ok) throw new Error(`HTTP ${r.status}`); return r.json(); }) : null;
   if (clipJ) clipChatLoad(clipJ, +(Q.get('t') || 0));
   liveJumpInit();
+  fsOfferInit();
   liveListShow();
   if (Q.get('live')) {  // spectating: the live controls and the player block; the replay-only controls go (.replayonly)
     document.body.classList.add('live');

@@ -429,6 +429,34 @@
     box-sizing: border-box; padding: 16px 22px 14px; border-radius: 14px; background: #0d0b16ee; border: 2px solid var(--accent);
     color: #fff; text-align: center; pointer-events: none; box-shadow: 0 10px 40px #000c; }
   #catchup[hidden], #ffbadge[hidden] { display: none; }
+  /* the next live match after this one ends (viewer.js nextCard): its countdown, Go now / Stay, the other live matches */
+  #nextcard { position: absolute; left: 50%; bottom: 7%; transform: translateX(-50%); z-index: 7; width: min(380px, 86%);
+    box-sizing: border-box; padding: 12px 16px 12px; border-radius: 14px; background: #0d0b16ee; border: 2px solid var(--accent);
+    color: #fff; text-align: center; box-shadow: 0 10px 40px #000c; font-size: 14px; }
+  #nextcard[hidden] { display: none; }
+  #nextcard .nc-t { font-size: 13px; font-weight: 700; color: #ccc; letter-spacing: .03em; text-transform: uppercase; }
+  #nextcard .nc-m { font-size: 18px; font-weight: 800; margin: 3px 0 8px; overflow-wrap: anywhere; }
+  #nextcard .nc-bar { height: 5px; border-radius: 3px; background: #ffffff22; overflow: hidden; }
+  #nextcard .nc-bar i { display: block; height: 100%; width: 100%; background: var(--accent); transform-origin: left; }
+  #nextcard.wait .nc-bar, #nextcard.wait .nc-go { display: none; }
+  #nextcard .nc-b { display: flex; gap: 8px; justify-content: center; margin-top: 10px; }
+  #nextcard button { font: inherit; font-weight: 700; padding: 7px 16px; border-radius: 999px; border: 1px solid #ffffff44;
+    background: #ffffff14; color: #fff; cursor: pointer; min-height: 36px; }
+  #nextcard .nc-go { background: var(--accent); border-color: var(--accent); }
+  #nextcard .nc-o { display: flex; flex-wrap: wrap; gap: 6px; justify-content: center; margin-top: 8px; }
+  #nextcard .nc-o:empty { display: none; }
+  #nextcard .nc-o button { font-size: 12px; font-weight: 600; padding: 4px 10px; min-height: 30px; }
+  @media (max-width: 600px) {  /* (phones: a strip at the picture's bottom, the picture still seen) */
+    #nextcard { bottom: 3%; width: 92%; padding: 6px 10px 7px; border-radius: 10px; font-size: 12px; }
+    #nextcard .nc-t { font-size: 10px; }
+    #nextcard .nc-m { font-size: 13px; margin: 1px 0 4px; }
+    #nextcard .nc-b { margin-top: 6px; }
+    #nextcard button { padding: 4px 12px; min-height: 30px; }
+    #nextcard .nc-o button { min-height: 26px; padding: 2px 8px; }
+  }
+  #fsoffer { position: absolute; right: 12px; top: 12px; z-index: 7; padding: 8px 14px; border-radius: 999px; border: 1px solid #ffffff44;
+    background: #0d0b16dd; color: #fff; font: inherit; font-weight: 700; cursor: pointer; box-shadow: 0 3px 12px #0009; }
+  #fsoffer[hidden] { display: none; }
   #catchup .cu-t { font-size: 20px; font-weight: 800; letter-spacing: .02em; }
   #catchup .cu-s { font-size: 14px; color: #ddd; margin: 4px 0 10px; font-variant-numeric: tabular-nums; }
   #catchup .cu-bar { height: 6px; border-radius: 3px; background: #ffffff22; overflow: hidden; }
@@ -596,6 +624,12 @@
   <div id="livenotice" role="status" aria-live="polite" hidden></div>
   <div id="catchup" role="status" hidden><div class="cu-t">Catching up to live</div><div class="cu-s"></div><div class="cu-bar"><i></i></div></div>
   <div id="ffbadge" hidden>&#9193; 2&times; catching up</div>
+  <button id="fsoffer" hidden>&#x26F6; Fullscreen</button>
+  <div id="nextcard" role="dialog" aria-label="Next live match" hidden>
+    <div class="nc-t"></div><div class="nc-m"></div><div class="nc-bar"><i></i></div>
+    <div class="nc-b"><button class="nc-go">Go now</button><button class="nc-stay">Stay</button></div>
+    <div class="nc-o"></div>
+  </div>
   <video id="loadvid" muted loop playsinline preload="none" poster="opening.webp" hidden></video>
   <div id="help" role="dialog" aria-label="Keyboard shortcuts" hidden>
     <div class="hcard">
@@ -776,6 +810,6 @@
 </div>
 <script src="mbaa.js?v=0e49f9a5f4a3"></script>
 <script src="bgm_stream.js?v=407ac29e5c89"></script>
-<script src="viewer.js?v=4c6eaa9ca6e6"></script>
+<script src="viewer.js?v=42e15acbb612"></script>
 </body>
 </html>
