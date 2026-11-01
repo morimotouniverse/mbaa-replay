@@ -3728,6 +3728,16 @@ function fitStage() {
   let trH = trAt(Math.min(W, 1280)), r = pick(trH);
   for (let n = 0; n < 3; n++) { const h = trAt(r[0]); if (h === trH) break; trH = h; r = pick(trH); }
   setW(r[0], r[1]);
+  // desktop fullscreen with room under the picture for the whole bar (1080p at 2x: 960 + 120): the picture and the
+  // bar as one block, centred, the bar under the picture instead of over its bottom (.fsroom); no room: over it
+  const bar = stage && stage.querySelector('.fsbar');
+  if (bar) {
+    stage.classList.add('fsroom');  // (its compact padding, to measure)
+    const fk = parseFloat(getComputedStyle(bar).getPropertyValue('--fk')) || 1, barH = bar.offsetHeight * fk, picH = r[0] * 3 / 4;
+    const room = full && !sidebar && H - picH >= barH;
+    stage.classList.toggle('fsroom', room);
+    if (room) root.style.setProperty('--fstop', `${Math.floor((H - picH - barH) / 2)}px`);
+  }
 }
 addEventListener('resize', fitStage);
 // the layout's own controls: the phone menu sheet, the chat column's show / hide, the chat profile; the on-screen

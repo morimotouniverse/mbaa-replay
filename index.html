@@ -49,6 +49,10 @@
                                    transform: translateX(-50%) scale(var(--fk)); transform-origin: 50% 100%; }
   @media (min-height: 1300px) { .stage.fs:not(.sidebar) .fsbar { --fk: 1.3; } }
   @media (min-height: 1900px) { .stage.fs:not(.sidebar) .fsbar { --fk: 1.8; } }
+  /* (viewer.js fitStage: room under the picture for the whole bar) the picture at the block's top, the bar under it */
+  .stage.fs.fsroom { align-items: flex-start; padding-top: var(--fstop, 0px); box-sizing: border-box; }
+  .stage.fs.fsroom:not(.sidebar) .fsbar { bottom: auto; top: calc(var(--fstop, 0px) + var(--w) * 3 / 4); padding-top: 6px; background: none; transform-origin: 50% 0; }
+  .stage.fs.fsroom.idle .fsbar { opacity: 1; pointer-events: auto; }
   .fsbar #transportsec { width: 100%; padding: 0; }
   .fsbar #time { font-size: 22px; }  .fsbar :is(#dur, #fc) { font-size: 13px; color: #c8c8d8; }
   .fsbar .tbar button:not(#pause) { min-height: 36px; }
@@ -734,6 +738,6 @@
 </div>
 <script src="mbaa.js?v=35b9f117f88e"></script>
 <script src="bgm_stream.js?v=407ac29e5c89"></script>
-<script src="viewer.js?v=b74c6c4b4626"></script>
+<script src="viewer.js?v=3b4568efa60d"></script>
 </body>
 </html>
