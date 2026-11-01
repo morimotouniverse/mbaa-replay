@@ -2093,12 +2093,15 @@
   function later() { const d = Math.min(30000, 1500 * 2 ** irc.retry++); setTimeout(start, d + Math.random() * 1000); }
   // each connection: a fresh sign-in token first (short-lived), then the socket
   async function start() { await authFetch(); connect(); }
+  // a channel's latest lines (as many as one request returns; histFill pages back for HISTORY real ones)
+  function histLatest(c) { c.fill = { real: 0, pages: 0 }; irc.send(`CHATHISTORY LATEST ${c.name} * ${PAGE}`); }
   function join(name) { const c = chan(name); if (irc.registered && !c.joined) irc.send(`JOIN ${name}`); }
   function on(m) {
     const p = m.params;
     const hb = m.tags.batch && irc.batches.get(m.tags.batch);
     if (hb && /chathistory/.test(hb.type)) {
-      hb.n++; if (m.tags.msgid) hb.last = m.tags.msgid;
+      hb.n++; if (m.tags.msgid) { if (!hb.first) hb.first = m.tags.msgid; hb.last = m.tags.msgid; }
+      if ((m.cmd === 'PRIVMSG' || m.cmd === 'NOTICE') && key(m.nick || '') !== 'histserv') hb.real = (hb.real || 0) + 1;
       // (event-playback: a channel's past joins, parts, modes and topics come as those commands: history, not now)
       if (m.cmd !== 'PRIVMSG' && m.cmd !== 'NOTICE' && m.cmd !== 'TAGMSG') return;
     }
@@ -2236,12 +2239,12 @@
         const last = c.histDone && hasHist ? [...c.lines].reverse().find(l => l.msgid && !l.sys) : null;
         c.failed = false;
         if (last) { c.paging = true; irc.send(`CHATHISTORY AFTER ${c.name} msgid=${last.msgid} ${PAGE}`); }
-        else if (c.histDone && hasHist) irc.send(`CHATHISTORY LATEST ${c.name} * ${HISTORY}`);
+        else if (c.histDone && hasHist) histLatest(c);
         else if (!c.histDone && hasHist) {
           c.histDone = true;
           // a per-match channel (#m-<match key>): everything, oldest first, for its timeline; else the latest lines
           if (isMatch(c.name) && matchPer) { c.paging = true; irc.send(`CHATHISTORY AFTER ${c.name} timestamp=${HIST_FROM} ${PAGE}`); }
-          else irc.send(`CHATHISTORY LATEST ${c.name} * ${HISTORY}`);
+          else histLatest(c);
         }
         return;
       }
@@ -2255,6 +2258,13 @@
           const c = chan(b.target);
           if (c.paging && b.n >= PAGE && b.last) irc.send(`CHATHISTORY AFTER ${c.name} msgid=${b.last} ${PAGE}`);
           else c.paging = false;
+          // the latest lines: joins / quits fill the server's history too (a busy channel's last 50 entries can be
+          // nearly all of them), so earlier pages are fetched until HISTORY real lines are in (at most 4 pages)
+          if (c.fill && !c.paging) {
+            c.fill.real += b.real || 0; c.fill.pages++;
+            if (c.fill.real < HISTORY && b.n >= PAGE && b.first && c.fill.pages < 4) { irc.send(`CHATHISTORY BEFORE ${c.name} msgid=${b.first} ${PAGE}`); return; }
+            c.fill = null;
+          }
           if (c.backHist && !c.paging) { c.backHist = false; const l = lastLine(c); c.backAt = l ? +l.time : -Infinity; if (key(c.name) === key(shown)) renderSoon(); }
         }
         return;
@@ -2318,7 +2328,7 @@
         if (p[0] === 'MARKREAD') return;  // (the read point stays here; nothing to tell the viewer)
         // (a catch-up from a msgid the server no longer has, a deleted line: the latest lines instead; seen ones skip)
         const hc = p[0] === 'CHATHISTORY' && chans.get(key(p.find(x => x && x[0] === '#') || ''));
-        if (hc && !hc.failed) { hc.failed = true; hc.paging = false; irc.send(`CHATHISTORY LATEST ${hc.name} * ${HISTORY}`); return; }
+        if (hc && !hc.failed) { hc.failed = true; hc.paging = false; histLatest(hc); return; }
         sys(`server: ${clean(p.slice(2).join(' '))}`); return;
       }
       case 'ERROR': sys(`disconnected: ${clean(p[0] || '')}`); return;
