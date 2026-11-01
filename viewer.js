@@ -1453,11 +1453,39 @@ function playersShow(s) {
       // (the moon is its icon: the line beside it is the character, or with no player name the moon's name)
       row.querySelector('.ch .t').textContent = names[p] ? CHARA[c] || '' : moon;
       row.querySelector('.ch').title = `${moon} ${CHARA[c] || ''}`.trim();
+      porShow(p, c);
     });
     box.hidden = false;
     document.getElementById('title').hidden = true;
     requestAnimationFrame(() => marquee(box));
   }
+}
+// The match card's portraits: each side's select-screen splash (grp/c_sel_aa/chara/csel_c<chara id>.png, 512x512, the
+// figure CharaSelectPanel_LoaderThread loads for the hovered character), P1 on the left, P2 mirrored on the right, over
+// the stage picture. Fetched on first use (a replay's plan has no select screen); a boss has its base character's.
+const porUrls = new Map();
+function porPath(c) {
+  const at = id => `grp/c_sel_aa/chara/csel_c${String(id).padStart(2, '0')}.png`;
+  if (man && man.files[at(c)]) return at(c);
+  const base = CHARA[c] && CHARA[c].startsWith('B. ') ? +Object.keys(CHARA).find(k => CHARA[k] === CHARA[c].slice(3)) : -1;
+  return base >= 0 && man && man.files[at(base)] ? at(base) : null;
+}
+async function porShow(p, c) {
+  const el = document.querySelectorAll('#matchcard .por')[p], path = porPath(c);
+  if (!el) return;
+  el.dataset.c = c;
+  if (!path) { el.hidden = true; document.getElementById('matchcard').classList.toggle('pors', [...document.querySelectorAll('#matchcard .por')].some(e => !e.hidden)); return; }
+  try {
+    if (!porUrls.has(path)) {
+      await fetchAll(man, [path], '', true);
+      const d = cache.get(path);
+      if (!d) throw new Error('no data');
+      porUrls.set(path, URL.createObjectURL(new Blob([d], { type: 'image/png' })));
+    }
+    if (+el.dataset.c !== c) return;  // (another pick meanwhile)
+    el.src = porUrls.get(path); el.hidden = false;
+  } catch (e) { el.hidden = true; }
+  document.getElementById('matchcard').classList.toggle('pors', [...document.querySelectorAll('#matchcard .por')].some(e => !e.hidden));
 }
 // the cursor frames' loop over the icons, at the select screen's rate (CharaSelectIcons_Update, CE 0x48BAB0: the next of
 // 10 frames every 2 game ticks)
@@ -3336,7 +3364,7 @@ function fitStage() {
   if (!full) {  // (fullscreen keeps the page's layout under it)
     layMode = chatLayout();
     const mob = layMode === 'port' || layMode === 'land';
-    b.classList.toggle('mob', mob); b.classList.toggle('port', layMode === 'port'); b.classList.toggle('land', layMode === 'land');
+    b.classList.toggle('mob', mob); placeControls(mob); b.classList.toggle('port', layMode === 'port'); b.classList.toggle('land', layMode === 'land');
     b.classList.toggle('nochat', (chatHidden || !b.classList.contains('haschat')) && (layMode === 'land' || layMode === 'desk'));
     b.classList.toggle('deskchat', layMode === 'desk' && !chatHidden);
     if (!mob) b.classList.remove('sheet', 'kbd');
@@ -3401,6 +3429,35 @@ function fitStage() {
 addEventListener('resize', fitStage);
 // the layout's own controls: the phone menu sheet, the chat column's show / hide, the chat profile; the on-screen
 // keyboard (a chat text field focused on a phone: body.kbd) and the visual viewport it shortens
+// Where the view's controls live: desktop, in the transport under the picture (#tright: volume, speed, settings, PiP,
+// fullscreen, help; the overlay chips, skip intro and size in the settings popover #setpop); phones, where they were
+// in the panel (the ⋯ sheet). Each moved node leaves a comment behind to go back to.
+const MOVED = [];
+function placeControls(mob) {
+  if (!MOVED.length) {
+    const byId = id => document.getElementById(id);
+    const chips = byId('boxes') && byId('boxes').closest('.row');
+    const tr = byId('tright'), pop = byId('setpop'), setb = byId('setb');
+    if (!tr || !pop || !chips) return;
+    const sizeRow = document.createElement('div'); sizeRow.className = 'row';
+    pop.append(sizeRow);
+    for (const [el, to, before] of [[byId('mute'), tr, setb], [byId('vol'), tr, setb], [byId('speed'), tr, setb],
+                                    [byId('pip'), tr, null], [byId('full'), tr, null], [byId('helpb'), tr, null],
+                                    [chips, pop, sizeRow], [byId('scale'), sizeRow, null]]) {
+      if (!el) continue;
+      const mark = document.createComment(el.id || 'chips');
+      el.before(mark);
+      MOVED.push({ el, mark, to, before });
+    }
+    setb.onclick = e => { e.stopPropagation(); pop.hidden = !pop.hidden; setb.setAttribute('aria-expanded', String(!pop.hidden)); };
+    document.addEventListener('click', e => { if (!pop.hidden && !pop.contains(e.target) && e.target !== setb) { pop.hidden = true; setb.setAttribute('aria-expanded', 'false'); } });
+  }
+  for (const m of MOVED) {
+    if (mob) { if (m.el.previousSibling !== m.mark) m.mark.after(m.el); }
+    else if (m.el.parentNode !== m.to) m.before ? m.to.insertBefore(m.el, m.before) : m.to.append(m.el);
+  }
+  if (mob) { const pop = document.getElementById('setpop'); if (pop) pop.hidden = true; }
+}
 (function layoutControls() {
   const b = document.body, on = (id, f) => { const el = document.getElementById(id); if (el) el.onclick = e => { e.currentTarget.blur(); f(); }; };
   on('menub', () => b.classList.add('sheet'));

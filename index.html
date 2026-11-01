@@ -112,6 +112,21 @@
   #transportsec .clock { grid-area: clk; align-items: center; }
   #transportsec .transport { grid-area: tp; justify-content: flex-end; flex-wrap: nowrap; }
   #transportsec #fc { margin-left: 10px; }
+  /* desktop: the view's own controls in the transport (viewer.js placeControls moves them here from the panel; phones keep
+     them in the ⋯ sheet): volume, speed, settings (overlays, music, size in #setpop), picture in picture, fullscreen, help */
+  #tright { display: none; margin-left: 10px; padding-left: 10px; border-left: 1px solid var(--line); gap: 4px; align-items: center; }
+  body:not(.mob) #tright { display: inline-flex; }
+  #tright #vol { width: 84px; }
+  #tright select { height: 30px; }
+  #transportsec { position: relative; }
+  #setpop { position: absolute; z-index: 20; right: 4px; bottom: calc(100% - 30px); width: min(340px, 100%); box-sizing: border-box;
+            background: var(--raise, #1c1c28); border: 1px solid var(--line); border-radius: 10px; padding: 10px;
+            box-shadow: 0 10px 30px #0008; display: flex; flex-direction: column; gap: 8px; }
+  #setpop[hidden] { display: none; }
+  #setpop .row { flex-wrap: wrap; }
+  body.mob #setpop, body.mob #setb { display: none !important; }
+  /* (panel sections left with nothing in them once their controls moved: the clip row on a live page, the view settings) */
+  body.live:not(.mob) #toolsec, body:not(.mob) #viewsec:not(:has(#sound:not([hidden]))) { display: none; }
   body:not(.mob) #transportsec .transport { flex-wrap: wrap; }
   @media (max-width: 600px) { body:not(.mob) #transportsec { grid-template-columns: 100%; grid-template-areas: "clk" "tl" "tp"; }
                               body:not(.mob) #transportsec .transport { justify-content: center; } }
@@ -197,6 +212,38 @@
   #matchcard:has(#stageblk:not([hidden])) #players .vs { padding: 2px 0 0; display: flex; flex-direction: column; align-items: center; gap: 3px;
     color: #fff; font-weight: 700; flex: none; font-size: 10px; }
   #matchcard:has(#stageblk:not([hidden])) #players #watching { margin: 0; order: -1; }
+  /* the select-screen splash portraits over the stage picture (viewer.js porShow): the figures stand in from the sides,
+     cut at the picture's edge, under the names; with them the small icons are not needed in the card */
+  #matchcard { position: relative; }
+  #matchcard .por { display: none; }
+  #matchcard.pors:has(#stageblk:not([hidden])) .por:not([hidden]) { display: block; position: absolute; z-index: 1; top: -22%; left: 25%;
+    transform: translateX(-50%); height: 165%; width: auto; max-width: none; pointer-events: none; filter: drop-shadow(0 0 8px #000c);
+    -webkit-mask: linear-gradient(#000 52%, #0000 66%); mask: linear-gradient(#000 52%, #0000 66%); }
+  /* (each figure centred on its half; P2 mirrored, facing P1) */
+  #matchcard.pors:has(#stageblk:not([hidden])) .por.p2:not([hidden]) { left: 75%; transform: translateX(-50%) scaleX(-1); }
+  #matchcard.pors:has(#stageblk:not([hidden])) { overflow: hidden; border-radius: 8px; }
+  /* (over the portraits: the names, the VS / watchers and the stage's name plate) */
+  #matchcard:has(#stageblk:not([hidden])) .name { z-index: 2; position: relative; }
+  #matchcard:has(#stageblk:not([hidden])) #players { z-index: 2; position: relative; }
+  /* with portraits the small icons go; each side: the name across, the moon and the character under it */
+  #matchcard.pors:has(#stageblk:not([hidden])) #players .ico { display: none; }
+  #matchcard.pors:has(#stageblk:not([hidden])) #players .pl { grid-template-columns: 16px minmax(0, 1fr); column-gap: 4px; }
+  #matchcard.pors:has(#stageblk:not([hidden])) #players .nm { grid-area: 1 / 1 / 2 / 3; }
+  #matchcard.pors:has(#stageblk:not([hidden])) #players .moon { grid-area: 2 / 1; }
+  #matchcard.pors:has(#stageblk:not([hidden])) #players .ch .mqx { grid-area: 2 / 2; }
+  #matchcard.pors:has(#stageblk:not([hidden])) #players .pl:last-child { grid-template-columns: minmax(0, 1fr) 16px; }
+  #matchcard.pors:has(#stageblk:not([hidden])) #players .pl:last-child .nm { grid-area: 1 / 1 / 2 / 3; }
+  #matchcard.pors:has(#stageblk:not([hidden])) #players .pl:last-child .moon { grid-area: 2 / 2; }
+  #matchcard.pors:has(#stageblk:not([hidden])) #players .pl:last-child .ch .mqx { grid-area: 2 / 1; }
+  /* wide (desktop: the card under the picture, as wide as the controls): a banner, not a 256:110 picture 500 px tall */
+  body:is(.deskchat, :not(.side)) #matchcard:has(#stageblk:not([hidden])) .view { aspect-ratio: auto; height: clamp(150px, 15vw, 210px); object-fit: cover; }
+  body:is(.deskchat, :not(.side)) #matchcard:has(#stageblk:not([hidden])) .name { width: auto; max-width: 46%; max-height: 22%; }
+  body:is(.deskchat, :not(.side)) #matchcard.pors:has(#stageblk:not([hidden])) .por:not([hidden]) { height: 250%; top: -37%; left: 27%;
+    -webkit-mask: linear-gradient(#000 40%, #0000 51%); mask: linear-gradient(#000 40%, #0000 51%); }
+  body:is(.deskchat, :not(.side)) #matchcard.pors:has(#stageblk:not([hidden])) .por.p2:not([hidden]) { left: 73%; }
+  body:is(.deskchat, :not(.side)) #matchcard:has(#stageblk:not([hidden])) #players { padding: 10px 14px 0; }
+  body:is(.deskchat, :not(.side)) #matchcard:has(#stageblk:not([hidden])) #players .nm { font-size: 17px; }
+  body:is(.deskchat, :not(.side)) #matchcard:has(#stageblk:not([hidden])) #players .ch .mqx { font-size: 12.5px; }
   body.live .replayonly { display: none !important; }
   body:not(.live) .liveonly { display: none !important; }
   /* live: a player's name the game's banner font can't draw (viewer.js liveBanner), where the game's banner text goes */
@@ -359,15 +406,18 @@
       <button id="fwd5" title="forward 5 s (Shift+Right)"><i class="i i-ffwd"></i></button>
       <button id="nextr" title="next round (])"><i class="i i-next"></i></button>
       <button id="fsx" class="mobfs" title="fullscreen (F)"><i class="i i-full fs-in"></i><i class="i i-x fs-out"></i></button>
+      <span class="grp tright" id="tright"><button id="setb" title="view settings: overlays, music, picture size" aria-expanded="false"><svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path fill-rule="evenodd" d="M10.3 2h3.4l.5 2.6 1.6.7 2.2-1.5 2.4 2.4-1.5 2.2.7 1.6 2.6.5v3.4l-2.6.5-.7 1.6 1.5 2.2-2.4 2.4-2.2-1.5-1.6.7-.5 2.6h-3.4l-.5-2.6-1.6-.7-2.2 1.5-2.4-2.4 1.5-2.2-.7-1.6L2 13.7v-3.4l2.6-.5.7-1.6-1.5-2.2 2.4-2.4 2.2 1.5 1.6-.7zM12 8.5a3.5 3.5 0 1 0 0 7 3.5 3.5 0 0 0 0-7z"/></svg></button></span>
       <button id="chattog" class="chatonly on" title="show / hide the chat"><i class="i i-chat"></i></button>
       <button id="menub" class="mobonly" title="menu: the match, settings, radio, live list, queue, chat profile"><i class="i i-menu"></i></button>
     </div>
+    <div id="setpop" hidden></div>
   </div>
 <div id="chatcol"></div>
 <div class="controls" id="controls">
   <div class="sheethead mobonly"><span class="lbl">menu</span><button class="txt chatonly" id="profb">chat profile</button><button id="sheetx" title="close the menu"><i class="i i-x"></i></button></div>
   <div class="sec">
     <div id="matchcard">
+    <img class="por" alt="" hidden><img class="por p2" alt="" hidden>
     <div id="players" hidden>
       <div class="pl"><canvas class="ico" width="64" height="64"></canvas><div class="who"><span class="nm mqx"><span class="t"></span></span><span class="ch"><canvas class="moon" width="56" height="56"></canvas><span class="mqx"><span class="t"></span></span></span></div></div>
       <div class="vs">VS <span id="watching"></span></div>
@@ -378,7 +428,7 @@
     <div id="title">MBAACC replays</div>
     <div id="status">loading…</div>
   </div>
-  <div class="sec">
+  <div class="sec" id="toolsec">
     <div class="row spread">
       <span class="grp replayonly"><span class="lbl" style="margin-right:6px">clip</span>
         <button class="txt" id="clipa" title="clip in point ({)">in</button>
@@ -394,7 +444,7 @@
       </span>
     </div>
   </div>
-  <div class="sec">
+  <div class="sec" id="viewsec">
     <div class="row">
       <label class="chip replayonly" title="skip the VS intro when a replay starts"><input id="skipintro" type="checkbox">skip intro</label>
       <label class="chip" title="hitbox overlay (H)"><input id="boxes" type="checkbox">hitboxes</label>
@@ -456,6 +506,6 @@
 </div>
 <script src="mbaa.js?v=78cb9bf622fc"></script>
 <script src="bgm_stream.js?v=407ac29e5c89"></script>
-<script src="viewer.js?v=36be91e3f425"></script>
+<script src="viewer.js?v=da7f6cef0d0b"></script>
 </body>
 </html>
