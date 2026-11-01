@@ -1552,7 +1552,12 @@ async function stagePanelLoad() {
   }
   tog.onclick = () => {
     grid.hidden = !grid.hidden; bar.hidden = grid.hidden || !bar.children.length;
-    if (!grid.hidden) { radioArt(); radioOldLoad().then(radioLinks).catch(() => {}); }
+    document.getElementById('radiosec').classList.toggle('open', !grid.hidden);
+    if (!grid.hidden) {
+      radioArt(); radioOldLoad().then(radioLinks).catch(() => {});
+      // the picker opens under the panel, often below the window's edge: bring it into view
+      requestAnimationFrame(() => grid.scrollIntoView({ block: 'nearest', behavior: 'smooth' }));
+    }
   };
   document.getElementById('radiosec').hidden = false;
   await radioShowGame('aacc');

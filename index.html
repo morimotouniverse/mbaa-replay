@@ -18,7 +18,7 @@
 <meta name="twitter:description" content="Watch Melty Blood Actress Again Current Code replays in your browser, frame-exact.">
 <meta name="twitter:image" content="https://watch.meltyblood.org/preview.png">
 <meta name="mbaa-manifest" content="c7d5223cc952">
-<meta name="mbaa-chatjs" content="chat.js?v=8ba0cb3c0acd">
+<meta name="mbaa-chatjs" content="chat.js?v=449729f7d755">
 <link rel="manifest" href="site.webmanifest">
 <link rel="icon" href="icon-192.png">
 <link rel="apple-touch-icon" href="icon-192.png">
@@ -301,7 +301,14 @@
   #stageblk .name { width: 100%; max-width: 256px; aspect-ratio: 8 / 1; }
   #stageblk .trk { font-size: 12px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   #stageblk .trk::before { content: '\266A'; margin-right: 5px; color: var(--accent); }
-  #radiotog { max-width: 70%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  #radiotog { max-width: 55%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; background: var(--accent); color: #fff;
+              border-radius: 999px; padding: 6px 14px; font-size: 13px; font-weight: 600; }
+  #radiotog::after { content: '  \25BE'; }  #radiosec.open #radiotog::after { content: '  \25B4'; }
+  #radiosec .radiohead { gap: 10px; }
+  #radiosec .rtitle { display: flex; flex-direction: column; gap: 2px; font-size: 16px; font-weight: 700; color: #fff; min-width: 0; }
+  #radiosec .rtitle::before { content: '\266A  RADIO'; font-size: 10px; letter-spacing: .12em; color: var(--accent); }
+  #radiosec .rtitle small { font-size: 11px; font-weight: 400; color: var(--muted); }
+  #radiosec.open { background: #ffffff06; border-radius: 8px; }
   #radiogrid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px; max-height: 330px; overflow-y: auto; margin-top: 6px; padding-right: 2px; }
   #radiogrid .tile { display: flex; flex-direction: column; gap: 3px; padding: 4px; border-radius: 8px; background: #ffffff08; border: 1px solid transparent; color: inherit; text-align: left; cursor: pointer; min-width: 0; }
   #radiogrid .tile:hover { background: #ffffff12; }
@@ -485,7 +492,7 @@
     <button id="sound" hidden>click for sound</button>
   </div>
   <div class="sec" id="radiosec" hidden>
-    <div class="row spread"><span class="lbl">raito radio</span><button class="txt" id="radiotog" title="Raito Radio: play any of Raito's Melty Blood tracks instead of the match's music (stays until set back to match music); an older game's stage track also shows its stage"></button></div>
+    <div class="row spread radiohead"><span class="rtitle">Raito Radio<small>Raito's Melty Blood music in place of the match's</small></span><button class="txt" id="radiotog" title="Raito Radio: play any of Raito's Melty Blood tracks instead of the match's music (stays until set back to match music); an older game's stage track also shows its stage"></button></div>
     <div id="radiogames" hidden></div>
     <div id="radiogrid" hidden></div>
   </div>
@@ -530,6 +537,6 @@
 </div>
 <script src="mbaa.js?v=78cb9bf622fc"></script>
 <script src="bgm_stream.js?v=407ac29e5c89"></script>
-<script src="viewer.js?v=d0010347cf16"></script>
+<script src="viewer.js?v=aa32eccae7f9"></script>
 </body>
 </html>

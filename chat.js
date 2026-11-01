@@ -75,8 +75,11 @@
   const randNick = () => 'viewer' + Math.floor(1000 + Math.random() * 9000);
   const COLOR_RE = /^#[0-9a-fA-F]{6}$/;
   const PRESETS = ['#e04a5a', '#ff9a3c', '#ffd84a', '#7ee05a', '#40c0ff', '#7a8cff', '#c878e6', '#ff7ac8', '#e8e8f0'];
-  const prof = Object.assign({ nick: randNick(), color: PRESETS[Math.floor(Math.random() * PRESETS.length)], chara: 17, moon: 1 },
+  const prof = Object.assign({ nick: randNick(), color: PRESETS[Math.floor(Math.random() * PRESETS.length)], chara: -1, moon: -1 },
     store.get('mbaa-chat-profile', {}));
+  // no default character or moon: each viewer picks their own (-1 = not set: no icon, no tag sent). Profiles saved before
+  // this held the old default F-Satsuki without the viewer choosing it; those without the 'picked' mark start unset.
+  if (!prof.picked) { if (prof.chara === 17) prof.chara = -1; if (prof.moon === 1) prof.moon = -1; prof.picked = 1; store.set('mbaa-chat-profile', prof); }
   if (!NICK_RE.test(prof.nick) || !nameOk(prof.nick)) prof.nick = randNick();
   if (!COLOR_RE.test(prof.color)) prof.color = PRESETS[0];
   const saveProf = () => store.set('mbaa-chat-profile', prof);
@@ -85,8 +88,8 @@
     .sort((a, b) => api.iconCell(a) - api.iconCell(b))
     .filter((c, i, l) => i === 0 || api.iconCell(c) !== api.iconCell(l[i - 1]));
   const validChara = c => Number.isInteger(c) && CHARAS.includes(c);
-  if (!validChara(prof.chara)) prof.chara = 17;
-  if (![0, 1, 2].includes(prof.moon)) prof.moon = 1;
+  if (!validChara(prof.chara)) prof.chara = -1;
+  if (![0, 1, 2].includes(prof.moon)) prof.moon = -1;
   // a colour readable on the dark panel / over the game (very dark picks are lifted)
   function readable(hex) {
     if (!COLOR_RE.test(hex || '')) return '#c8c8d8';
@@ -152,6 +155,8 @@
   #chatsec details .pdone { justify-content: flex-end; margin-top: 6px; }
   #chatsec details .pdonebtn { background: var(--accent); color: #fff; padding: 4px 16px; border-radius: 999px; }
   #chatsec .me { width: 21px; height: 28px; border-radius: 4px; }
+  #chatsec .me.unset { border: 1px dashed var(--line); }
+  #chatsec .phint { color: var(--accent2, #8ab4ff); font-size: 12px; }
   #chatsec .prow { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; margin-top: 6px; font-size: 12px; }
   #chatsec .prow input[type=text] { width: 130px; background: var(--raise); color: var(--fg); border: 1px solid var(--line); border-radius: 6px; padding: 3px 6px; font: inherit; }
   #chatsec .sw { width: 16px; height: 16px; border-radius: 50%; border: 2px solid transparent; cursor: pointer; padding: 0; }
@@ -237,6 +242,7 @@
       <div class="prow">nick <input id="chatnick" type="text" maxlength="24" spellcheck="false"></div>
       <div class="prow"><label><input id="chattags" type="checkbox"> show #tags (Name#1234)</label></div>
       <div class="prow">colour <span class="sws"></span><input id="chatcolor" type="color" title="any colour"></div>
+      <div class="prow phint" hidden>pick your moon and character (none set yet)</div>
       <div class="prow">moon <span class="moons"></span></div>
       <div class="cgrid"></div>
       <div class="prow pdone"><button type="button" class="txt pdonebtn">done</button></div>
@@ -287,6 +293,8 @@
   // profile editor
   function profShow() {
     drawIcon($('.me'), prof.chara, prof.moon);
+    $('.me').classList.toggle('unset', !validChara(prof.chara));
+    $('.phint').hidden = validChara(prof.chara) && prof.moon >= 0;
     const n = $('.mynick'); n.textContent = prof.nick; n.style.color = readable(prof.color);
     $('#chatnick').value = prof.nick; $('#chatcolor').value = prof.color;
     sec.querySelectorAll('.sw').forEach(b => b.classList.toggle('on', b.dataset.c.toLowerCase() === prof.color.toLowerCase()));
@@ -1062,7 +1070,7 @@
     const cmd = nicoCmds(cmdIn.value).join(' ');
     // in the match's channel: where our picture is in its stream (the comment's place on the match's timeline)
     const pic = isMatch(shown) ? nowOf(api.live()) : null, at = pic && pic.pos ? pic.pos : null;
-    const tags = irc.caps.has('message-tags') ? `@+mbaa/color=${prof.color};+mbaa/chara=${prof.chara};+mbaa/moon=${prof.moon}${cmd ? `;+mbaa/cmd=${cmd.replace(/ /g, '\\s')}` : ''}${at ? `;+mbaa/at=${at[0]}.${at[1]}` : ''}${irc.account && auth.name ? `;+mbaa/name=${auth.name.replace(/\\/g, '\\\\').replace(/;/g, '\\:').replace(/ /g, '\\s')}` : ''} ` : '';
+    const tags = irc.caps.has('message-tags') ? `@+mbaa/color=${prof.color}${validChara(prof.chara) ? `;+mbaa/chara=${prof.chara}` : ''}${prof.moon >= 0 ? `;+mbaa/moon=${prof.moon}` : ''}${cmd ? `;+mbaa/cmd=${cmd.replace(/ /g, '\\s')}` : ''}${at ? `;+mbaa/at=${at[0]}.${at[1]}` : ''}${irc.account && auth.name ? `;+mbaa/name=${auth.name.replace(/\\/g, '\\\\').replace(/;/g, '\\:').replace(/ /g, '\\s')}` : ''} ` : '';
     irc.send(`${tags}PRIVMSG ${shown} :${text}`);
     if (!irc.caps.has('echo-message')) {
       const action = text.startsWith('\x01ACTION ');
