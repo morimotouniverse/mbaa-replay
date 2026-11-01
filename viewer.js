@@ -2283,6 +2283,11 @@ function liveBegin(s) {  // play(): after viewer_play
   L.next = false;
   liveFollow(s, true);
   call(s, 'viewer_spectate_open', L.info.rollback, L.info.winCount);
+  // the waits that end on a record (the players' retry menu choice, the host's next index ending the VS screen) end
+  // LIVE_BEHIND frames after it arrived, so every game after a result screen starts with the buffer (spectate.cpp
+  // arrived_for; was: at the stream's edge, artifacts/xz_check/live_winscreen)
+  call(s, 'viewer_spectate_delay', LIVE_BEHIND);
+  s.liveHeldSeen = call(s, 'viewer_spectate_held');
   const poll = async () => {
     if (session !== s) return;
     try {
@@ -2312,7 +2317,10 @@ function liveBegin(s) {  // play(): after viewer_play
     const quietFor = performance.now() - Math.max(L.dataAt ?? (L.dataAt = performance.now()), L.failAt ?? -1e9);
     // a Skippable index whose frames ran out, the feed up and quiet 3 s: the players at the result screen (its last
     // frames and the retry menu come with their choice): the game goes on to the win quote (spectate.cpp spectate_ready)
-    const quietSkip = call(s, 'viewer_spectate_quiet', s.liveFollow && ahead < 15 && quietFor > 3000 ? 1 : 0) === 1 && quietFor > 3000;
+    // (set as soon as the feed is quiet, not once the buffer is low: the game uses it only where the index's frames have
+    // run out, and a session LIVE_BEHIND behind gets there after the 3 s, where waiting for the next poll to see the
+    // low buffer froze the win pose up to a second)
+    const quietSkip = call(s, 'viewer_spectate_quiet', s.liveFollow && quietFor > 3000 ? 1 : 0) === 1 && quietFor > 3000;
     if (s.tl && !s.seeking) s.tl.est = s.M._viewer_frame() + ahead;  // the timeline reaches the newest frame received
     // the buffer's floor over the last LIVE_WIN polls: what the catch-up decisions go by. The stream is bursty: each
     // poll brings ~60 frames at once, and at every round end the host's stream runs ahead (its KO / win pose: ~1.2 s of
@@ -2383,9 +2391,10 @@ function liveBegin(s) {  // play(): after viewer_play
           // LOST: our game did not follow a stream it has: the new game's records received, and the session still at the
           // result / retry menu or the win quote 5 s after both, or not in it by the time those frames played (+3 s). Keyed on
           // the records received, not on the list (the list is ahead of a feed that stalled: real1 t=1857)
-          const H = L.haveAt;
+          // (+ LIVE_BEHIND: the retry menu takes the players' choice that long after it arrived, viewer_spectate_delay)
+          const H = L.haveAt, D = 1000 * LIVE_BEHIND / 60;
           const lost = liveJump() && behind && H != null &&
-            ((stuckScene && t - Math.max(L.stuckAt, H) > 5000) || t - H > 1000 * (L.haveAhead / 60 + 3));
+            ((stuckScene && t - Math.max(L.stuckAt, H) > 5000 + D) || t - H > 1000 * (L.haveAhead / 60 + 3) + D);
           // a rematch (the players' setup unchanged) is followed by the session itself, never switched: only once it has
           // ended (the end of a replayed stream)
           // (not at a character select or the load after one: there the picks decide, and the load checks them)
@@ -2442,7 +2451,16 @@ function liveBegin(s) {  // play(): after viewer_play
       }
       // (not at the retry menu: it has no stream frames to count, the players' choice comes when they make it, and
       // CCCaster's spectator never waits there: the game shows the win quote meanwhile)
-      const hold = !call(s, 'viewer_spectate_in_retry') && !quietSkip && (ahead < 15 || (s.liveHeld && ahead < 120));
+      // (starved: the game waited for the stream since the last poll, in a battle. ahead is read just after the poll's
+      // data went in, so at the stream's edge it was never low here: the game ran dry between polls, ~0.5 s of every
+      // second frozen, and the hold that builds 2 s back up never came on)
+      const heldNow = call(s, 'viewer_spectate_held'), starved = heldNow > s.liveHeldSeen && s.M.HEAP32[0x54EEE8 >> 2] === 1;
+      s.liveHeldSeen = heldNow;
+      // (nor in the last win pose once the players' retry menu choice is in: the game plays the pose out, the win quote
+      // and the menu without the stream. Its few frames left read as a low buffer and held the pose ~3 s while the next
+      // game's frames built 2 s up: the freeze on the WINNER banner, artifacts/xz_check/live_winscreen after_css_gpu)
+      const hold = !call(s, 'viewer_spectate_in_retry') && !quietSkip && !call(s, 'viewer_spectate_match_end') &&
+        (ahead < 15 || starved || (s.liveHeld && ahead < 120));
       s.liveHeld = hold;
       call(s, 'viewer_pause', hold || ui.paused || s.seeking ? 1 : 0);
       // up to the jump (or without it): CCCaster's spectateFastFwd, more than 60 frames (2 x NUM_INPUTS) over the kept
