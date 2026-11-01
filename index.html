@@ -18,7 +18,7 @@
 <meta name="twitter:description" content="Watch Melty Blood Actress Again Current Code replays in your browser, frame-exact.">
 <meta name="twitter:image" content="https://watch.meltyblood.org/preview.png">
 <meta name="mbaa-manifest" content="2a2e2bac19a8">
-<meta name="mbaa-chatjs" content="chat.js?v=53ae7f2f8c09">
+<meta name="mbaa-chatjs" content="chat.js?v=8d38288b73a2">
 <link rel="manifest" href="site.webmanifest">
 <link rel="icon" href="icon-192.png">
 <link rel="apple-touch-icon" href="icon-192.png">
@@ -350,6 +350,12 @@
   #matchcard:has(#stageblk:not([hidden])) .name { grid-area: 1 / 1; align-self: end; justify-self: center; width: 62%; margin-bottom: 4px;
     filter: drop-shadow(0 1px 2px #000); }
   #matchcard:has(#stageblk:not([hidden])) .trk { grid-area: 2 / 1; margin-top: 4px; text-align: center; }
+  /* (the top-centre stack, user 2026-11-01: the watchers, VS under them, the stage's name plate, the song under it) */
+  #matchcard:has(#stageblk:not([hidden])) .plate { grid-area: 1 / 1; align-self: start; justify-self: center; z-index: 2; position: relative;
+    display: flex; flex-direction: column; align-items: center; width: 52%; margin-top: var(--stack-top, 40px); pointer-events: none; }
+  #matchcard:has(#stageblk:not([hidden])) #stageblk .plate .name { width: 100%; max-height: none; margin: 0; align-self: auto; }
+  #matchcard:has(#stageblk:not([hidden])) #stageblk .plate .trk { position: static; background: none; margin: 1px 0 0; padding: 0; max-width: 100%;
+    color: #fff; text-shadow: 0 1px 2px #000, 0 0 6px #000; }
   #matchcard:has(#stageblk:not([hidden])) #players { grid-area: 1 / 1; z-index: 1; flex-direction: row; align-items: flex-start;
     justify-content: space-between; gap: 4px; margin: 0; padding: 6px 6px 0; text-shadow: 0 1px 2px #000, 0 0 6px #000; }
   /* each player a 2x2 grid: icon | name over moon | character (P2 mirrored), so both texts get the full width beside */
@@ -387,8 +393,7 @@
   #matchcard:has(#stageblk:not([hidden])) #players { align-self: stretch; align-items: flex-end; padding: 0 8px 7px;
     background: linear-gradient(transparent 58%, #000b 100%); border-radius: 0 0 8px 8px; }
   #matchcard:has(#stageblk:not([hidden])) #players .vs { position: absolute; top: 5px; left: 50%; transform: translateX(-50%);
-    flex-direction: row; align-items: center; gap: 6px; padding: 0; }
-  #matchcard:has(#stageblk:not([hidden])) .name { align-self: start; margin: 26px 0 0; }
+    flex-direction: column; align-items: center; gap: 2px; padding: 0; line-height: 1.1; }
   #matchcard:has(#stageblk:not([hidden])) #players .pl { align-self: flex-end; }
   /* with portraits the small icons go; each side: the name across, the moon and the character under it */
   #matchcard.pors:has(#stageblk:not([hidden])) #players .ico { display: none; }
@@ -406,7 +411,7 @@
   #matchcard.pors:has(#stageblk:not([hidden])) #players .pl:last-child .ch .mqx { grid-area: 2 / 1; }
   /* wide (desktop: the card under the picture, as wide as the controls): a banner, not a 256:110 picture 500 px tall */
   body:is(.deskchat, :not(.side)) #matchcard:has(#stageblk:not([hidden])) .view { aspect-ratio: auto; height: clamp(150px, 15vw, 210px); object-fit: cover; }
-  body:is(.deskchat, :not(.side)) #matchcard:has(#stageblk:not([hidden])) .name { width: auto; max-width: 46%; max-height: 22%; }
+  body:is(.deskchat, :not(.side)) #matchcard:has(#stageblk:not([hidden])) .plate { width: 34%; --stack-top: 50px; }
   body:is(.deskchat, :not(.side)) #matchcard.pors:has(#stageblk:not([hidden])) .por:not([hidden]) { height: 250%; top: -37%; left: 27%; }
   body:is(.deskchat, :not(.side)) #matchcard.pors:has(#stageblk:not([hidden])) .por.p2:not([hidden]) { left: 73%; }
   body:is(.deskchat, :not(.side)) #matchcard:has(#stageblk:not([hidden])) #players { padding: 0 14px 9px; }
@@ -766,7 +771,7 @@
       <div class="vs">VS <span id="watching"></span></div>
       <div class="pl"><canvas class="ico" width="64" height="64"></canvas><div class="who"><span class="nm mqx"><span class="t"></span></span><span class="ch"><canvas class="moon" width="56" height="56"></canvas><span class="mqx"><span class="t"></span></span></span></div></div>
     </div>
-    <div id="stageblk" hidden><img class="view" alt=""><img class="name" alt=""><div class="trk" id="trk"></div></div>
+    <div id="stageblk" hidden><img class="view" alt=""><div class="plate"><img class="name" alt=""><div class="trk" id="trk"></div></div></div>
     </div>
     <div id="title">MBAACC replays</div>
     <div id="status">loading…</div>
@@ -840,7 +845,7 @@
   </div>
 </div>
 </div>
-<script src="mbaa.js?v=9e24e622dcd8"></script>
+<script src="mbaa.js?v=95fe3894e051"></script>
 <script src="bgm_stream.js?v=407ac29e5c89"></script>
 <script src="viewer.js?v=02c5afbdb8f9"></script>
 </body>
