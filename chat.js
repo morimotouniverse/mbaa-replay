@@ -51,7 +51,9 @@
 // tag (TAGMSG). Reactions: +draft/react / +draft/unreact with +draft/reply (stored by the server only with its
 // tagmsg-storage whitelist; replayed with draft/event-playback). A names panel (away-notify; the page goes "idle" when
 // hidden a while). Lines get Discord-style formatting (render only), one-emoji lines show big with a count and stack
-// into combo rows (a click joins in), and a spammed emoji swells in the overlay's corner
+// into combo rows (a click joins in), and a spammed emoji rides across the picture, big, with its count (looping
+// while the spam goes on). Top / bottom comments (ue / shita) are mods' only; each viewer sets how much emoji spam
+// shows on the picture (the Aa menu's "emoji on picture")
 // (harness-design/web_parity/viewer_tools/chat_free_features_check.py).
 (() => {
   'use strict';
@@ -64,6 +66,9 @@
   const AUTH_URL = (LOCAL && Q.get('chatAuth')) || location.pathname.replace(/\/[^/]*$/, '') + '/auth';
   const BOT = 'MeltyBot';  // (the moderation bot's nick = its account, meltybot; IRC nicks compare case-insensitively)
   const GENERAL = '#melty', HISTORY = 50, MAXLEN = 300, MAXLINES = 300;
+  // the viewer's "emoji on the picture" amount, 0..1 (emoThin; the Aa menu's slider), this browser's
+  let emoAmt = 1;
+  try { const v = parseFloat(localStorage.getItem('mbaa-chat-emoji-amt')); if (v >= 0 && v <= 1) emoAmt = v; } catch (e) {}
   // a match channel's history: from its start (CHATHISTORY AFTER an early time), PAGE lines a request (Ergo's
   // chathistory-maxmessages; its CHATHISTORY= token lowers it), the next page after the last msgid
   const HIST_FROM = '2026-01-01T00:00:00.000Z';
@@ -448,9 +453,9 @@
   #chatlog .cjumbo .jw { font-size: 11px; color: var(--faint); }
   #chatlog .cjumbo.join { cursor: pointer; border-radius: 8px; padding: 0 4px; }
   #chatlog .cjumbo.join:hover { background: #ffffff10; }
-  #chatover .cswell { position: absolute; right: 3%; display: flex; flex-direction: column; align-items: center; pointer-events: none; transition: bottom .2s, opacity .5s; }
+  #chatover .cswell { position: absolute; left: 0; display: flex; flex-direction: column; align-items: center; pointer-events: none; transition: bottom .2s, opacity .5s; }
   #chatover .cswell .e { line-height: 1; font-family: 'Apple Color Emoji', 'Segoe UI Emoji', 'Noto Color Emoji', sans-serif; transition: font-size .15s; }
-  #chatover .cswell .n { color: #fff; font-weight: 700; font-family: sans-serif; line-height: 1.1; font-variant-numeric: tabular-nums;
+  #chatover .cswell .n { opacity: 0; transition: opacity .6s; color: #fff; font-weight: 700; font-family: sans-serif; line-height: 1.1; font-variant-numeric: tabular-nums;
                          text-shadow: -1px -1px 0 #000, 1px -1px 0 #000, -1px 1px 0 #000, 1px 1px 0 #000; }
   /* Discord-style formatting in a line (render only; the IRC text stays plain) */
   #chatlog .cmd-h { font-weight: 700; color: var(--fg, #fff); line-height: 1.25; }
@@ -624,10 +629,16 @@
   spreadIn.addEventListener('input', () => { spreadIn.dataset.drag = '1'; spreadOut.textContent = `${(+spreadIn.value).toFixed(1)} s`; spreadSet(spreadIn.value, 'preview'); });
   spreadIn.addEventListener('change', () => { delete spreadIn.dataset.drag; irc.send(`PRIVMSG ${BOT} :spread ${(+spreadIn.value).toFixed(1)}`); spreadIn.blur(); });
   // (shown to a channel operator of any channel we are in: the bot takes the command from mods and owners)
-  const spreadAdmin = () => { $('.cspread').hidden = ![...chans.values()].some(c => c.joined && c.ops.has(key(irc.nick))); };
+  // (mods: the spread slider, and top / bottom comments; everyone else's comments scroll)
+  const spreadAdmin = () => {
+    const op = [...chans.values()].some(c => c.joined && c.ops.has(key(irc.nick)));
+    $('.cspread').hidden = !op;
+    const pos = $('.cseg[data-k="pos"]'); if (pos) pos.hidden = !op;
+  };
   const overOn = $('#chatover_on');
   overOn.checked = store.get('mbaa-chat-over', true);
   over.hidden = !overOn.checked;
+  if (window.mbaaCmSync) window.mbaaCmSync();  // (the bar's comments switch shows this state)
   overOn.onchange = () => {
     store.set('mbaa-chat-over', overOn.checked); over.hidden = !overOn.checked;
     if (!overOn.checked) { dmClear(nico); tlDrop(); swellClear(); } else tlKick();
@@ -1612,6 +1623,13 @@
   // (behind "Aa" beside the input: a popover over the lines, with the spread slider for moderators)
   const nicoBtn = $('.cnico');
   $('.cform').append(tool); tool.append($('.cspread')); tool.hidden = true;
+  // the viewer's own emoji amount on the picture (everyone; this browser only): 0 .. 100 % of each run's copies
+  { const lab = document.createElement('label'); lab.className = 'cspread cemoamt'; lab.title = 'how much of an emoji spam shows on the picture (this browser only; the chat keeps every one)';
+    lab.append('emoji on picture ');
+    const r = document.createElement('input'); r.type = 'range'; r.min = '0'; r.max = '100'; r.step = '5'; r.value = String(Math.round(emoAmt * 100));
+    const o = document.createElement('output'); const show = () => { o.textContent = +r.value === 0 ? 'none' : `${r.value}%`; }; show();
+    r.addEventListener('input', () => { emoAmt = +r.value / 100; show(); try { localStorage.setItem('mbaa-chat-emoji-amt', String(emoAmt)); } catch (e) {} });
+    lab.append(r, o); tool.append(lab); }
   function toolOpen(on) {
     tool.hidden = !on; nicoBtn.setAttribute('aria-expanded', String(on));
     if (on) { emoOpen(false); mentionClose(); popPlace(tool, 260); tool.style.maxHeight = ''; } else popOpen(false);
@@ -1649,10 +1667,26 @@
   const measure = document.createElement('canvas').getContext('2d');
   // a comment's look and timing; t: when it enters, in seconds on its stage's clock
   // the overlay's text of a line: a reply's or a mention's leading "@nick" (and a ':' or ',' after it) left out
-  function dmText(l) { const t = String((l.pic != null ? l.pic : l.text) || ''); return l.action ? t : t.replace(/^(@\S+[:,]?\s*)+/, '').trim(); }
+  function dmText(l) { const t = String((l.pic != null ? l.pic : l.text) || ''); return emoThin(l.action ? t : t.replace(/^(@\S+[:,]?\s*)+/, '').trim()); }
+  // the viewer's "emoji on the picture" amount (0..1): a run of the same emoji keeps that share of its copies (at least
+  // one while above 0; 0: no emoji on the picture). The chat log is untouched.
+  function emoThin(t) {
+    if (emoAmt >= 1) return t;
+    const out = []; let run = null, n = 0;
+    const flush = () => { if (run) { const k = emoAmt <= 0 ? 0 : Math.max(1, Math.round(n * emoAmt)); for (let i = 0; i < k; i++) out.push(run); } run = null; n = 0; };
+    for (const g of graphemes(t)) {
+      if (isEmo(g)) { if (run && emoKey(run) === emoKey(g)) n++; else { flush(); run = g; n = 1; } }
+      else if (run && /^\s$/.test(g)) continue;  // (spaces inside a run)
+      else { flush(); out.push(g); }
+    }
+    flush();
+    return out.join('').trim();
+  }
   function dmMake(l, t) {
     const cmds = nicoCmds(l.cmd);
-    const loc = cmds.find(c => c === 'ue' || c === 'shita') || 'naka';
+    // (top / bottom: a channel operator's comment only; anyone else's scrolls)
+    const lc0 = l.chan && chans.get(l.chan), lineOp = !!(lc0 && l.irc && lc0.ops.has(key(l.irc)));
+    const loc = (lineOp && cmds.find(c => c === 'ue' || c === 'shita')) || 'naka';
     const size = cmds.find(c => DM_SIZE[c]) || 'medium', font = cmds.find(c => DM_FONT[c]) || 'defont';
     // (Niconico takes the first colour given; none: the sender's profile colour)
     const col = cmds.map(c => DM_COLOR[c] || (COLOR_RE.test(c) ? c : null)).find(Boolean) || (l.color ? readableHex(l.color) : '#FFFFFF');
@@ -1679,15 +1713,18 @@
     const r0 = rel(s0), r1 = rel(s1);
     return Math.min(r0, r1) <= a.w + pad && Math.max(r0, r1) >= -(c.w + 5);
   }
+  // the band comments use: between the battle HUD's top block (life bars, round timer: ~23% of the picture) and its
+  // bottom meters (~90%), so no comment crosses a life bar or the Magic Circuit (stage units of 1080)
+  const DM_Y0 = 254, DM_Y1 = 978;
   function dmPlace(placed, c, spread) {
     const near = placed.filter(a => dmMeet(a, c, spread));
     const up = c.loc !== 'shita';
-    let y = up ? 0 : 1080 - c.h, moved = true, n = 0;
+    let y = up ? DM_Y0 : DM_Y1 - c.h, moved = true, n = 0;
     while (moved && n++ < 200) {
       moved = false;
       for (const a of near) if (y < a.y + a.h && a.y < y + c.h) { y = up ? a.y + a.h : a.y - c.h; moved = true; }
     }
-    if (y < 0 || y + c.h > 1080) y = Math.floor((c.seed % 1000) / 1000 * Math.max(0, 1080 - c.h));  // (full: a random row)
+    if (y < DM_Y0 || y + c.h > DM_Y1) y = DM_Y0 + Math.floor((c.seed % 1000) / 1000 * Math.max(0, DM_Y1 - DM_Y0 - c.h));  // (full: a random row)
     c.y = y;
   }
   // a stage: a 16:9 box of 1920 x 1080 units over the picture
@@ -1732,6 +1769,7 @@
     // (a crowded picture: past NICO_ON_SCREEN at once a new comment stays in the chat only)
     if (nico.list.filter(a => a.t + a.life > now).length >= NICO_ON_SCREEN) return;
     const c = dmMake(l, now);
+    if (!c.text.trim()) return;  // (only emoji, and the emoji amount at 0)
     dmPlace(nico.list, c, spread);
     nico.list.push(c);
     const e = dmEl(nico, c);
@@ -1742,9 +1780,10 @@
   // lower right, growing with each copy (a pulse per hit, at most SWELL_MAX of the picture's height), the running count
   // under it; it fades SWELL_FADE after the spam stops. Several at once stack upward (at most 3). Live comments only
   // (the overlay's own layer: off with "on picture"). ----
-  const SWELL_MIN = 5, SWELL_WIN = 4000, SWELL_FADE = 3000, SWELL_MAX = 0.25, SWELL_N = 3;
+  const SWELL_MIN = 5, SWELL_WIN = 4000, SWELL_FADE = 3000, SWELL_MAX = 0.25, SWELL_N = 3, SWELL_RIDE = 6000, SWELL_TILT = 6, SWELL_TILT_MAX = 24;
   const swells = new Map();  // emoji key -> {e, hits: [t], count, el, num, fadeT, at}
   function swellFeed(l) {
+    if (emoAmt <= 0) return;  // (no emoji on the picture)
     const now = performance.now(), per = new Map();
     for (const g of graphemes(l.pic != null ? l.pic : l.text)) if (isEmo(g)) { const k = emoKey(g); const x = per.get(k) || { e: g, n: 0 }; x.n++; per.set(k, x); }
     for (const [k, { e, n }] of per) {
@@ -1759,26 +1798,57 @@
         s.em = document.createElement('div'); s.em.className = 'e'; s.em.textContent = e;
         s.num = document.createElement('div'); s.num.className = 'n';
         s.el.append(s.em, s.num); over.append(s.el);
+        // (it rides across the picture, left to right, again and again while the spam goes on)
+        s.tilt = 0; swellRide(s);
       } else continue;
+      // the count shows for a moment when the riding emoji appears and each time it passes a milestone (10, 25, 50,
+      // 100, 250, 500, 1000, ...), then fades: the number marks the spam growing, not every copy
       s.num.textContent = String(s.count);
-      if (s.em.animate) s.em.animate([{ transform: 'scale(1.18)' }, { transform: 'scale(1)' }], { duration: 220, easing: 'ease-out' });
+      const ms = swellMilestone(s.count);
+      if (ms > (s.shownMs || 0)) {
+        s.shownMs = ms;
+        s.num.style.transition = 'none'; s.num.style.opacity = '1';
+        void s.num.offsetWidth; s.num.style.transition = '';
+        clearTimeout(s.numT); s.numT = setTimeout(() => { if (s.num) s.num.style.opacity = '0'; }, 1000);
+        // each milestone after the first tilts its path up a little more (flat, then climbing), up to SWELL_TILT_MAX
+        if (ms > 5 && s.tilt < SWELL_TILT_MAX) { s.tilt = Math.min(SWELL_TILT_MAX, s.tilt + SWELL_TILT); swellRide(s); }
+      }
       clearTimeout(s.fadeT);
       s.el.style.opacity = '1';
       s.fadeT = setTimeout(() => swellEnd(k), SWELL_FADE);
     }
     swellLayout();
   }
+  // the ride across the picture, left to right, looping, along a path tilted up by s.tilt degrees (the emoji leaning
+  // with it); a new tilt carries on from where the current pass is
+  function swellRide(s) {
+    if (!s.el || !s.el.animate) return;
+    const W = over.clientWidth || 640, rise = -Math.tan(s.tilt * Math.PI / 180) * W * 0.9;
+    const at = s.anim ? s.anim.currentTime : 0;
+    if (s.anim) s.anim.cancel();
+    s.anim = s.el.animate([{ left: '-25%', transform: 'translateY(0px)' }, { left: '105%', transform: `translateY(${rise.toFixed(1)}px)` }],
+      { duration: SWELL_RIDE, iterations: Infinity, easing: 'linear' });
+    s.anim.currentTime = at || 0;
+    s.em.style.transform = s.tilt ? `rotate(${-s.tilt}deg)` : '';
+  }
+  // the last milestone a count has passed: 5 (the start), 10, 25, 50, 100, 250, 500, 1000, 2500, ...
+  function swellMilestone(n) {
+    let best = 5;
+    for (let m = 10; m <= n; m *= 10) for (const f of [1, 2.5, 5]) if (m * f <= n) best = Math.max(best, m * f);
+    return best;
+  }
   function swellEnd(k) {
     const s = swells.get(k);
     if (!s || !s.el) return;
     s.el.style.opacity = '0';
-    const el = s.el; s.el = null; s.hits = []; s.count = 0;
-    setTimeout(() => { el.remove(); swellLayout(); }, 500);
+    const el = s.el; s.el = null; s.hits = []; s.count = 0; s.shownMs = 0; clearTimeout(s.numT);
+    const anim = s.anim; s.anim = null;
+    setTimeout(() => { if (anim) anim.cancel(); el.remove(); swellLayout(); }, 500);
   }
   function swellClear() { for (const s of swells.values()) { clearTimeout(s.fadeT); if (s.el) s.el.remove(); } swells.clear(); }
   function swellLayout() {  // (sizes from the picture's height; the oldest at the bottom)
     const H = over.clientHeight || 360;
-    let y = H * 0.04;
+    let y = H * 0.11;  // (above the battle HUD's bottom meters: the comments' band)
     for (const s of [...swells.values()].filter(x => x.el).sort((a, b) => a.at - b.at)) {
       const sz = Math.min(SWELL_MAX, 0.07 + 0.006 * s.count) * H;
       s.em.style.fontSize = `${sz.toFixed(1)}px`; s.num.style.fontSize = `${Math.max(11, H * 0.03).toFixed(1)}px`;

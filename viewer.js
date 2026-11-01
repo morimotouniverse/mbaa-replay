@@ -738,7 +738,7 @@ async function play(rep, name, catchUp = 0, want = null) {
   if (HASH) return hashRun(s);
   for (let f = 0; f < catchUp && s === session;) {
     f = call(s, 'viewer_step', Math.min(240, catchUp - f));
-    status(`catching up ${f}/${catchUp}`);
+    status(`catching up: frame ${f} of ${catchUp}`);
     catchUpShow(catchUp - f, catchUp);
     await new Promise(r => setTimeout(r, 0));
     if (misses.size) { catchUpShow(null); return refetchAndReplay(s, f); }
@@ -1390,13 +1390,19 @@ function liveJumpInit() {
 }
 // n frames forward as fast as the game runs, nothing drawn but the last frames (seekTo's stepping; the live hold stops
 // it at the newest frame received)
-// the catch-up overlay over the picture: frames to go of the total (null: hidden)
+// the catch-up overlay over the picture: frames to go of the total (null: hidden). The time shown is the real time
+// left at the speed the catching up is going (frames per wall second, measured), not the match time those frames hold
+let cuRate = null;  // {t0, f0, fps}
 function catchUpShow(left, total) {
   const el = document.getElementById('catchup');
   if (!el) return;
-  if (left == null) { el.hidden = true; return; }
+  if (left == null) { el.hidden = true; cuRate = null; return; }
   el.hidden = false;
-  el.querySelector('.cu-s').textContent = `${Math.max(0, Math.ceil(left / 60))} s to go`;
+  const now = performance.now(), done = total - left;
+  if (!cuRate || done < cuRate.f0) cuRate = { t0: now, f0: done, fps: 0 };
+  else if (now - cuRate.t0 > 250) cuRate.fps = (done - cuRate.f0) / ((now - cuRate.t0) / 1000);
+  const secs = cuRate.fps > 0 ? Math.ceil(left / cuRate.fps) : null;
+  el.querySelector('.cu-s').textContent = secs == null ? 'catching up…' : `about ${secs} s left`;
   el.querySelector('.cu-bar i').style.width = `${Math.round(100 * (1 - left / Math.max(1, total)))}%`;
 }
 async function liveCatchUp(s, n) {
@@ -1411,7 +1417,7 @@ async function liveCatchUp(s, n) {
     const g = call(s, 'viewer_step', Math.min(T - DRAW - f, 600));
     if (g === f) break;
     f = g;
-    status(`live: catching up (${((T - f) / 60).toFixed(0)} s to go)`);
+    status(`live: catching up (${T - f} frames to go)`);
     catchUpShow(T - f, n);
     await new Promise(r => setTimeout(r, 0));
     if (session !== s) { catchUpShow(null); return; }
@@ -2973,6 +2979,7 @@ function controls() {
     else if (k === 'b' || k === 'B') flip('music');
     else if (k === '?') toggleHelp();
     else if ((k === 'n' || k === 'N') && !live) startItem(pl.i + 1);  // (the queue: replays only)
+    else if ((k === 'o' || k === 'O') && window.mbaaCommentsToggle) window.mbaaCommentsToggle();  // (comments on the picture)
     else if ((k === 'p' || k === 'P') && !live) startItem(pl.i - 1);
     else if (k === 'h' || k === 'H') flip('boxes');
     else if (k === 'i' || k === 'I') flip('inputs');
@@ -3824,6 +3831,11 @@ function placeControls(mob) {
   on('menub', () => b.classList.add('sheet'));
   on('sheetx', () => b.classList.remove('sheet'));
   on('profb', () => { b.classList.remove('sheet'); const d = document.querySelector('#chatsec details'); if (d) d.open = true; });
+  // the comments-on-the-picture switch: the chat's own "on picture" box (chat.js #chatover_on) is the state
+  const cmtog = document.getElementById('cmtog');
+  const cmSync = () => { const box = document.getElementById('chatover_on'); if (cmtog && box) cmtog.setAttribute('aria-pressed', String(box.checked)); };
+  window.mbaaCommentsToggle = () => { const box = document.getElementById('chatover_on'); if (!box) return; box.checked = !box.checked; box.dispatchEvent(new Event('change')); cmSync(); };
+  if (cmtog) { cmtog.onclick = e => { e.currentTarget.blur(); window.mbaaCommentsToggle(); }; document.addEventListener('change', e => { if (e.target && e.target.id === 'chatover_on') cmSync(); }); window.mbaaCmSync = cmSync; setTimeout(cmSync, 0); }
   on('chattog', () => { chatHidden = !chatHidden; try { localStorage.setItem('mbaaChatHidden', chatHidden ? '1' : '0'); } catch (e) {} fsChatPlace(); fitStage(); });
   const typing = el => !!el && el.matches && el.matches('#chatsec input[type=text], #chatsec textarea');
   document.addEventListener('focusin', e => { if (b.classList.contains('mob') && typing(e.target) && !b.classList.contains('kbd')) { b.classList.add('kbd'); fitStage(); } });
