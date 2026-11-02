@@ -2840,13 +2840,27 @@ function liveSeedStreak(s) {
   if (liveSrc.info.streak) liveSrc.info.streak.forEach((w, p) => { s.M.HEAP32[STREAK[p] >> 2] = w; });
 }
 // Each game's first battle frame: the streaks it started with, to the bridge (later viewers start from them)
+// Also the moment a game is won (the result counts them on): the next game's, sent ahead (game + 1), so viewers who
+// (re)load between games (a site update reloads everyone at once) still start from them; that game's own first-frame
+// send then confirms them. (Before: everyone reloaded between games -> nobody knew -> the count restarted at 0, 2026-11-02)
 function liveStreak(s) {
-  if (!s.streakKnown || s.M.HEAP32[0x54EEE8 >> 2] !== 1) return;
+  if (!s.streakKnown) return;
   const g = call(s, 'viewer_spectate_game'), game = g >= 0 ? g : s.liveSrc.info.game;
-  if (game === s.streakSent) return;
-  s.streakSent = game;
-  const w = STREAK.map(a => s.M.HEAP32[a >> 2]);
-  fetch(`${LIVE}/live/${s.liveSrc.id}/streak?game=${game}`, { method: 'POST', body: w.join(',') }).catch(() => {});
+  const w = STREAK.map(a => s.M.HEAP32[a >> 2]), post = (gm, ws) =>
+    fetch(`${LIVE}/live/${s.liveSrc.id}/streak?game=${gm}`, { method: 'POST', body: ws.join(',') }).catch(() => {});
+  if (s.M.HEAP32[0x54EEE8 >> 2] === 1 && game !== s.streakSent) {
+    s.streakSent = game; s.streakAt = w.join(','); s.streakAhead = null;
+    post(game, w);
+    return;
+  }
+  // (after this game's start: a change is the win being counted)
+  // (only a count going up, in the battle or win scene (the result counts them there): the next game's setup zeroes them, never sent ahead)
+  const was = s.streakAt == null ? null : s.streakAt.split(',').map(Number);
+  if (game === s.streakSent && was && [1, SCENE_WIN].includes(s.M.HEAP32[0x54EEE8 >> 2]) && w.every((x, i) => x >= was[i]) && w.some((x, i) => x > was[i])
+      && s.streakAhead !== w.join(',')) {
+    s.streakAhead = w.join(',');
+    post(game + 1, w);
+  }
 }
 // in MEMFS for the game: in the session's files and not dropped by freeLoaded (low-memory mode; the next game of the
 // stream, a rematch above all, reads the same files again)
@@ -2954,7 +2968,7 @@ function liveBegin(s) {  // play(): after viewer_play
   s.M.mbaaLoaderGate = () => liveLoaderGate(s);
   s.streakKnown = !!L.info.streak;
   liveSeedStreak(s);
-  s.streakSent = -1; s.bannerKey = null;
+  s.streakSent = -1; s.streakAt = null; s.streakAhead = null; s.bannerKey = null;
   L.since = L.info.game;
   L.recs = new Map();
   L.next = false;
