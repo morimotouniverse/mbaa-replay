@@ -2000,15 +2000,16 @@ async function stagePanelLoad() {
   radioSet('');
 }
 // web/radio/old.json: the older games' radio (fetched when the picker first opens)
-let oldRadioP = null;
+let oldRadioP = null, oldRadioFailed = false;
 function radioOldLoad() {
   if (!man.files['web/radio/old.json']) return Promise.resolve(null);
   return oldRadioP || (oldRadioP = fetchAll(man, ['web/radio/old.json'], '', true).then(() => {
-    oldRadio = JSON.parse(new TextDecoder().decode(cache.get('web/radio/old.json')));
-    oldRadio.byKey = {};
-    for (const g of oldRadio.games) for (const t of g.tracks) oldRadio.byKey[`${g.id}:${t.id}`] = Object.assign(t, { game: g.id });
-    return radioOverrides(oldRadio).then(() => oldRadio);
-  }));
+    const o = JSON.parse(new TextDecoder().decode(cache.get('web/radio/old.json')));
+    o.byKey = {};
+    for (const g of o.games) for (const t of g.tracks) o.byKey[`${g.id}:${t.id}`] = Object.assign(t, { game: g.id, title0: t.title });
+    // (set once its titles are final: the chat's slugs come from them)
+    return radioOverrides(o).then(() => (oldRadio = o));
+  }).catch(e => { oldRadioFailed = true; throw e; }));
 }
 // the community's names and tiles for the older games' tracks ("Name the tracks", tools/web/track_tags.mjs): approved by
 // the reviewers, public on the site root as /radio/overrides.json (the Worker; a local build has none), applied over
@@ -2196,24 +2197,30 @@ const STAGE_NAMES = { 1: 'Artificial Eden', 2: 'Classic home.Evening party', 3: 
   50: 'No Control Red', 51: 'NECO Burst Camp', 52: 'stranger', 53: 'Arima’s Chinese kempo home', 54: 'sayonara Dear Friend',
   55: '...and nothing heart', 56: 'ONE LIFE,ONE DEATE', 57: 'G TABLE', 58: 'G TABLE', 59: 'good morning,anima mundi' };
 let mentCat = null;
+// (the chat's slugs come from the whole of both lists, so every viewer reads the same "!slug" / "^slug": empty until
+// MBAACC's panel and the older games' radio are both in (the radio list fetched for this even if the panel never opens;
+// it failing or missing: MBAACC's alone))
 function mentionCatalog() {
-  const v = `${!!stagePanel}/${!!oldRadio}`;
+  const wantOld = !!(man && man.files['web/radio/old.json']) && !oldRadio && !oldRadioFailed;
+  if (stagePanel && wantOld) radioOldLoad().catch(() => {});
+  const v = !stagePanel || wantOld ? 'loading' : `ok/${!!oldRadio}`;
   if (mentCat && mentCat.v === v) return mentCat;
   const songs = [], stages = [], seen = new Set();
-  if (stagePanel) {
-    for (const [f, x] of Object.entries(stagePanel.tracks)) if (x.loop) songs.push({ f, title: x.title, game: 'MBAACC' });
+  if (v !== 'loading') {
+    for (const [f, x] of Object.entries(stagePanel.tracks)) if (x.loop) songs.push({ f, title: x.title, slugName: x.title, game: 'MBAACC' });
     for (const [id, st] of Object.entries(stagePanel.stages)) {
       const name = STAGE_NAMES[id];
       if (!name || !st.track || seen.has(name)) continue;  // (a stage plays its track's stage pick; a repeated plate: the first)
       seen.add(name);
-      stages.push({ key: String(id), name, game: 'MBAACC', f: st.track, thumb: st.art.includes('view') ? `web/stage/view_${String(id).padStart(2, '0')}.png` : '' });
+      stages.push({ key: String(id), name, slugName: name.split(',')[0], game: 'MBAACC', f: st.track, thumb: st.art.includes('view') ? `web/stage/view_${String(id).padStart(2, '0')}.png` : '' });
     }
   }
-  if (oldRadio) for (const g of oldRadio.games) {
+  if (v !== 'loading' && oldRadio) for (const g of oldRadio.games) {
     const game = (RADIO_GAMES.find(([id]) => id === g.id) || [])[1] || g.id;
     for (const t of g.tracks) {
-      songs.push({ f: `${g.id}:${t.id}`, title: t.title, game });
-      if (t.dat && t.stageName) stages.push({ key: `${g.id}:${t.id}`, name: t.stageName, game, f: `${g.id}:${t.id}`, thumb: t.tileUrl || t.tile || '' });
+      // (slugs from the list's own titles: a title override (radioOverrides, fetched with a timeout) only renames the label)
+      songs.push({ f: `${g.id}:${t.id}`, title: t.title, slugName: t.title0 || t.title, game });
+      if (t.dat && t.stageName) stages.push({ key: `${g.id}:${t.id}`, name: t.stageName, slugName: t.stageName.split(',')[0], game, f: `${g.id}:${t.id}`, thumb: t.tileUrl || t.tile || '' });
     }
   }
   return (mentCat = { v, songs, stages });
@@ -2306,7 +2313,9 @@ function radioStageSync(s) {
   // (a pick's stage swap: crossfaded once it is sent; a keyframe restore sending it again is not)
   // (in battle only: elsewhere the stage comes in with the battle's own load and fade, and a held copy would freeze the
   // VS screen)
-  const fade = () => { if (xfStagePending) { xfStagePending = false; if (M.HEAP32[0x54EEE8 >> 2] === 1) xfGrab(() => M._viewer_radio_stage_in() === want); } };
+  // (the two-phase swap, web/host/radio_stage.cpp, crossfades the stage alone in its own draw slot: no page snapshot,
+  // which would fade the fighters and HUD too; the page fade stays only for the all-at-once reference, mbaaRadioDefer 0)
+  const fade = () => { if (xfStagePending) { xfStagePending = false; if (M.HEAP32[0x54EEE8 >> 2] === 1 && !(M._viewer_radio_stage_phase && M.mbaaRadioDefer !== 0)) xfGrab(() => M._viewer_radio_stage_in() === want); } };
   if (stage) { if (radioFilesIn(s, stage)) { fade(); M._viewer_radio_stage_want_stage(stage, want); } return; }
   if (st && !radioPut(s, st.dat)) return;
   fade();

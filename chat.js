@@ -134,19 +134,38 @@
     const A = window.mbaaChatApi, c = A && A.mentions ? A.mentions() : null;
     if (!c) return null;
     if (mentC && mentC.v === c.v) return mentC;
+    // (viewer.js gives the whole of both lists or nothing, so every page makes the same table. The slug: the list's own
+    // name (a stage's plate: its first line, before a comma); a clash: the game's name after it. Also read, for a line
+    // from an older page or one with a list missing: any item's "base-game" and a stage's full-name slug (aliases), and an
+    // unknown slug ending in a game's name without it (mentGet))
     const mk = (list, nameOf) => {
-      const by = new Map();
+      // (the games' names known even with their list missing: viewer.js RADIO_GAMES)
+      const by = new Map(), alias = new Map(), games = new Set(['mbaacc', 'act-cadenza', 're-act', 'melty-blood']);
       for (const it of list) {
-        const base = mentSlug(nameOf(it));
+        const base = mentSlug(it.slugName || nameOf(it)), gs = mentSlug(it.game || '');
         if (!base) continue;
         let sl = base, n = 2;
-        if (by.has(sl)) sl = `${base}-${mentSlug(it.game)}`;
+        if (by.has(sl) && gs) sl = `${base}-${gs}`;
         while (by.has(sl)) sl = `${base}-${n++}`;
-        by.set(sl, { ...it, slug: sl, name: nameOf(it) });
+        const x = { ...it, slug: sl, name: nameOf(it) };
+        by.set(sl, x);
+        if (gs) { games.add(gs); if (!alias.has(`${base}-${gs}`)) alias.set(`${base}-${gs}`, x); }
+        const full = mentSlug(nameOf(it));
+        if (full && full !== base && !alias.has(full)) alias.set(full, x);
       }
-      return by;
+      for (const k of by.keys()) alias.delete(k);
+      return { by, alias, games: [...games].sort((a, b) => b.length - a.length) };
     };
     return (mentC = { v: c.v, song: mk(c.songs, x => x.title), stage: mk(c.stages, x => x.name) });
+  }
+  function mentGet(cat, kind, slug) {
+    const t = cat && cat[kind];
+    if (!t) return null;
+    slug = String(slug).toLowerCase();
+    const it = t.by.get(slug) || t.alias.get(slug);
+    if (it) return it;
+    for (const g of t.games) if (slug.endsWith('-' + g)) { const b = slug.slice(0, -g.length - 1); return t.by.get(b) || t.alias.get(b) || null; }
+    return null;
   }
   // (a "!" or "^" after a space, an opening bracket or the start; not inside a word, a URL, :emote: or ~wave~)
   const MENT_RE = /(^|[\s(\[{"'])([!^])([a-z0-9]+(?:-[a-z0-9]+)*)(?![\p{L}\p{N}_-])/giu;
@@ -157,7 +176,7 @@
     const out = [];
     let i = 0;
     for (const m of t.matchAll(MENT_RE)) {
-      const kind = m[2] === '!' ? 'song' : 'stage', it = cat[kind].get(m[3].toLowerCase());
+      const kind = m[2] === '!' ? 'song' : 'stage', it = mentGet(cat, kind, m[3]);
       if (!it) continue;
       const at = m.index + m[1].length;
       if (at > i) out.push(t.slice(i, at));
@@ -166,12 +185,19 @@
     if (i < t.length) out.push(t.slice(i));
     return out;
   }
+  // a line carrying a song or stage chip: it stays in the chat, never a comment on the picture (user 2026-11-02)
+  const mentLine = l => !!l && mentSplit(String(l.pic != null ? l.pic : l.text || '')).some(x => typeof x !== 'string');
   const mentLabel = x => x.kind === 'song' ? `♪ ${x.it.name}` : x.it.name;
+  // the game a song / stage is from, as a small tag (user 2026-11-02): the lists' own game names (viewer.js mentionCatalog:
+  // MBAACC's panel, RADIO_GAMES for the older games' radio); one not in this table shows its name as given
+  const GAME_TAG = { MBAACC: 'AACC', 'Act Cadenza': 'AC', 'Re-ACT': 'MBR', 'Melty Blood': 'MB' };
+  const gameTag = g => g ? GAME_TAG[g] || String(g).slice(0, 8) : '';
   // the picture's (and a plain copy's) text: chips as their names
   const mentPlain = t => mentSplit(t).map(x => typeof x === 'string' ? x : mentLabel(x)).join('');
   function mentChip(x) {
     const s = document.createElement('span');
     s.className = `cmn ${x.kind}`; s.dataset.k = x.kind; s.dataset.s = x.it.slug; s.tabIndex = 0; s.setAttribute('role', 'button');
+    if (gameTag(x.it.game)) s.dataset.g = gameTag(x.it.game);  // (drawn by CSS: the chip's text stays its name)
     s.title = `${x.kind}: ${x.it.name}${x.it.game ? ` (${x.it.game})` : ''}, tap to ${x.kind === 'song' ? 'play it' : 'see it'} on your picture`;
     if (x.kind === 'stage' && x.it.thumb) {
       const im = document.createElement('img'); im.alt = ''; s.append(im);
@@ -184,7 +210,7 @@
   // a text's chips, and its other pieces as emotes (log lines) or plain text (reply quotes)
   const mentionNodes = (t, plain) => mentSplit(t).flatMap(x => typeof x !== 'string' ? [mentChip(x)] : plain ? [document.createTextNode(x)] : emoteNodes(x));
   function mentTap(el) {
-    const cat = mentCat(), it = cat && cat[el.dataset.k] && cat[el.dataset.k].get(el.dataset.s), A = window.mbaaChatApi;
+    const cat = mentCat(), it = mentGet(cat, el.dataset.k, el.dataset.s), A = window.mbaaChatApi;
     if (it && A && A.mentionApply) A.mentionApply(el.dataset.k, it);
   }
   // (the lists load after the chat: lines drawn before as text are drawn again once their names are known)
@@ -287,11 +313,14 @@
   const LEET = { '0': 'o', '1': 'i', '!': 'i', '|': 'i', '3': 'e', '4': 'a', '@': 'a', '5': 's', '$': 's', '7': 't', '+': 't', '9': 'g', '6': 'g', '8': 'b' };
   const fold = t => String(t || '').normalize('NFKD').replace(/[\u0300-\u036f]/g, '').toLowerCase().replace(/[0-9!|@$+]/g, c => LEET[c] || c);
   const pat = w => w.split('').map(c => `${c}+`).join('');
+  // (a whole-word entry's doubled letter matches exactly two: "coooon" is "con" stretched, gaku 2026-11-02 was struck for
+  // "COOOOOOON STOOOOP"; "coon" / "coonnn" still match)
+  const patW = w => w.replace(/(.)\1|./g, m => m.length === 2 ? m : `${m}+`);
   const SUB = ['nigger', 'nigga', 'niglet', 'negroid', 'faggot', 'fagot', 'retard', 'tranny', 'trannie', 'kike', 'wetback', 'beaner',
     'chingchong', 'shemale', 'hitler', 'siegheil', 'gaschamber', 'killallblacks', 'killalljews', 'pedophile', 'paedophile']
     .map(w => new RegExp(pat(w)));
   const WORD = ['fag', 'fags', 'spic', 'spics', 'chink', 'chinks', 'gook', 'gooks', 'coon', 'coons', 'dyke', 'dykes', 'paki',
-    'pakis', 'kys', 'nazi', 'nazis', 'rape', 'raped', 'rapist', 'jigaboo', 'zipperhead'].map(w => new RegExp(`^${pat(w)}$`));
+    'pakis', 'kys', 'nazi', 'nazis', 'rape', 'raped', 'rapist', 'jigaboo', 'zipperhead'].map(w => new RegExp(`^${patW(w)}$`));
   function nameOk(name) {
     const f = fold(name), letters = f.replace(/[^a-z]/g, '');
     if (SUB.some(r => r.test(letters))) return false;
@@ -384,8 +413,15 @@
   #chatlog li.sys { color: var(--faint); font-size: 11px; font-style: italic; }
   #chatlog li.hist { opacity: .72; }
   #chatlog .cico { width: 18px; height: 24px; flex: none; border-radius: 4px; background: #ffffff0a; }
-  #chatlog .cnick { font-weight: 700; margin-right: 4px; }
-  #chatlog .ctime { color: var(--faint); font-size: 10px; margin-right: 4px; white-space: nowrap; }
+  #chatlog .cnick { font-weight: 700; }  /* (real spaces around the name, not margins: a copied line reads "time name message", gaku 2026-11-02) */
+  #chatlog .ctime { color: var(--faint); font-size: 10px; white-space: nowrap; }
+  #chatlog .cnick[data-act], #chatlog .cacttext { font-style: italic; }
+  #chatsec .ceprev { display: flex; align-items: center; gap: 6px; font-size: 13px; color: var(--fg); padding: 2px 4px 2px 8px; min-height: 30px;
+                    border-left: 2px solid var(--accent, #e04a5a); background: #ffffff08; border-radius: 0 6px 6px 0; overflow: hidden; }
+  #chatsec .ceprev[hidden] { display: none; }
+  #chatsec .ceprev > small { flex: none; font-size: 10px; color: var(--faint); }
+  #chatsec .ceprev > span { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  #chatsec .ceprev img.cemote { height: 26px; width: auto; vertical-align: middle; }
   #chatsec .cform { display: flex; gap: 6px; }
   #chatsec .cform input { flex: 1 1 auto; min-width: 0; background: var(--raise); color: var(--fg); border: 1px solid var(--line);
                           border-radius: 8px; padding: 5px 8px; font: inherit; }
@@ -518,6 +554,8 @@
   #chatsec .cemo:focus-visible { outline: 2px solid var(--accent2, #8ab4ff); outline-offset: -2px; }
   #chatsec .epop, #chatsec .mpop { position: absolute; z-index: 6; left: 0; right: 0; bottom: calc(100% + 4px); background: var(--raise, #1c1c28);
     border: 1px solid var(--line); border-radius: 10px; box-shadow: 0 8px 28px #000a; box-sizing: border-box; }
+  /* (a phone's live bar above the chat is z-index 8: a tall picker / popup reaching it goes over it, not under) */
+  body.mob #chatsec .epop, body.mob #chatsec .mpop { z-index: 9; }
   #chatsec .epop[hidden], #chatsec .mpop[hidden], #chatsec .creply[hidden] { display: none; }
   #chatsec .epop { display: flex; flex-direction: column; padding: 8px; gap: 6px; max-height: 380px; }
   #chatsec .epop input.esearch { width: 100%; box-sizing: border-box; background: var(--panel); color: var(--fg); border: 1px solid var(--line);
@@ -809,6 +847,8 @@
     background: #8ab4ff26; color: var(--fg); cursor: pointer; line-height: 1.45; vertical-align: baseline; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   #chatsec .cmn:hover { background: #8ab4ff40; }
   #chatsec .cmn.stage { background: #e0b04a26; }
+  #chatsec .cmn[data-g]::after, #chatsec .mpop .mi small[data-g]::before { content: '[' attr(data-g) ']'; font-size: 0.72em; font-weight: 600; opacity: 0.7; letter-spacing: 0.02em; }
+  #chatsec .mpop .mi small[data-g]::before { margin-right: 4px; }
   #chatsec .cmn.stage:hover { background: #e0b04a40; }
   #chatsec .cmn img { height: 1.15em; width: auto; border-radius: 2px; }
   #chatsec .cmn img:not([src]) { display: none; }
@@ -833,6 +873,10 @@
   #chatsec .og-grad .cnick.own, #chatsec .og-grad .mynick.own { background-image: var(--og-g); background-size: 200% 100%; -webkit-background-clip: text; background-clip: text;
                                  -webkit-text-fill-color: transparent; text-shadow: none; animation: ogslide var(--og-p, 4s) linear infinite; }
   #chatsec .og-grad.og-glow .cnick.own, #chatsec .og-grad.og-glow .mynick.own { filter: drop-shadow(0 0 calc(var(--og-r) / 2) var(--og-c)); }
+  #chatsec .og-sh .cnick.own, #chatsec .og-sh .mynick.own { text-shadow: var(--os-ts); }
+  #chatsec .og-sh.og-glow .cnick.own, #chatsec .og-sh.og-glow .mynick.own { text-shadow: var(--os-ts), 0 0 var(--og-r) var(--og-c), 0 0 var(--og-r2) var(--og-c); }
+  #chatsec .og-sh.og-grad .cnick.own, #chatsec .og-sh.og-grad .mynick.own { text-shadow: none; filter: var(--os-f); }
+  #chatsec .og-sh.og-grad.og-glow .cnick.own, #chatsec .og-sh.og-grad.og-glow .mynick.own { filter: var(--os-f) drop-shadow(0 0 calc(var(--og-r) / 2) var(--og-c)); }
   @keyframes ogslide { to { background-position: 200% 0; } }
   /* (inline, wrapping like text: a long ~run~ made the log scroll sideways, gaku 2026-11-02; a word kept whole (.ow) up to
      24 characters, a longer one wraps anywhere) */
@@ -930,6 +974,7 @@
     </div>
     <div class="cauth" hidden></div>
     <div class="creply" hidden><span></span><button type="button" title="cancel the reply" aria-label="cancel the reply">✕</button></div>
+    <div class="ceprev" hidden aria-live="polite"><small>preview</small><span></span></div>
     <form class="cform" autocomplete="off"><input id="chatcmd" type="text" maxlength="60" spellcheck="false" placeholder="commands"
       title="Niconico commands for your comments on the picture, e.g. ue / shita (top / bottom, 3 s), big / small, a colour (red, pink, orange, yellow, green, cyan, blue, purple, white, black, white2, red2, …, or #rrggbb). Empty: scrolls, medium, your colour."><span class="cinw"><input id="chatin" type="text" maxlength="${MAXLEN}" placeholder="say something…  (!song ^stage)" title="say something: :emoji, @name, !song (e.g. !sunset) or ^stage (e.g. ^gtable): a song or stage shows as a chip anyone can tap to play it on their own picture" enterkeyhint="send" aria-autocomplete="list"><button type="button" class="cemo" title="emoji" aria-label="emoji" aria-haspopup="dialog" aria-expanded="false"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><circle cx="12" cy="12" r="9"/><path d="M8.5 14.5a4.5 4.5 0 0 0 7 0"/><circle cx="9" cy="10" r=".6" fill="currentColor"/><circle cx="15" cy="10" r=".6" fill="currentColor"/></svg></button><button type="button" class="cnico" title="how your comments look on the picture (position, size, font, colour)" aria-label="comment style" aria-haspopup="dialog" aria-expanded="false">Aa</button></span>
       <button type="submit" class="txt">send</button>
@@ -1153,7 +1198,7 @@
     const n = $('.mynick'); if (!n) return;
     const st = irc.account ? styleOf(irc.account) : null;
     n.classList.toggle('own', !!st);
-    if (st) styleApply(n.parentElement, st); else n.parentElement.classList.remove('og-glow', 'og-grad');
+    if (st) styleApply(n.parentElement, st); else n.parentElement.classList.remove('og-glow', 'og-grad', 'og-sh');
   }
   // ---- name styles (the site owner and the mods) ----
   // A styler styles their name (a glow; an animated 2-3 colour gradient) and may write ~text~ (each character on a sine
@@ -1170,7 +1215,7 @@
   // and only the newest OWN_LIVE styled lines animate (ownCap).
   // The picture's comments are drawn natively (viewer_ov_style): the gradient (when no colour command is given), the
   // glow and the ~wave~ letters, the picture's text without the "~" marks.
-  const BOT_ACCT = 'meltybot', OWN_LIVE = 30;
+  const BOT_ACCT = 'meltybot', OWN_LIVE = 4;
   let ownAcct = null, ownStyle = {}, stylesSeen = false, stylesPart = null;
   const styles = new Map();  // key(account) -> {acct, st}
   const ownerMe = () => !!(irc.account && ownAcct && key(irc.account) === key(ownAcct));
@@ -1203,19 +1248,30 @@
       if ((mm = /^glow=([0-9a-f]{6})\.(\d{1,2})$/.exec(part))) out.glow = { c: `#${mm[1]}`, r: clampI(mm[2], 1, 12) };
       else if ((mm = /^grad=([0-9a-f]{6})-([0-9a-f]{6})(?:-([0-9a-f]{6}))?\.(\d{1,2})$/.exec(part))) out.grad = { cs: [mm[1], mm[2], mm[3]].filter(Boolean).map(c => `#${c}`), s: clampI(mm[4], 1, 10) };
       else if ((mm = /^wave=(\d{1,2})\.(\d{1,2})$/.exec(part))) out.wave = { a: clampI(mm[1], 1, 10), s: clampI(mm[2], 1, 10) };
+      else if ((mm = /^shadow=([0-9a-f]{6})\.(\d{1,2})\.([od])$/.exec(part))) out.shadow = { c: `#${mm[1]}`, s: clampI(mm[2], 1, 4), k: mm[3] };
       else return null;
     }
     return out;
   }
   const styleSpec = st => [st.glow && `glow=${st.glow.c.slice(1)}.${st.glow.r}`, st.grad && `grad=${st.grad.cs.map(c => c.slice(1)).join('-')}.${st.grad.s}`,
-    st.wave && `wave=${st.wave.a}.${st.wave.s}`].filter(Boolean).join(',');
+    st.wave && `wave=${st.wave.a}.${st.wave.s}`, st.shadow && `shadow=${st.shadow.c.slice(1)}.${st.shadow.s}.${st.shadow.k}`].filter(Boolean).join(',');
+  // a shadow part's CSS (the name in the log; user 2026-11-02): o an outline all round (8 copies at s px, no blur), d a
+  // drop shadow s px down-right; as text-shadow and, for a gradient name (clipped text: a text-shadow shows through
+  // it), as drop-shadow filters (4 chained: a square dilation of s px)
+  const shadowCss = sh => {
+    const s = sh.s, c = sh.c, d = +(s * Math.SQRT1_2).toFixed(2);
+    if (sh.k === 'd') return { ts: `${s}px ${s}px 0 ${c}`, f: `drop-shadow(${s}px ${s}px 0 ${c})` };
+    return { ts: [[s, 0], [-s, 0], [0, s], [0, -s], [d, d], [-d, d], [d, -d], [-d, -d]].map(([x, y]) => `${x}px ${y}px 0 ${c}`).join(', '),
+      f: [[s, 0], [-s, 0], [0, s], [0, -s]].map(([x, y]) => `drop-shadow(${x}px ${y}px 0 ${c})`).join(' ') };
+  };
   // the wave's numbers (a style without a wave part waves at the default): amplitude px, half period s
   const waveOf = st => { const w = st.wave || { a: 4, s: 5 }; return { a: w.a, dur: 2.2 - w.s * 0.18 }; };
   // (on the element holding a styled line or name: the line, my name, or the panel's preview; values already numbers /
   // #rrggbb)
   function styleApply(el, st) {
     const S = el.style, w = waveOf(st), dur = w.dur;
-    el.classList.toggle('og-glow', !!st.glow); el.classList.toggle('og-grad', !!st.grad);
+    el.classList.toggle('og-glow', !!st.glow); el.classList.toggle('og-grad', !!st.grad); el.classList.toggle('og-sh', !!st.shadow);
+    if (st.shadow) { const x = shadowCss(st.shadow); S.setProperty('--os-ts', x.ts); S.setProperty('--os-f', x.f); }
     if (st.glow) { S.setProperty('--og-c', st.glow.c); S.setProperty('--og-r', `${st.glow.r}px`); S.setProperty('--og-r2', `${st.glow.r * 2}px`); }
     if (st.grad) { const cs = st.grad.cs; S.setProperty('--og-g', `linear-gradient(90deg, ${[...cs, cs[0]].join(', ')})`); S.setProperty('--og-p', `${(16 / st.grad.s).toFixed(2)}s`); }
     // (alternate + ease-in-out: a half period per run; phase 0.6 rad a character)
@@ -1258,10 +1314,22 @@
     stylesChanged();
   }
   let ownPanelHook = () => {}, styleAdmin = () => {};
-  // only the newest OWN_LIVE styled lines in the log animate
-  function ownCap() {
+  // only the newest OWN_LIVE styled lines in the log animate, and only while on screen (zapoke 2026-11-02: the wavy
+  // text lagged his page: 30 lines x every letter = ~1350 running animations, the gradient names repainting each frame,
+  // on screen or not); an IntersectionObserver over the log says which lines are in view
+  const ownOff = new WeakSet();  // (lines the observer reported off screen; a line not reported yet counts as on)
+  const ownIO = 'IntersectionObserver' in window ? new IntersectionObserver(es => {
+    for (const e of es) { if (e.isIntersecting) ownOff.delete(e.target); else ownOff.add(e.target); }
+    ownCapNow();
+  }, { root: logEl }) : null;
+  const ownWatched = new WeakSet();
+  function ownCapNow() {
     const a = logEl.querySelectorAll('li.oown');
-    for (let i = 0; i < a.length; i++) a[i].classList.toggle('ostill', i < a.length - OWN_LIVE);
+    for (let i = 0; i < a.length; i++) a[i].classList.toggle('ostill', i < a.length - OWN_LIVE || ownOff.has(a[i]));
+  }
+  function ownCap() {
+    if (ownIO) for (const li of logEl.querySelectorAll('li.oown')) if (!ownWatched.has(li)) { ownWatched.add(li); ownIO.observe(li); }
+    ownCapNow();
   }
   // ~text~ (a styled line): one span per character (grapheme), its phase as --i
   const WAVE_RE = /~([^~\s](?:[^~]{0,78}[^~\s])?)~/g;
@@ -1582,10 +1650,14 @@
         const go = e => { e.stopPropagation(); if (c && key(c.name) !== key(shown)) return; say(l.text.trim()); };
         j.onclick = go; j.onkeydown = e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); go(e); } };
       }
-      body.append(tm, nk, j);
+      body.append(tm, ' ', nk, ' ', j);
     } else {
       if (!l.action && emoteOnly(text)) body.classList.add('ejumbo');  // (emotes only: big)
-      body.append(tm, nk, ...mdNodes(text, own ? seg => waveNodes(seg, x => richText(emoRuns(x), l)) : seg => richText(emoRuns(seg), l)));
+      const parts = mdNodes(text, own ? seg => waveNodes(seg, x => richText(emoRuns(x), l)) : seg => richText(emoRuns(seg), l));
+      if (l.action) {  // ("/me": "* Name does something", IRC style: italic, in the sender's colour)
+        const at = document.createElement('span'); at.className = 'cacttext'; inkSet(at, l.color); at.append(...parts);
+        li.classList.add('caction'); body.append(tm, ' ', nk, ' ', at);
+      } else body.append(tm, ' ', nk, ' ', ...parts);
     }
     for (const sl of linksOf(text).slice(0, 2)) body.append(linkCard(sl));
     if (opLine(l)) for (const u of extLinksOf(text).slice(0, 2)) { const e = extEmbed(u); if (e) body.append(e); }
@@ -1946,6 +2018,7 @@
   function render() {
     const c = chan(shown);
     c.unread = 0;
+    if (ownIO) ownIO.disconnect();  // (the log's lines replaced: ownCap observes the new ones)
     // (the unread divider: before the first line from someone else said after the read point, while the viewer was away)
     const els = [];
     let div = false;
@@ -1998,7 +2071,7 @@
       const hl = l.head && l.head.msgid && logEl.querySelector(`li[data-msgid="${CSS.escape(l.head.msgid)}"]`);
       if (l.head && hl) hl.replaceWith(lineEl(l.head));  // (a combo row grows in place)
       else if (l.head) renderSoon();
-      else { logEl.append(lineEl(l)); if (logEl.children.length > MAXLINES) logEl.firstChild.remove(); if (lineStyle(l)) ownCap(); }
+      else { logEl.append(lineEl(l)); if (logEl.children.length > MAXLINES) { if (ownIO) ownIO.unobserve(logEl.firstChild); logEl.firstChild.remove(); } if (lineStyle(l)) ownCap(); }
     }
     if (stick || l.self) { logEl.scrollTop = logEl.scrollHeight; logStick = true; }
     if (!l.hist) { markRead(c); badge(); }
@@ -2424,6 +2497,23 @@
     rpop.style.top = `${a.top - 6 - m.height >= 8 ? a.top - 6 - m.height : a.bottom + 6}px`;
   }
   function reactClose() { rpop.hidden = true; rpFor = null; }
+  // A pick never takes the input's focus (user 2026-11-02: "clicking an emote unfocuses the chat input"): the pickers'
+  // presses are default-prevented (the emoji picker, the :code: / @ / ! / ^ popup, the react menu, a line's react / reply
+  // buttons and its reaction chips while the input has the focus), and an inserting pick gives the focus back with the
+  // caret after the inserted text: always on a desktop, on a touch screen only when the input had it (inputKeep: a phone's
+  // keyboard never pops up for someone who was not typing)
+  let inputKeep = false;
+  input.addEventListener('focus', () => { inputKeep = true; });
+  // (a blur to nothing, e.g. a phone's keyboard put away: no longer typing)
+  input.addEventListener('blur', e => { if (!e.relatedTarget) inputKeep = false; });
+  document.addEventListener('focusin', e => { if (e.target !== input && !(e.target.closest && e.target.closest('#chatsec .epop, #chatsec .mpop, .crpop'))) inputKeep = false; });
+  rpop.addEventListener('pointerdown', e => e.preventDefault());
+  logEl.addEventListener('pointerdown', e => { if (document.activeElement === input && e.target.closest && e.target.closest('.cact button, .creacts button')) e.preventDefault(); });
+  function inputBack(caret, always) {
+    if (!(inputKeep || (always && !matchMedia('(hover: none)').matches))) return;
+    if (document.activeElement !== input) input.focus({ preventScroll: true });
+    if (caret != null) input.setSelectionRange(caret, caret);
+  }
   document.addEventListener('pointerdown', e => { if (!rpop.hidden && !rpop.contains(e.target) && !e.target.closest('.creact')) reactClose(); });
   document.addEventListener('keydown', e => { if (e.key === 'Escape' && !rpop.hidden) reactClose(); });
   for (const ev of ['wheel', 'touchmove']) logEl.addEventListener(ev, () => { if (!rpop.hidden) reactClose(); }, { passive: true });
@@ -2605,7 +2695,7 @@
     <div class="otop"><div class="ohead"><h3>My style <small>(everyone sees it)</small></h3><button type="button" class="ox" aria-label="close" title="close">✕</button></div>
       <div class="oprev" aria-label="preview: how everyone sees your name and a ~wave~"><span class="cnick own"></span><span class="otxt"></span></div></div>
     <fieldset class="osec" data-s="col"><legend>Name colour</legend>
-      <p class="ohint">Your name in the chat and your comments on the picture, in exactly this colour (a dark one gets a light halo so it reads).</p>
+      <p class="ohint">Your name in the chat and your comments on the picture, in exactly this colour, bare (no outline).</p>
       <div class="orow"><span class="osws"></span><button type="button" class="bare" data-k="nc" aria-label="name colour: any colour"></button></div></fieldset>
     <fieldset class="osec osty" data-s="glow"><legend><label><input type="checkbox" data-k="glow"> Glow <span class="oon"></span></label></legend>
       <p class="ohint">A soft light around your name and your comments on the picture.</p>
@@ -2621,10 +2711,15 @@
       <p class="ohint">Put text between tildes in a message, <code>~like this~</code>, and those letters wave, in the chat and on the picture. Always on, your messages only.</p>
       <div class="orow"><span class="olbl">height</span><input type="range" data-k="wa" min="1" max="10" step="1" aria-label="wave height"><output data-o="wa"></output></div>
       <div class="orow"><span class="olbl">speed</span><input type="range" data-k="ws" min="1" max="10" step="1" aria-label="wave speed"><output data-o="ws"></output></div></fieldset>
+    <fieldset class="osec osty" data-s="shadow"><legend><label><input type="checkbox" data-k="sh"> Outline / shadow <span class="oon"></span></label></legend>
+      <p class="ohint">An outline all around, or a drop shadow down-right, on your name and your comments on the picture.</p>
+      <div class="orow"><span class="olbl">colour</span><button type="button" class="bare" data-k="shc" aria-label="outline / shadow colour"></button></div>
+      <div class="orow"><span class="olbl">strength</span><input type="range" data-k="shs" min="1" max="4" step="1" aria-label="outline / shadow strength"><output data-o="shs"></output></div>
+      <div class="orow"><span class="olbl">kind</span><label><input type="radio" name="oshk" data-k="sho" value="o"> outline</label><label><input type="radio" name="oshk" data-k="shd" value="d"> drop shadow</label></div></fieldset>
     <div class="orow ofoot"><button type="button" class="osave osty">save for everyone</button><button type="button" class="oclose">close</button><span class="ostat osty" role="status"></span></div>`;
   $('.cform').append(oPan);
   const oIn = k => oPan.querySelector(`[data-k="${k}"]`);
-  colourField(oIn('gc'), 'glow colour'); colourField(oIn('c1'), 'gradient colour 1'); colourField(oIn('c2'), 'gradient colour 2'); colourField(oIn('c3'), 'gradient colour 3');
+  colourField(oIn('gc'), 'glow colour'); colourField(oIn('c1'), 'gradient colour 1'); colourField(oIn('c2'), 'gradient colour 2'); colourField(oIn('c3'), 'gradient colour 3'); colourField(oIn('shc'), 'outline / shadow colour');
   colourField(oIn('nc'), 'your name colour', prof.color);
   for (const c of PRESETS) {
     const b = document.createElement('button');
@@ -2642,6 +2737,8 @@
     oIn('glow').checked = !!st.glow; oIn('gc').value = g.c; oIn('gr').value = String(g.r);
     oIn('grad').checked = !!st.grad; oIn('c1').value = gr.cs[0]; oIn('c2').value = gr.cs[1]; oIn('c3on').checked = gr.cs.length > 2; oIn('c3').value = gr.cs[2] || '#40e0ff';
     oIn('gs').value = String(gr.s); oIn('wa').value = String(w.a); oIn('ws').value = String(w.s);
+    const sh = st.shadow || { c: '#000000', s: 2, k: 'o' };  // (default off)
+    oIn('sh').checked = !!st.shadow; oIn('shc').value = sh.c; oIn('shs').value = String(sh.s); oIn('sho').checked = sh.k !== 'd'; oIn('shd').checked = sh.k === 'd';
   }
   function oRead() {
     if (!mayStyle()) return {};
@@ -2649,6 +2746,7 @@
     if (glowMe() && oIn('glow').checked) st.glow = { c: col('gc'), r: clampI(oIn('gr').value, 1, 12) };
     if (oIn('grad').checked) st.grad = { cs: [col('c1'), col('c2'), ...(oIn('c3on').checked ? [col('c3')] : [])], s: clampI(oIn('gs').value, 1, 10) };
     st.wave = { a: clampI(oIn('wa').value, 1, 10), s: clampI(oIn('ws').value, 1, 10) };
+    if (oIn('sh').checked) st.shadow = { c: col('shc'), s: clampI(oIn('shs').value, 1, 4), k: oIn('shd').checked ? 'd' : 'o' };
     return styleParse(styleSpec(st)) || {};
   }
   // (the saved state: the style every page shows now, the bot's last word; the panel compares its form with it)
@@ -2674,6 +2772,7 @@
     oPan.querySelectorAll('.osws .sw').forEach(b => b.classList.toggle('on', b.dataset.c.toLowerCase() === exactHex(prof.color)));
     oPan.querySelector('[data-s="glow"]').classList.toggle('off', !st.glow);
     oPan.querySelector('[data-s="grad"]').classList.toggle('off', !st.grad);
+    oPan.querySelector('[data-s="shadow"]').classList.toggle('off', !st.shadow);
     oPan.querySelectorAll('.oon').forEach(o => { o.textContent = o.closest('.osec').classList.contains('off') ? 'off' : 'on'; });
     const cs = [oIn('c1').value, oIn('c2').value, ...(oIn('c3on').checked ? [oIn('c3').value] : [])], strip = oPan.querySelector('.ostrip');
     strip.style.backgroundImage = `linear-gradient(90deg, ${[...cs, cs[0]].join(', ')})`;
@@ -2681,6 +2780,7 @@
     oIn('c3').style.opacity = oIn('c3on').checked ? '' : '.4';
     const out = (k, t) => { oPan.querySelector(`[data-o="${k}"]`).textContent = t; };
     out('gr', `${oIn('gr').value} px`); out('gs', `${oIn('gs').value} · ${(16 / clampI(oIn('gs').value, 1, 10)).toFixed(1)} s loop`);
+    out('shs', `${oIn('shs').value} px`);
     out('wa', `${oIn('wa').value} px`); out('ws', `${oIn('ws').value} of 10`);
     pv.querySelector('.cnick').classList.toggle('own', mayStyle());
     pv.querySelector('.cnick').textContent = irc.account ? disp(shownNick(irc.account, irc.account, auth.name)) : disp(prof.nick);
@@ -2694,7 +2794,10 @@
     if (e.target === oIn('c3')) oIn('c3on').checked = true;
     oPreview(); oStat();
   });
-  oPan.addEventListener('change', e => { if (e.target.type === 'checkbox') { oPreview(); oStat(); } });
+  oPan.addEventListener('change', e => {
+    if (e.target.type === 'radio' && e.target.name === 'oshk') oIn('sh').checked = true;  // (picking a kind turns the shadow on)
+    if (e.target.type === 'checkbox' || e.target.type === 'radio') { oPreview(); oStat(); }
+  });
   function oOpen(on) {
     oPan.hidden = !on;
     if (!on) return;
@@ -2727,7 +2830,7 @@
   // Geometry is Niconico's 1920 x 1080 stage (niconicomments' html5 config): a 16:9 box over the picture, scaled to it.
   // A naka comment enters at x 1725 (draw padding 195 + range 1530) and moves (1530 + 0.95 w) units per 4 s; ue / shita
   // stay 3 s, centred (shrunk to fit 1530, or 1920 with "full"). Sizes: html5 font 18 / 27 / 39 on the 384-high stage
-  // (x 1920/683), rows of 1080 / 21, 13.1, 8.4 lines. Outline: black at 0.4 (white at 0.5 for dark text: darkHex).
+  // (x 1920/683), rows of 1080 / 21, 13.1, 8.4 lines. No outline (user 2026-11-02: bare colour; a styler's shadow part).
   // Rows (dmPlace): Niconico's rule, the topmost row where the comment meets no other on screen with it; none free: a
   // row picked at random (seeded by the comment, so a relayout gives the same). spread: a comment holds its row that many
   // seconds longer. Placement depends only on the comments and their times, so the timeline lays out the same after a seek.
@@ -3062,9 +3165,10 @@
     if (c.gM === M) { M._viewer_ov_move(c.gid, c.t, dmX(c, 0), c.loc === 'naka' ? -c.v : 0, c.y); c.gy = c.y; c.gt = c.t; return; }
     if (!c.gid) c.gid = glov.next++;
     if (!c.cps) { const r = dmCps(c.text, c.textW, c.face || 0); c.cps = r.cps; c.wmask = r.mask; }
-    // (the exact colour; dark text gets a light outline, Niconico's white stroke for black, a little stronger)
+    // (the exact colour, bare: no outline, no shadow, for every colour (user 2026-11-02: "we're not worried about
+    // contrast"); a styler's shadow part adds one, glovStyle)
     M._viewer_ov_add(c.gid, glovSend(M, c.cps), clock, c.t, dmX(c, 0), c.loc === 'naka' ? -c.v : 0, c.y, c.scale, c.life,
-      c.px, glovRgba(c.col), darkHex(c.col) ? 0xFFFFFF80 : 0x00000066);
+      c.px, glovRgba(c.col), 0x00000000);
     if (c.sty && M._viewer_ov_style) glovStyle(M, c);
     if (c.face && M._viewer_ov_face) { M._viewer_ov_face(c.gid, c.face); glovFace(c.face); }
     c.gM = M; c.gy = c.y; c.gt = c.t;
@@ -3073,14 +3177,28 @@
   // its ~15 px: glow radius r * px / 18 (its colour, nearly opaque, in place of the outline); the gradient's colours
   // and its loop (16 / speed s); the wave's amplitude a * px / 15, speed pi / half period, 0.6 rad a letter (none
   // under prefers-reduced-motion, as the chat)
+  // (the chat log's font size, px: a ~wave~ letter's em there; cached, read again on a resize)
+  let logEmV = 0;
+  const logEm = () => {
+    if (logEmV) return logEmV;
+    const b = logEl.querySelector('.cbody'), v = parseFloat(getComputedStyle(b || logEl).fontSize) || 15;
+    if (b) logEmV = v;
+    return v;
+  };
+  window.addEventListener('resize', () => { logEmV = 0; });
   const reducedMotion = () => !!(window.matchMedia && matchMedia('(prefers-reduced-motion: reduce)').matches);
   function glovStyle(M, c) {
     const st = c.sty, w = waveOf(st), still = reducedMotion();
     const glow = st.glow ? ((glovRgba(st.glow.c) & 0xFFFFFF00) | 0xE6) >>> 0 : 0;
     const g = c.grad ? st.grad.cs.map(glovRgba) : [];
     const n = c.wmask && !still ? glovSend(M, c.wmask) : 0;
+    // (the wave's amplitude as the same fraction of the em as in the chat: a px of the log's font size; overlay_gl
+    // waveY draws the chat's ease-in-out alternate curve, its half period and phase step)
     M._viewer_ov_style(c.gid, glow, st.glow ? st.glow.r * c.px / 18 : 0, g.length, g[0] || 0, g[1] || 0, g[2] || 0,
-      c.grad ? (still ? 0 : 16 / st.grad.s) : 0, n ? w.a * c.px / 15 : 0, Math.PI / w.dur, 0.6, n);
+      c.grad ? (still ? 0 : 16 / st.grad.s) : 0, n ? w.a * c.px / logEm() : 0, Math.PI / w.dur, 0.6, n);
+    // (the shadow: s px at the log's font size (stage units s * px / em), drawn s * (that on screen / s)^0.3 wide, a
+    // gentle scale: s=3 ~5 px at 1080p; nearly opaque)
+    if (st.shadow && M._viewer_ov_shadow) M._viewer_ov_shadow(c.gid, ((glovRgba(st.shadow.c) & 0xFFFFFF00) | 0xE6) >>> 0, st.shadow.s * c.px / logEm(), st.shadow.k === 'd' ? 1 : 0, st.shadow.s);
   }
   window.mbaaOvSync = () => { const M = glovReady(); if (M) M._viewer_ov_on(overOn.checked && !over.hidden ? 1 : 0); };
   function glovDel(c) { if (c.gM && c.gM === glov.M) c.gM._viewer_ov_remove(c.gid); c.gM = null; }
@@ -3180,6 +3298,11 @@
       // (the live comments on the picture with it: put again with its new tile (an animated one's strip, once decoded))
       const M = glov.M;
       if (M) for (const c of nico.list) if (c.gM === M && names.some(n => c.text.includes(n))) { c.cps = null; c.gM = null; glovPut(c, 0); }
+      // (and a swell riding with it: its tile made again, the strip of its frames looping (it stayed the first frame:
+      // user 2026-11-02, "giga emotes play once then stop"); its ride, size and fade kept: swellLayout)
+      let sw = false;
+      if (M) for (const s of swells.values()) if (s.on && s.M === M && names.includes(s.e)) { swellPut(M, s, swellGeom()); s.dsTo = 0; sw = true; }  // (dsTo 0: its size in the new raster's units, no pulse
+      if (sw) swellLayout();
     }, 250);
   }
   const nico = dmStage('dmlive');
@@ -3194,6 +3317,7 @@
     if (!overOn.checked || document.visibilityState === 'hidden' || l.gone) return;
     pin();
     { const t0 = OVP && performance.now(); swellFeed(l); if (OVP) ovp('swellFeed', t0); }
+    if (mentLine(l)) return;  // (a !song / ^stage chip: chat only)
     if (!dmFit(nico)) return;
     const now = wallNow(), spread = spreadOf();
     for (const a of [...nico.list]) if (a.t + a.life + spread < now) dmRemove(nico, a);
@@ -3225,12 +3349,21 @@
   // read as the emoji jumping back).
   const swells = new Map();  // emoji key -> {e, hits: [t], count, on, gid, nid, ds, at, tilt, t0, shownMs, numT}
   const SWELL_RASTER = 400;  // (the emoji rasterised once at most this many device px, scaled as it grows)
+  // (an animated emote smaller, so its frames fit the renderer's big atlas (overlay_gl emoji(): a third of it each):
+  // at 400 px a strip held 2 frames and the animation read as stopped; user 2026-11-02)
+  const SWELL_RASTER_ANIM = 200;
+  const swellAnim = e => { const em = typeof e === 'string' && emoteTok(e), b = em && emoteBmp.get(em.name); return !!(b && b.frames && b.frames.length > 1); };
+  // (a swell's tile: its emoji at its raster size, s.R)
+  function swellPut(M, s, G) {
+    s.R = swellAnim(s.e) ? G.RA : G.R;
+    M._viewer_ov_add(s.gid, glovSend(M, glovCps(s.e)), 0, s.t0, 0, 0, 0, 1, 1e6, s.R, 0xFFFFFFFF, 0);
+  }
   const swellNow = () => performance.now() / 1000;
   const swellEase = (a, b, t0, d, t) => { if (d <= 0 || t >= t0 + d) return t >= t0 ? b : a; if (t <= t0) return a; const u = (t - t0) / d; return a + (b - a) * u * u * (3 - 2 * u); };
   function swellGeom() {
     const H = over.clientHeight || 360, W = over.clientWidth || 480, k = 1080 / H, offX = (W - H * 16 / 9) / 2;
     const dpr = window.devicePixelRatio || 1;
-    return { H, W, k, offX, R: Math.min(270, SWELL_RASTER * 1080 / (H * dpr)), numPx: Math.max(11, H * 0.03) * k };
+    return { H, W, k, offX, R: Math.min(270, SWELL_RASTER * 1080 / (H * dpr)), RA: Math.min(270, SWELL_RASTER_ANIM * 1080 / (H * dpr)), numPx: Math.max(11, H * 0.03) * k };
   }
   const SWELL_EMO = /\p{Extended_Pictographic}|\p{Regional_Indicator}/u;
   function swellFeed(l) {
@@ -3261,8 +3394,7 @@
         s.count = s.hits.length; s.at = now; s.on = true; s.tilt = 0; s.ds = 0; s.shownMs = 0;
         s.rot = 0; s.rotFrom = 0; s.rotTo = 0; s.rotT = 0;
         s.gid = glov.next++; s.nid = glov.next++; s.M = M;
-        const G = swellGeom();
-        M._viewer_ov_add(s.gid, glovSend(M, glovCps(e)), 0, s.t0, 0, 0, 0, 1, 1e6, G.R, 0xFFFFFFFF, 0);
+        swellPut(M, s, swellGeom());
       } else continue;
       changed = true;
       // the count shows for a moment when the riding emoji appears and each time it passes a milestone (10, 25, 50,
@@ -3320,7 +3452,7 @@
     let yb = G.H * 0.11;  // (from the picture's bottom, above the battle HUD's meters: the comments' band)
     const numH = Math.max(11, G.H * 0.03) * 1.1;
     for (const s of [...swells.values()].filter(x => x.on && x.M === M).sort((a, b) => a.at - b.at)) {
-      const sz = Math.min(SWELL_MAX, 0.07 + 0.006 * s.count) * G.H, szS = sz * G.k, ds = szS / G.R;
+      const sz = Math.min(SWELL_MAX, 0.07 + 0.006 * s.count) * G.H, szS = sz * G.k, ds = szS / (s.R || G.R);
       const botS = (G.H - yb - numH) * G.k;  // (the bottom of its row: the count's top)
       // its right end from past the picture's right edge (room for the biggest, leaning) to past its left edge
       const x0 = (1.05 * G.W - G.offX) * G.k + SWELL_MAX * G.H * G.k * 1.3, x1 = (-0.05 * G.W - G.offX) * G.k, P = SWELL_RIDE / 1000;
@@ -3416,6 +3548,7 @@
     return [I, Math.max(0, k - back)];
   }
   function tlAdd(l) {
+    if (mentLine(l)) return;  // (a !song / ^stage chip: chat only, never a comment on the picture; user 2026-11-02)
     if (overOn.checked) emotesPending(l);  // (its emotes start loading)
     const e = { l, pos: l.at || null, T: l.time.getTime(), raw: null };
     // live, from a picture behind ours: now (it would otherwise start in our past and never be seen)
@@ -3875,7 +4008,11 @@
           if (m.cmd === 'NOTICE' && !m.nick.includes('.')) return; if (m.cmd === 'NOTICE') sys(clean(text0)); return;
         }
         let text = text0, action = false;
-        if (text.startsWith('\x01')) { if (!text.startsWith('\x01ACTION ')) return; action = true; text = text.slice(8).replace(/\x01$/, ''); }
+        if (text.startsWith('\x01')) {  // (CTCP: ACTION is "/me"; any other (VERSION, PING…) is never shown raw)
+          const ac = /^\x01ACTION (.*?)\x01?$/s.exec(text);
+          if (!ac || !ac[1].trim()) return;
+          action = true; text = ac[1];
+        }
         const t = m.tags, hist = !!(bt && /chathistory/.test(bt.type));
         if (!hist) typingGone(m.nick);
         const at = /^\d{1,9}\.\d{1,7}$/.test(t['+mbaa/at'] || '') ? t['+mbaa/at'].split('.').map(Number) : null;
@@ -3913,9 +4050,15 @@
     if (!text) return;
     if (text.startsWith('/')) {
       const [cmd, ...rest] = text.slice(1).split(' '), arg = rest.join(' ').trim();
-      if (/^me$/i.test(cmd) && arg) text = `\x01ACTION ${arg}\x01`;
+      if (/^me$/i.test(cmd) && arg) text = `\x01ACTION ${arg}\x01`;  // (CTCP ACTION: "* Name does something")
       else if (/^nick$/i.test(cmd)) { $('#chatnick').value = arg; $('#chatnick').onchange({ target: $('#chatnick') }); return; }
-      else { sys('commands: /me <action>, /nick <name>'); return; }
+      // ("/song name" / "/stage name" sent without a pick from the popup: its best match, as the "!slug" / "^slug" chip)
+      else if (/^(song|stage)$/i.test(cmd) && arg) {
+        const kind = cmd.toLowerCase(), it = mentFind(kind, arg)[0];
+        if (!it) { sys(`no ${kind} called "${arg}"`); return; }
+        text = `${kind === 'song' ? '!' : '^'}${it.slug}`;
+      }
+      else { sys('commands: /me <action>, /song <name>, /stage <name>, /nick <name>'); return; }
     }
     if (!irc.registered) { sys('not connected yet'); return; }
     const c = chan(shown);
@@ -3925,8 +4068,9 @@
     irc.lastSend = now;
     const cmd = nicoCmds(cmdIn.value).join(' ');
     // a reply: +draft/reply=<msgid> (IRCv3 client tag), and "@<their nick> " first so plain IRC clients read it as one
-    const rp = replyTo && key(replyTo.chan) === key(shown) && !text.startsWith('\x01') ? replyTo : null;
-    if (rp && rp.irc && !text.toLowerCase().startsWith(`@${rp.irc.toLowerCase()}`)) text = `@${rp.irc} ${text}`.slice(0, MAXLEN);
+    // (an ACTION keeps the reply tag, without the "@nick " (it would land inside the CTCP))
+    const rp = replyTo && key(replyTo.chan) === key(shown) ? replyTo : null;
+    if (rp && rp.irc && !text.startsWith('\x01') && !text.toLowerCase().startsWith(`@${rp.irc.toLowerCase()}`)) text = `@${rp.irc} ${text}`.slice(0, MAXLEN);
     replyEnd();
     // in the match's channel: where our picture is in its stream (the comment's place on the match's timeline)
     const pic = isMatch(shown) ? nowOf(api.live()) : null, at = pic && pic.pos ? pic.pos : null;
@@ -4068,13 +4212,13 @@
       const r = emoReact; emoReact = null;
       react(r.c, r.msgid, ch, true);
       store.set(EMO_RECENT, [ch, ...(store.get(EMO_RECENT, []) || []).filter(x => x !== ch)].slice(0, 24));
-      emoOpen(false); return;
+      emoOpen(false); inputBack(null, false); return;
     }
     const a = input.selectionStart ?? input.value.length, b = input.selectionEnd ?? a;
     const ins = reactEmote(ch) ? `${ch} ` : ch;  // (an emote's ":name:" and a space: the next word stays apart)
     if (input.value.length - (b - a) + ins.length > MAXLEN) return;
     input.setRangeText(ins, a, b, 'end');
-    input.focus();
+    inputBack(a + ins.length, true); cePrevDraw();
     store.set(EMO_RECENT, [ch, ...(store.get(EMO_RECENT, []) || []).filter(x => x !== ch)].slice(0, 24));
   }
   function emoOpen(on) {
@@ -4099,6 +4243,8 @@
   // picking one writes their IRC nick (an account's "Name-1234"), which every client can match. Arrows, Tab / Enter or a
   // click pick; Esc closes.
   const mpop = $('.mpop');
+  const cePrev = $('.ceprev');
+  let cePrevV = null;
   let ment = null;  // {start, items: [nick], i}
   let mentMore = false;  // (the older games' music and stages asked for: the first "!" / "^")
   const foldName = t => String(t).normalize('NFKD').replace(/[̀-ͯ]/g, '').toLowerCase();
@@ -4107,7 +4253,20 @@
     const tg = /^(.+)-(\d{4})[a-z]?$/.exec(nick);
     return tg ? `${tg[1]}#${tg[2]}` : nick;
   }
-  function mentionClose() { ment = null; mpop.hidden = true; input.removeAttribute('aria-activedescendant'); }
+  // the songs / stages matching a typed name (fuzzy: the slug's start, a word's start, inside it, then its letters in
+  // order; nothing typed yet: the list's first ones)
+  function mentFind(kind, typed) {
+    const cat = mentCat(), q = mentSlug(typed).replace(/-/g, '');
+    if (!cat) return [];
+    const all = [...cat[kind].by.values()], k = x => x.slug.replace(/-/g, '');
+    if (!q) return /^\s*$/.test(typed) ? all.slice(0, 8) : [];
+    const words = x => x.slug.split('-').some(w => w.startsWith(q));
+    const sub = x => { let j = 0; for (const ch of k(x)) if (ch === q[j]) j++; return j === q.length; };
+    return [...all.filter(x => k(x).startsWith(q)), ...all.filter(x => !k(x).startsWith(q) && words(x)),
+      ...all.filter(x => !k(x).startsWith(q) && !words(x) && k(x).includes(q)),
+      ...(q.length >= 3 ? all.filter(x => !k(x).includes(q) && !words(x) && sub(x)) : [])].slice(0, 8);
+  }
+  function mentionClose() { ment = null; mpop.hidden = true; input.removeAttribute('aria-activedescendant'); cePrevDraw(); }
   function mentionScan() {
     const pos = input.selectionStart ?? input.value.length, before = input.value.slice(0, pos);
     // a finished :code: becomes its emoji as it's typed
@@ -4116,19 +4275,14 @@
     // "!sun" / "^gta" (a letter or more after a space / the start) offers the matching songs / stages (fuzzy: the slug's
     // start, a word's start, inside it, then its letters in order)
     const sm = /(^|\s)([!^])([^\s!^]{1,40})$/u.exec(before);
-    if (sm && document.activeElement === input) {
+    // "/song <name>" / "/stage <name>" (user 2026-11-02): the same popup, from the line's start; a pick writes the "!slug" /
+    // "^slug" chip line in place of the command (what the "!" / "^" path sends)
+    const sc = !sm && /^\/(song|stage)\s+(.{0,40})$/iu.exec(before);
+    if ((sm || sc) && document.activeElement === input) {
       const A = window.mbaaChatApi;
       if (A && A.mentionsMore && !mentMore) { mentMore = true; A.mentionsMore().then(() => { if (document.activeElement === input) mentionScan(); }); }
-      const cat = mentCat(), q = mentSlug(sm[3]).replace(/-/g, ''), kind = sm[2] === '!' ? 'song' : 'stage';
-      if (cat && q) {
-        const all = [...cat[kind].values()], k = x => x.slug.replace(/-/g, '');
-        const words = x => x.slug.split('-').some(w => w.startsWith(q));
-        const sub = x => { let j = 0; for (const ch of k(x)) if (ch === q[j]) j++; return j === q.length; };
-        const items = [...all.filter(x => k(x).startsWith(q)), ...all.filter(x => !k(x).startsWith(q) && words(x)),
-          ...all.filter(x => !k(x).startsWith(q) && !words(x) && k(x).includes(q)),
-          ...(q.length >= 3 ? all.filter(x => !k(x).includes(q) && !words(x) && sub(x)) : [])].slice(0, 8);
-        if (items.length) { ment = { kind, pre: sm[2], start: pos - sm[3].length - 1, end: pos, items, i: 0 }; return mentionDraw(); }
-      }
+      const kind = sm ? (sm[2] === '!' ? 'song' : 'stage') : sc[1].toLowerCase(), items = mentFind(kind, sm ? sm[3] : sc[2]);
+      if (items.length) { ment = sm ? { kind, pre: sm[2], start: pos - sm[3].length - 1, end: pos, items, i: 0 } : { kind, pre: kind === 'song' ? '!' : '^', slash: true, q: sc[2], start: 0, end: pos, items, i: 0 }; return mentionDraw(); }
       return mentionClose();
     }
     // ":jo…" (two letters or more after a space / the start) offers the matching :codes:
@@ -4159,6 +4313,19 @@
     ment = { start: pos - mm[2].length - 1, end: pos, items, i: 0 };
     mentionDraw();
   }
+  // The composer's preview (user 2026-11-02): a server emote (":mech:", typed in full or picked with Tab) stays ":mech:"
+  // in the input and on the wire (a Unicode :code: becomes its emoji right there: mentionScan); the line as it will look,
+  // its emotes as images, shows in a strip above the input while it has one. (A strip, not a contenteditable: the input
+  // stays a plain <input>, so the phone keyboards, the caret and everything reading input.value are untouched)
+  function cePrevDraw() {
+    if (!cePrev) return;
+    const v = input.value;
+    if (v === cePrevV) return;
+    cePrevV = v;
+    const has = hasEmote(v) && emoteSplit(v).some(x => typeof x !== 'string');
+    if (has) cePrev.querySelector('span').replaceChildren(...emoteNodes(emoCodesIn(v)));
+    cePrev.hidden = !has;
+  }
   function mentionDraw() {
     mpop.replaceChildren();
     const emoK = ment.kind === 'emo';
@@ -4169,7 +4336,7 @@
       if (smK) {
         if (ment.kind === 'stage' && x.thumb) { const im = document.createElement('img'); im.className = 'mth'; im.alt = ''; d.append(im); window.mbaaChatApi.mentionThumb(x.thumb).then(u => { if (u) im.src = u; }); }
         else { const e = document.createElement('span'); e.className = 'mnote'; e.textContent = ment.kind === 'song' ? '♪' : '▣'; d.append(e); }
-        const b = document.createElement('b'); b.textContent = x.name; const sm = document.createElement('small'); sm.textContent = `${ment.pre}${x.slug}${x.game && x.game !== 'MBAACC' ? ` · ${x.game}` : ''}`; d.append(b, sm);
+        const b = document.createElement('b'); b.textContent = x.name; const sm = document.createElement('small'); sm.textContent = `${ment.pre}${x.slug}`; if (gameTag(x.game)) sm.dataset.g = gameTag(x.game); d.append(b, sm);
       }
       else if (emoK) { const e = document.createElement('span'); e.className = 'me'; if (x.emote) e.append(emoteImg(x.emote)); else e.textContent = x.ch; const b = document.createElement('b'); b.textContent = `:${x.code}:`; d.append(e, b); if (x.emote) { d.classList.add('srv'); const sm = document.createElement('small'); sm.textContent = 'server'; d.append(sm); } }
       else {
@@ -4189,12 +4356,16 @@
   function mentionPick() {
     if (!ment || mpop.hidden) return false;
     const x = ment.items[ment.i], ins = ment.pre ? `${ment.pre}${x.slug} ` : ment.kind === 'emo' ? (x.emote ? `${x.ch} ` : x.ch) : `@${x.nick} `;
-    const v = input.value.slice(0, ment.start) + ins + input.value.slice(ment.end);
+    const v = input.value.slice(0, ment.start) + ins + (ment.slash ? '' : input.value.slice(ment.end));
     if (v.length <= MAXLEN) { input.value = v; input.setSelectionRange(ment.start + ins.length, ment.start + ins.length); }
-    mentionClose(); input.focus();
+    cePrevV = null;
+    const at = input.selectionStart;
+    mentionClose(); inputBack(at, true);
     return true;
   }
   input.addEventListener('input', mentionScan);
+  input.addEventListener('input', cePrevDraw);
+  if (cePrev) cePrev.addEventListener('pointerdown', e => e.preventDefault());  // (a touch on it keeps the input's focus: the keyboard stays up)
   input.addEventListener('blur', () => setTimeout(() => { if (document.activeElement !== input) mentionClose(); }, 120));
   input.addEventListener('keydown', e => {
     if (e.key === 'Escape' && replyTo && (!ment || mpop.hidden) && epop.hidden) { replyEnd(); return; }
@@ -4203,7 +4374,7 @@
     // (Enter picks only once a name is being typed: "@" or "@_" then Enter sends the text as typed; Tab always picks)
     // (Enter on an emoji name typed in full (":wlen" and the highlighted one is wlen): picked and sent at once; it took
     // a second Enter, so "the first :wlen: didn't send", user 2026-11-01. A partial name only picks)
-    else if (e.key === 'Enter' && ment.items[ment.i] && input.value.slice(ment.start + 1, ment.end).toLowerCase() === String(ment.kind === 'emo' ? ment.items[ment.i].code : ment.pre ? ment.items[ment.i].slug : '\0').toLowerCase()) {
+    else if (e.key === 'Enter' && ment.items[ment.i] && (ment.slash ? mentSlug(ment.q) : input.value.slice(ment.start + 1, ment.end).toLowerCase()) === String(ment.kind === 'emo' ? ment.items[ment.i].code : ment.pre ? ment.items[ment.i].slug : '\0').toLowerCase()) {
       e.preventDefault(); mentionPick(); say(emoCodesIn(input.value)); input.value = ''; mentionClose();
     }
     else if (e.key === 'Tab' || (e.key === 'Enter' && (ment.kind === 'emo' || ment.pre || /[\p{L}\p{N}]/u.test(input.value.slice(ment.start + 1, ment.end))))) { e.preventDefault(); mentionPick(); }
@@ -4361,6 +4532,6 @@
 
   tabs(); render();
   start();
-  window.mbaaChat = { nicoMax: n => { NICO_ON_SCREEN = n; }, dmText: t => dmTextOf({}, t), emotes: () => [...EMOTES.keys()], emoteReady: n => !!(EMOTES.get(n) && emoteReady(EMOTES.get(n))), swellMap: swells, ovReset: () => { dmClear(nico); swellClear(); }, ovRestored: () => { swellClear(); glovReady(); }, irc, auth, nameOk, chans, prof, danmaku, say, nico, tl, clockPos, localOf, posOf, nowOf, feed: raw => on(parse(raw)), spread: () => spread, owner: () => ({ acct: ownAcct, spec: styleSpec(ownStyle) }), styles: () => Object.fromEntries([...styles.values()].map(x => [x.acct, styleSpec(x.st)])), mayStyle: () => mayStyle(), picSet, md: mdPlain, mirc: t => mircNodes(t).map(n => n.outerHTML || n.textContent).join(''),
+  window.mbaaChat = { nicoMax: n => { NICO_ON_SCREEN = n; }, dmText: t => dmTextOf({}, t), dmLine: l => dmMake(l, 0).text, emotes: () => [...EMOTES.keys()], emoteReady: n => !!(EMOTES.get(n) && emoteReady(EMOTES.get(n))), swellMap: swells, ovReset: () => { dmClear(nico); swellClear(); }, ovRestored: () => { swellClear(); glovReady(); }, irc, auth, nameOk, chans, prof, danmaku, say, nico, tl, clockPos, localOf, posOf, nowOf, feed: raw => on(parse(raw)), spread: () => spread, owner: () => ({ acct: ownAcct, spec: styleSpec(ownStyle) }), styles: () => Object.fromEntries([...styles.values()].map(x => [x.acct, styleSpec(x.st)])), mayStyle: () => mayStyle(), picSet, md: mdPlain, mirc: t => mircNodes(t).map(n => n.outerHTML || n.textContent).join(''),
     idle: ms => { idleMs = ms; }, swells: () => [...swells.values()].filter(x => x.el).map(x => ({ e: x.e, n: x.count, size: parseFloat(x.em.style.fontSize), op: x.el.style.opacity })), typingTimes: { TYPE_EVERY, TYPE_TTL }, show: name => { chan(name); shown = name; tabs(); render(); }, status: () => ({ connected: irc.registered, nick: irc.nick, caps: [...irc.caps], shown, matchChan }) };  // (tests)
 })();
