@@ -762,6 +762,10 @@ function restoreBoot(s) {
   snap.pages.forEach((q, i) => unpackPage(q, H, i * W, W));
   if (top > snap.top) M.HEAPU8.fill(0, snap.top, top);
   call(s, 'viewer_restore_end', ++s.gen);
+  // (the host's banner state (names on/off, the names, the tuning) lives in the restored memory: it went back to the
+  // snapshot's, from before the page set it (the boot, an early keyframe). Set it again: was "CHALLENGER" in place of
+  // both names after a catch-up jump or a seek for the rest of the session, user 2026-11-01)
+  s.bannerKey = null;
   M._viewer_tex_store_reset();  // the last match's sealed textures (the boot ones stay)
 }
 async function newSession(rep, name, want) {
@@ -1320,6 +1324,11 @@ function restore(s, kf) {
   }
   s.tl.lastCopied = copied;
   call(s, 'viewer_restore_end', ++s.gen);
+  // (the host's own settings live in the restored memory too, back to the keyframe's: the banner (names) is set again
+  // (liveBanner, by its key), the live pacing (1.05x trim / 2x catch-up) from 1x (the next poll sets what it wants).
+  // Was: "CHALLENGER" in place of both names for the rest of a session after a catch-up jump, user 2026-11-01)
+  s.bannerKey = null;
+  if (s.liveSrc) { s.liveTrim = false; s.liveFF = false; call(s, 'viewer_rate', 1); call(s, 'viewer_speed', ui.speed); }
   if (s.liveSrc) {
     liveRefeed(s);  // (the stream received since the keyframe)
     s.M._viewer_resolve_reset();  // (the keyframe's path caches predate files added since: the next game's)
