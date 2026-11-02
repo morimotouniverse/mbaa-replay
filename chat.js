@@ -484,6 +484,7 @@
   #chatlog .ccico { width: 24px; height: 32px; flex: none; border-radius: 4px; background: #ffffff0a; }
   #chatlog .ccn { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
   #chatlog .ccvs { font-size: 10px; color: var(--faint); letter-spacing: .08em; flex: none; }
+  #chatlog .cclive.ccended { background: #ffffff2a; color: var(--muted, #aaa); }
   #chatlog .cclive { flex: none; font-size: 9px; font-weight: 700; letter-spacing: .06em; padding: 0 5px; border-radius: 999px; background: var(--accent, #e04a5a); color: #fff; }
   #chatlog .ccsub { font-size: 10.5px; color: var(--muted); font-variant-numeric: tabular-nums; }
   /* the live list, moved to the top of the chat column (a strip: "live N" opens the list) */
@@ -1582,8 +1583,12 @@
       if (!livesP || performance.now() - livesP.at > 15000) livesP = { p: api.lives ? api.lives() : Promise.resolve([]), at: performance.now() };
       const l = await livesP.p;
       const m = (l || []).find(x => x.id === sl.live);
-      return m ? { chara: m.chara || [-1, -1], moon: m.moon || [-1, -1], names: (m.names || []).map(n => (n || '').trim() || null), live: true,
-                   idle: m.age > 300 } : { ended: true };
+      // (the matchup kept once seen live: an ended match's card still shows who played, marked ended)
+      const lk = `live:${sl.live}`;
+      if (!m) { const was = metaStore[lk]; return was ? { ...was, ended: true } : { ended: true }; }
+      const v = { chara: m.chara || [-1, -1], moon: m.moon || [-1, -1], names: (m.names || []).map(n => (n || '').trim() || null) };
+      metaKeep(lk, v);
+      return { ...v, live: true, idle: m.age > 300 };
     }
     if (sl.kind === 'list') {
       const r = await fetch(`${STORE}/l/${sl.l}`);
@@ -1632,7 +1637,9 @@
     a.load = () => metaFor(sl).then(m => {
       mu.classList.remove('wait'); mu.replaceChildren();
       if (sl.kind === 'list') { mu.textContent = m ? `${m.count} replay${m.count === 1 ? '' : 's'}${m.first ? ` · ${m.first}` : ''}` : 'a playlist'; return; }
-      if (!m || m.ended) { mu.textContent = m && m.ended ? 'not live any more' : sl.kind === 'live' ? 'a live match' : 'a replay'; a.classList.toggle('gone', !!(m && m.ended)); return; }
+      a.classList.toggle('gone', !!(m && m.ended)); a.classList.toggle('idle', false);
+      if (sl.kind === 'live') sub.textContent = m && m.ended ? 'live match · ended' : 'live match';
+      if (!m || (m.ended && !m.chara)) { mu.textContent = m && m.ended ? 'this match has ended' : sl.kind === 'live' ? 'a live match' : 'a replay'; return; }
       const side = p => {
         const c = m.chara[p], mo = m.moon[p], s = document.createElement('span'); s.className = 'ccside';
         if (validChara(c) || api.iconCell(c) >= 0) s.append(iconCanvas('ccico', 48, validChara(c) ? c : CHARAS.find(x => api.iconCell(x) === api.iconCell(c)), mo));
@@ -1644,6 +1651,10 @@
       const vs = document.createElement('span'); vs.className = 'ccvs'; vs.textContent = 'vs';
       mu.append(side(0), vs, side(1));
       if (m.live) { const b = document.createElement('span'); b.className = 'cclive'; b.textContent = m.idle ? 'idle' : 'LIVE'; mu.prepend(b); a.classList.toggle('idle', !!m.idle); }
+      else if (m.ended) { const b = document.createElement('span'); b.className = 'cclive ccended'; b.textContent = 'ENDED'; mu.prepend(b); }
+      // (a live card looks again every 30 s while it is in the log: LIVE turns ENDED when the match ends)
+      if (m.live && !a.recheck) a.recheck = setInterval(() => { if (!a.isConnected) { clearInterval(a.recheck); a.recheck = null; return; } a.load(); }, 30000);
+      if (!m.live && a.recheck) { clearInterval(a.recheck); a.recheck = null; }
     });
     if (cardIO) cardIO.observe(a); else a.load();
     return a;
