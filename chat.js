@@ -444,9 +444,16 @@
   #chatcol > #matchcard .cardnote { position: absolute; right: 6px; top: 6px;  /* (top right: the names and moons are along the bottom) */ z-index: 4; width: 28px; height: 28px; border-radius: 50%;
     border: 1px solid var(--line); background: var(--panel); color: var(--fg); font-size: 14px; line-height: 1; cursor: pointer; padding: 0; }
   #chatcol > #matchcard .cardnote.on, #chatcol > #matchcard .cardnote:hover { border-color: var(--accent, #e04a5a); color: var(--accent, #e04a5a); }
-  #chatcol > .cradio { position: absolute; left: 8px; right: 8px; top: var(--cradio-top, 8px); bottom: 64px; z-index: 6; overflow: auto;
+  /* (as tall as what it holds, at most down to the chat input; the open track list takes the rest and scrolls) */
+  #chatcol > .cradio { position: absolute; left: 8px; right: 8px; top: var(--cradio-top, 8px); max-height: calc(100% - var(--cradio-top, 8px) - 64px);
+    z-index: 6; overflow: hidden; display: flex; flex-direction: column; box-sizing: border-box;
     background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 10px; box-shadow: 0 8px 28px rgba(0,0,0,.45); }
-  #chatcol > .cradio > #radiosec { border: 0; padding: 0; margin: 0; }
+  #chatcol > .cradio[hidden] { display: none; }
+  #chatcol > .cradio > #radiosec { border: 0; padding: 0; margin: 0; display: flex; flex-direction: column; min-height: 0; flex: 0 1 auto; }
+  #chatcol > .cradio > #radiosec[hidden] { display: none; }
+  #chatcol > .cradio > #radiosec > * { flex: none; }
+  #chatcol > .cradio > #radiosec > #radiogrid { flex: 0 1 auto; min-height: 0; max-height: none; }
+  #chatcol > .cradio > #radiosec > #radiogrid[hidden] { display: none; }
   #chatcol > .cradio .cradiox { position: absolute; right: 6px; top: 6px; background: none; border: 0; color: var(--muted); font-size: 14px; cursor: pointer; z-index: 1; }
   /* phones held upright: one slim row (icons, names, ♪); a tap opens the card and the radio as a bottom sheet */
   body.mob:not(.land) #chatcol > #matchcard { cursor: pointer; }
