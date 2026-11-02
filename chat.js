@@ -201,14 +201,56 @@
   #chatsec .prow { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; margin-top: 6px; font-size: 12px; }
   #chatsec .prow input[type=text] { width: 130px; background: var(--raise); color: var(--fg); border: 1px solid var(--line); border-radius: 6px; padding: 3px 6px; font: inherit; }
   #chatsec .sw { width: 16px; height: 16px; border-radius: 50%; border: 2px solid transparent; cursor: pointer; padding: 0; }
-  #chatsec .prow input[type=color] { -webkit-appearance: none; appearance: none; width: 36px; height: 22px; padding: 0; border: 2px solid #ffffff33; border-radius: 6px; background: none; cursor: pointer; }
-  #chatsec .prow input[type=color]::-webkit-color-swatch-wrapper { padding: 0; }
-  #chatsec .prow input[type=color]::-webkit-color-swatch { border: none; border-radius: 4px; }
   body.mob #chatsec .sws { display: inline-flex; flex-wrap: wrap; gap: 8px; }
   body.mob #chatsec .sw { width: 32px; height: 32px; }
-  body.mob #chatsec .prow input[type=color] { width: 64px; height: 32px; }
+  body.mob #chatsec .prow button.cpk { height: 36px; font-size: 13px; padding: 0 12px 0 6px; }
+  body.mob #chatsec .prow button.cpk .cpk-sw { width: 24px; height: 24px; }
   #chatsec .sw.on { border-color: #fff; }
-  #chatsec input[type=color] { width: 24px; height: 20px; padding: 0; border: none; background: none; cursor: pointer; }
+  /* a colour control (colourField: a button showing its colour; the in-page picker below opens from it) */
+  #chatsec button.cpk { display: inline-flex; align-items: center; gap: 6px; height: 26px; padding: 0 9px 0 4px; border: 1px solid var(--line); border-radius: 999px;
+                        background: var(--raise); color: var(--fg); font: inherit; font-size: 12px; cursor: pointer; white-space: nowrap; }
+  #chatsec button.cpk:hover { border-color: #ffffff55; }
+  #chatsec button.cpk:focus-visible { outline: 2px solid var(--accent2, #8ab4ff); outline-offset: 1px; }
+  #chatsec button.cpk[aria-expanded=true], #chatsec button.cpk.on { border-color: #fff; }
+  #chatsec button.cpk .cpk-sw { width: 18px; height: 18px; border-radius: 50%; background: var(--cpk-c, #fff); box-shadow: inset 0 0 0 1px #ffffff40; flex: none; }
+  #chatsec button.cpk.bare { padding: 3px; gap: 0; }
+  #chatsec button.cpk.bare .cpk-sw { width: 24px; height: 24px; border-radius: 6px; }
+  #chatsec .cpick { position: fixed; z-index: 95; left: 8px; top: 8px; width: min(296px, calc(100vw - 16px)); box-sizing: border-box; overflow: auto; overscroll-behavior: contain;
+                    background: var(--raise, #1d1d2a); border: 1px solid var(--line); border-radius: 12px; padding: 10px; display: grid; grid-template-columns: minmax(0, 1fr); gap: 10px;
+                    box-shadow: 0 10px 32px #000c; color: var(--fg); font-size: 12px; touch-action: manipulation; }
+  #chatsec .cpick[hidden] { display: none; }
+  #chatsec .cpk-head { display: flex; align-items: center; gap: 6px; }
+  #chatsec .cpk-ttl { flex: 1; font-weight: 700; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  #chatsec .cpick button { font: inherit; color: var(--fg); cursor: pointer; }
+  #chatsec .cpk-x { background: none; border: none; width: 28px; height: 28px; padding: 0; border-radius: 8px; color: var(--muted) !important; font-size: 14px; }
+  #chatsec .cpk-sv { position: relative; height: 150px; border-radius: 8px; cursor: crosshair; touch-action: none; outline: none;
+                     background: linear-gradient(to top, #000, transparent), linear-gradient(to right, #fff, transparent), var(--cpk-h, red); }
+  #chatsec .cpk-hue { position: relative; height: 18px; border-radius: 9px; cursor: ew-resize; touch-action: none; outline: none;
+                      background: linear-gradient(to right, #f00, #ff0, #0f0, #0ff, #00f, #f0f, #f00); }
+  #chatsec .cpk-sv:focus-visible, #chatsec .cpk-hue:focus-visible { box-shadow: 0 0 0 2px var(--accent2, #8ab4ff); }
+  #chatsec .cpk-sv > i, #chatsec .cpk-hue > i { position: absolute; width: 16px; height: 16px; margin: -8px 0 0 -8px; border-radius: 50%; border: 2px solid #fff;
+                     box-shadow: 0 0 0 1px #000a, inset 0 0 0 1px #000a; box-sizing: border-box; pointer-events: none; background: var(--cpk-c); }
+  #chatsec .cpk-hue > i { top: 50%; width: 20px; height: 20px; margin: -10px 0 0 -10px; background: var(--cpk-h); }
+  #chatsec .cpk-sws { display: grid; grid-template-columns: repeat(auto-fill, minmax(24px, 1fr)); gap: 6px; }
+  #chatsec .cpk-sws button { height: 24px; min-width: 0; min-height: 0; padding: 0; border-radius: 12px; border: 2px solid #ffffff22; }
+  #chatsec .cpk-sws button[aria-pressed=true] { border-color: #fff; }
+  #chatsec .cpk-foot { display: flex; align-items: center; gap: 8px; }
+  #chatsec .cpk-cmp { display: inline-flex; border-radius: 8px; overflow: hidden; box-shadow: 0 0 0 1px var(--line); flex: none; }
+  #chatsec .cpk-cmp > * { width: 30px; height: 30px; border: none; padding: 0; display: block; }
+  #chatsec .cpk-old { cursor: pointer; }
+  #chatsec .cpk-hex { flex: 1 1 60px; min-width: 0; height: 30px; box-sizing: border-box; background: var(--panel, #15151f); color: var(--fg); border: 1px solid var(--line);
+                      border-radius: 8px; padding: 0 8px; font: 13px ui-monospace, monospace; }
+  #chatsec .cpk-hex.bad { border-color: var(--accent, #e04a5a); }
+  #chatsec .cpk-ok { height: 30px; padding: 0 14px; border: none; border-radius: 999px; background: var(--accent, #e04a5a); color: #fff !important; font-weight: 700; }
+  body.mob #chatsec .cpick { padding: 14px; gap: 12px; font-size: 14px; }
+  body.mob #chatsec .cpk-sv { height: 170px; }
+  body.mob #chatsec .cpk-hue { height: 28px; border-radius: 14px; }
+  body.mob #chatsec .cpk-hue > i { width: 28px; height: 28px; margin: -14px 0 0 -14px; }
+  body.mob #chatsec .cpk-sws { grid-template-columns: repeat(7, minmax(0, 1fr)); gap: 8px; }
+  body.mob #chatsec .cpk-sws button { height: 34px; border-radius: 17px; }
+  body.mob #chatsec .cpk-cmp > *, body.mob #chatsec .cpk-hex, body.mob #chatsec .cpk-ok { height: 38px; }
+  body.mob #chatsec .cpk-cmp > * { width: 38px; }
+  body.mob #chatsec .cpk-hex { font-size: 16px; }
   #chatsec .moons canvas, #chatsec .cgrid canvas { cursor: pointer; border-radius: 4px; border: 2px solid transparent; }
   #chatsec .moons canvas.on, #chatsec .cgrid canvas.on { border-color: #fff; background: #ffffff18; }
   #chatsec .cgrid { display: grid; grid-template-columns: repeat(auto-fill, 34px); grid-auto-rows: 44px; gap: 2px; max-height: 138px; overflow-y: auto; margin-top: 6px; }
@@ -235,12 +277,8 @@
   #chatsec .cpop button.sw2 { width: 24px; height: 24px; min-width: 24px; padding: 0; border-radius: 50%; border: 2px solid #ffffff22; }
   #chatsec .cpop button.sw2[aria-pressed=true] { border-color: #fff; background-clip: padding-box; }
   #chatsec .cpop button.mine { width: auto; border-radius: 999px; padding: 0 8px 0 4px; gap: 4px; color: var(--fg); border: 1px solid var(--line); height: 24px; }
-  #chatsec .cpop input[type=color] { width: 28px; height: 24px; }
-  #chatsec .cpop input[type=color] { -webkit-appearance: none; appearance: none; padding: 0; border: 3px solid transparent; border-radius: 10px; cursor: pointer;
-      background: conic-gradient(red, yellow, lime, cyan, blue, magenta, red) border-box; }
-  #chatsec .cpop input[type=color]::-webkit-color-swatch-wrapper { padding: 0; }
-  #chatsec .cpop input[type=color]::-webkit-color-swatch { border: none; border-radius: 6px; }
-  #chatsec .cpop input[type=color]::-moz-color-swatch { border: none; border-radius: 6px; }
+  #chatsec .cpop button.cpk.ccustom { width: auto; height: 24px; padding: 0 10px 0 4px; gap: 6px; border: 1px solid var(--line); border-radius: 999px; background: var(--panel, #15151f); color: var(--fg); font-size: 11px; }
+  #chatsec .cpop button.cpk.ccustom.on, #chatsec .cpop button.cpk.ccustom[aria-expanded=true] { border-color: #fff; }
   body.mob #chatsec .cpop, body.mob #chatsec .cform > .ctool .cpop { position: fixed; left: 0; right: 0; top: auto; bottom: 0; z-index: 70; max-width: none; max-height: 70vh; max-height: 70dvh;
       overflow: auto; border-radius: 14px 14px 0 0; padding: 14px 14px calc(14px + env(safe-area-inset-bottom)); gap: 12px; box-shadow: 0 -8px 28px #000c; }
   body.mob #chatsec .cpop .row { gap: 10px; }
@@ -248,7 +286,8 @@
   body.mob #chatsec .cpop button.sw2 { width: 38px; height: 38px; min-width: 38px; }
   body.mob #chatsec .cpop button.mine { height: 38px; font-size: 14px; padding: 0 14px 0 8px; }
   body.mob #chatsec .cpop button.mine .dot { width: 18px; height: 18px; }
-  body.mob #chatsec .cpop input[type=color] { flex: 0 0 76px; width: 76px !important; height: 38px; }
+  body.mob #chatsec .cpop button.ccustom { height: 38px; font-size: 14px; padding: 0 14px 0 8px; }
+  body.mob #chatsec .cpop button.ccustom .cpk-sw { width: 22px; height: 22px; }
   #chatsec .cauth { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; font-size: 11px; color: var(--muted); }
   #chatsec .cauth[hidden] { display: none; }
   #chatsec .cauth a.signin { display: inline-flex; align-items: center; gap: 6px; padding: 5px 10px; border-radius: 8px; background: #5865f2; color: #fff;
@@ -549,18 +588,45 @@
   #chatsec .ctool .costyle { order: 10; flex: 1 0 100%; text-align: left; border: 1px solid var(--line); border-radius: 8px; padding: 5px 8px; color: var(--fg); }
   #chatsec .ctool .costyle[hidden] { display: none; }
   #chatsec .cform > .ostyle { position: absolute; z-index: 7; left: 0; right: 0; bottom: calc(100% + 4px); background: var(--raise, #1c1c28); border: 1px solid var(--line);
-                              border-radius: 10px; box-shadow: 0 8px 28px #000a; padding: 8px 10px; box-sizing: border-box; overflow: auto; display: grid; gap: 7px;
-                              font-size: 11px; color: var(--muted); }
+                              border-radius: 12px; box-shadow: 0 8px 28px #000a; padding: 0 12px 10px; box-sizing: border-box; overflow: auto; overscroll-behavior: contain;
+                              display: grid; gap: 10px; font-size: 12px; color: var(--muted); }
   #chatsec .cform > .ostyle[hidden] { display: none; }
-  #chatsec .ostyle .oprev { background: #0008; border-radius: 8px; padding: 8px 10px; font-size: 13px; color: var(--fg); line-height: 1.7; overflow: hidden; }
-  #chatsec .ostyle .orow { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
-  #chatsec .ostyle .orow label { display: inline-flex; align-items: center; gap: 3px; cursor: pointer; }
-  #chatsec .ostyle .orow input[type=color] { flex: 0 0 28px; width: 28px; min-width: 0; height: 20px; padding: 0; border: 1px solid var(--line); border-radius: 4px; background: none; cursor: pointer; }
-  #chatsec .ostyle .oprev .cnick { font-weight: 700; margin-right: 5px; }
-  #chatsec .ostyle input[type=range] { flex: 1 1 60px; min-width: 50px; margin: 0; accent-color: var(--accent2, #8ab4ff); }
-  #chatsec .ostyle button { background: none; border: 1px solid var(--line); border-radius: 8px; color: var(--fg); font: inherit; padding: 4px 10px; cursor: pointer; }
-  #chatsec .ostyle button.osave { background: #e04a5a33; }
+  #chatsec .ostyle .otop { position: sticky; top: 0; z-index: 1; background: var(--raise, #1c1c28); padding: 10px 0 2px; display: grid; gap: 8px; }
+  #chatsec .ostyle .ohead { display: flex; align-items: center; gap: 8px; }
+  #chatsec .ostyle .ohead h3 { flex: 1; margin: 0; font-size: 14px; color: var(--fg); }
+  #chatsec .ostyle .ohead h3 small { font-weight: 400; color: var(--muted); font-size: 12px; }
+  #chatsec .ostyle .oprev { background: #000a; border-radius: 10px; padding: 12px 14px; color: var(--fg); line-height: 1.6; overflow: hidden; display: grid; gap: 2px; }
+  #chatsec .ostyle .oprev .cnick { font-weight: 700; font-size: 20px; justify-self: start; }
+  #chatsec .ostyle .oprev .otxt { font-size: 15px; }
+  #chatsec .ostyle .osec { margin: 0; border: 1px solid var(--line); border-radius: 10px; padding: 8px 10px 10px; display: grid; gap: 8px; min-width: 0; }
+  #chatsec .ostyle .osec.off > :not(legend):not(.ohint) { opacity: .45; }
+  #chatsec .ostyle .osec legend { padding: 0 4px; margin-left: -4px; font-size: 13px; font-weight: 700; color: var(--fg); }
+  #chatsec .ostyle .osec legend label { display: inline-flex; align-items: center; gap: 6px; cursor: pointer; }
+  #chatsec .ostyle .osec legend input { width: 16px; height: 16px; margin: 0; accent-color: var(--accent, #e04a5a); }
+  #chatsec .ostyle .osec legend .oon { font-size: 10px; font-weight: 700; border-radius: 999px; padding: 1px 6px; background: #ffffff14; color: var(--muted); }
+  #chatsec .ostyle .osec:not(.off) legend .oon { background: #4ac07a33; color: #8fe0ad; }
+  #chatsec .ostyle .ohint { margin: 0; color: var(--muted); line-height: 1.35; }
+  #chatsec .ostyle .ohint code { color: var(--fg); background: #ffffff14; border-radius: 4px; padding: 0 3px; }
+  #chatsec .ostyle .orow { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+  #chatsec .ostyle .orow .olbl { flex: 0 0 64px; color: var(--fg); }
+  #chatsec .ostyle .orow label { display: inline-flex; align-items: center; gap: 4px; cursor: pointer; }
+  #chatsec .ostyle .orow output { flex: 0 0 auto; min-width: 70px; color: var(--fg); font-variant-numeric: tabular-nums; }
+  #chatsec .ostyle .ostrip { flex: 1 1 100%; height: 14px; border-radius: 7px; box-shadow: inset 0 0 0 1px #ffffff30; background-size: 200% 100%; animation: ogslide var(--og-p, 4s) linear infinite; }
+  @media (prefers-reduced-motion: reduce) { #chatsec .ostyle .ostrip { animation: none; } }
+  #chatsec .ostyle input[type=range] { flex: 1 1 90px; min-width: 70px; margin: 0; accent-color: var(--accent2, #8ab4ff); }
+  #chatsec .ostyle button { background: none; border: 1px solid var(--line); border-radius: 8px; color: var(--fg); font: inherit; padding: 5px 12px; cursor: pointer; }
+  #chatsec .ostyle button.cpk.bare { padding: 2px; border-radius: 8px; }
+  #chatsec .ostyle button.cpk.bare .cpk-sw { width: 30px; height: 22px; }
+  #chatsec .ostyle button.ox { border: none; width: 30px; height: 30px; padding: 0; color: var(--muted); }
+  #chatsec .ostyle .ofoot { position: sticky; bottom: -10px; background: var(--raise, #1c1c28); padding: 8px 0 2px; margin-bottom: -2px; }
+  #chatsec .ostyle button.osave { background: var(--accent, #e04a5a); border-color: transparent; color: #fff; font-weight: 700; }
+  #chatsec .ostyle button.osave:disabled { background: #ffffff14 !important; color: var(--muted); opacity: 1; }
   #chatsec .ostyle .ostat { color: var(--faint); }
+  #chatsec .ostyle .ostat.ok { color: #8fe0ad; }  #chatsec .ostyle .ostat.dirty { color: var(--accent2, #ffb84a); }
+  body.mob #chatsec .ostyle { font-size: 13px; }
+  body.mob #chatsec .ostyle button.cpk.bare .cpk-sw { width: 40px; height: 30px; }
+  body.mob #chatsec .ostyle button { padding: 8px 14px; }
+  body.mob #chatsec .ostyle .oprev .cnick { font-size: 22px; }
   `;
   document.head.append(css);
 
@@ -596,7 +662,7 @@
         <div class="row"><button type="button" class="mine" data-c=""><i class="dot"></i>my colour</button></div>
         <div class="row cstd"><span class="lbl">colours</span></div>
         <div class="row cprem"><span class="lbl">premium colours</span></div>
-        <div class="row"><span class="lbl">any colour</span><input type="color" class="ccustom" aria-label="any colour"></div>
+        <div class="row"><span class="lbl">or any colour you like</span><button type="button" class="cpk ccustom" title="pick any colour for your comments" aria-label="custom colour: pick any colour"><i class="cpk-sw"></i>custom colour…</button></div>
       </div>
     </div>
     <div class="cauth" hidden></div>
@@ -609,7 +675,7 @@
       <div class="prow pacct" hidden><span class="pwho"></span><span class="pbtns"></span></div>
       <div class="prow">nick <input id="chatnick" type="text" maxlength="24" spellcheck="false"></div>
       <div class="prow"><label><input id="chattags" type="checkbox"> show #tags (Name#1234)</label></div>
-      <div class="prow">colour <span class="sws"></span><input id="chatcolor" type="color" title="any colour"></div>
+      <div class="prow">colour <span class="sws"></span><button type="button" id="chatcolor" class="cpk" title="pick any colour for your name" aria-label="your colour: pick any colour"><i class="cpk-sw"></i>custom…</button></div>
       <div class="prow phint" hidden>pick your moon and character (none set yet)</div>
       <div class="prow">moon <span class="moons"></span></div>
       <div class="cgrid"></div>
@@ -874,6 +940,146 @@
     overOn.blur();
   };
 
+  // ---- the colour picker (in-page: never <input type=color>, whose OS dialog looked like a gradient and explained nothing) ----
+  // colourField(btn, title): a <button class="cpk"> becomes a colour control. Its .value is '#rrggbb' (read and set as an
+  // input's; it paints the button's swatch). A click opens one shared popover: a saturation / brightness square, a hue
+  // bar, preset swatches, the current -> new colours (click "current" to go back) and a hex field. Every change sets
+  // .value and fires a bubbling 'input' (the old oninput / panel listeners run unchanged); closing after a change fires
+  // 'change'. Mouse, touch and pen drag (pointer capture); arrow keys on the square and the bar (Shift: bigger steps);
+  // Esc, done, a click outside or the button again close it. position: fixed beside the button, kept inside the visual
+  // viewport. Its pointerdowns stop at it, so the popovers it opens from (the Aa menu, the name style panel) stay open.
+  const PICK_SW = ['#ffffff', '#e8e8f0', '#9a9ab0', '#000000', '#e04a5a', '#ff4fd8', '#ff7ac8', '#ff9a3c', '#ffd84a', '#7ee05a', '#40e0ff', '#40c0ff', '#7a8cff', '#c878e6'];
+  const hex2hsv = hx => {
+    const n = parseInt(hx.slice(1), 16), r = (n >> 16) / 255, g = (n >> 8 & 255) / 255, b = (n & 255) / 255;
+    const mx = Math.max(r, g, b), d = mx - Math.min(r, g, b);
+    const h = d === 0 ? 0 : mx === r ? ((g - b) / d + 6) % 6 : mx === g ? (b - r) / d + 2 : (r - g) / d + 4;
+    return { h: h * 60, s: mx ? d / mx : 0, v: mx };
+  };
+  const hsv2hex = ({ h, s, v }) => {
+    const f = k => { const t = (k + h / 60) % 6; return v - v * s * Math.max(0, Math.min(t, 4 - t, 1)); };
+    return '#' + [f(5), f(3), f(1)].map(x => Math.round(x * 255).toString(16).padStart(2, '0')).join('');
+  };
+  const pick = document.createElement('div');
+  pick.className = 'cpick'; pick.hidden = true; pick.setAttribute('role', 'dialog');
+  pick.innerHTML = `<div class="cpk-head"><span class="cpk-ttl"></span><button type="button" class="cpk-x" aria-label="close the colour picker">✕</button></div>
+    <div class="cpk-sv" tabindex="0" role="slider" aria-label="shade: left / right greyer or stronger, up / down lighter or darker"><i></i></div>
+    <div class="cpk-hue" tabindex="0" role="slider" aria-label="hue" aria-valuemin="0" aria-valuemax="360"><i></i></div>
+    <div class="cpk-sws" role="group" aria-label="presets"></div>
+    <div class="cpk-foot"><span class="cpk-cmp"><button type="button" class="cpk-old" title="current colour: click to go back to it" aria-label="back to the current colour"></button><i class="cpk-new" title="new colour"></i></span>
+      <input type="text" class="cpk-hex" maxlength="7" spellcheck="false" autocomplete="off" enterkeyhint="done" aria-label="colour as hex, #rrggbb">
+      <button type="button" class="cpk-ok">done</button></div>`;
+  sec.append(pick);
+  const pq = s => pick.querySelector(s), pSv = pq('.cpk-sv'), pHue = pq('.cpk-hue'), pHex = pq('.cpk-hex'), pOld = pq('.cpk-old');
+  for (const c of PICK_SW) {
+    const b = document.createElement('button');
+    b.type = 'button'; b.dataset.c = c; b.style.background = c; b.title = c; b.setAttribute('aria-label', c);
+    pq('.cpk-sws').append(b);
+  }
+  const pk = { btn: null, hsv: { h: 0, s: 0, v: 1 }, old: '#ffffff', changed: false };
+  function pickShow() {
+    const { h, s, v } = pk.hsv, hx = hsv2hex(pk.hsv);
+    pick.style.setProperty('--cpk-h', `hsl(${h.toFixed(1)}, 100%, 50%)`); pick.style.setProperty('--cpk-c', hx);
+    const k1 = pSv.firstChild, k2 = pHue.firstChild;
+    k1.style.left = `${s * 100}%`; k1.style.top = `${(1 - v) * 100}%`; k2.style.left = `${h / 3.6}%`;
+    pSv.setAttribute('aria-valuetext', `${hx}: ${Math.round(s * 100)}% colour, ${Math.round(v * 100)}% light`);
+    pHue.setAttribute('aria-valuenow', String(Math.round(h)));
+    pq('.cpk-new').style.background = hx; pOld.style.background = pk.old;
+    if (document.activeElement !== pHex) { pHex.value = hx; pHex.classList.remove('bad'); }
+    pick.querySelectorAll('.cpk-sws button').forEach(b => b.setAttribute('aria-pressed', String(b.dataset.c === hx)));
+  }
+  function pickSet(hsv) {
+    pk.hsv = hsv; pickShow();
+    const hx = hsv2hex(hsv);
+    if (!pk.btn || pk.btn.value === hx) return;
+    pk.btn.value = hx; pk.changed = true;
+    pk.btn.dispatchEvent(new Event('input', { bubbles: true }));
+  }
+  function pickPlace() {
+    if (!pk.btn) return;
+    const vv = window.visualViewport, vx = vv ? vv.offsetLeft : 0, vy = vv ? vv.offsetTop : 0;
+    const vw = vv ? vv.width : innerWidth, vh = vv ? vv.height : innerHeight, a = pk.btn.getBoundingClientRect();
+    pick.style.maxHeight = `${Math.max(160, vh - 16)}px`;
+    const w = pick.offsetWidth, h = pick.offsetHeight;
+    const below = vy + vh - a.bottom - 8, above = a.top - vy - 8;
+    let y = below >= h || below >= above ? a.bottom + 6 : a.top - 6 - h;
+    y = Math.max(vy + 8, Math.min(y, vy + vh - 8 - h));
+    pick.style.left = `${Math.round(Math.max(vx + 8, Math.min(a.left, vx + vw - 8 - w)))}px`; pick.style.top = `${Math.round(y)}px`;
+  }
+  function pickOpen(btn) {
+    if (pk.btn && pk.btn !== btn) pickClose(false);
+    pk.btn = btn; pk.old = btn.value; pk.hsv = hex2hsv(pk.old); pk.changed = false;
+    pq('.cpk-ttl').textContent = btn.dataset.pkTitle || 'pick a colour';
+    pick.setAttribute('aria-label', btn.dataset.pkTitle || 'pick a colour');
+    pick.hidden = false; btn.setAttribute('aria-expanded', 'true');
+    pickShow(); pickPlace();
+    pSv.focus({ preventScroll: true });
+  }
+  function pickClose(refocus) {
+    const btn = pk.btn;
+    pick.hidden = true; pk.btn = null;
+    if (!btn) return;
+    btn.setAttribute('aria-expanded', 'false');
+    if (pk.changed) btn.dispatchEvent(new Event('change', { bubbles: true }));
+    if (refocus) btn.focus({ preventScroll: true });
+  }
+  // dragging: the square (saturation x, brightness y) and the bar (hue x)
+  const drag = (el, at) => {
+    const move = e => { const r = el.getBoundingClientRect(); at(Math.max(0, Math.min(1, (e.clientX - r.left) / r.width)), Math.max(0, Math.min(1, (e.clientY - r.top) / r.height))); };
+    el.addEventListener('pointerdown', e => { if (e.button > 0) return; e.preventDefault(); el.focus({ preventScroll: true }); try { el.setPointerCapture(e.pointerId); } catch (x) {} move(e); });
+    el.addEventListener('pointermove', e => { if (el.hasPointerCapture && el.hasPointerCapture(e.pointerId)) move(e); });
+  };
+  drag(pSv, (x, y) => pickSet({ h: pk.hsv.h, s: x, v: 1 - y }));
+  drag(pHue, x => pickSet({ ...pk.hsv, h: Math.min(x * 360, 359.9) }));
+  const arrows = (el, f) => el.addEventListener('keydown', e => {
+    const d = { ArrowLeft: [-1, 0], ArrowRight: [1, 0], ArrowUp: [0, 1], ArrowDown: [0, -1] }[e.key];
+    if (!d) return;
+    e.preventDefault(); f(d[0] * (e.shiftKey ? 5 : 1), d[1] * (e.shiftKey ? 5 : 1));
+  });
+  const cl01 = x => Math.max(0, Math.min(1, x));
+  arrows(pSv, (dx, dy) => pickSet({ h: pk.hsv.h, s: cl01(pk.hsv.s + dx * 0.02), v: cl01(pk.hsv.v + dy * 0.02) }));
+  arrows(pHue, (dx, dy) => pickSet({ ...pk.hsv, h: ((pk.hsv.h + (dx || dy) * 3) % 360 + 360) % 360 }));
+  pHex.addEventListener('input', () => {
+    const t = pHex.value.trim(), m = /^#?([0-9a-f]{6}|[0-9a-f]{3})$/i.exec(t);
+    pHex.classList.toggle('bad', !m && t.length >= 4);
+    if (!m) return;
+    const hx = '#' + (m[1].length === 3 ? [...m[1]].map(c => c + c).join('') : m[1]).toLowerCase();
+    pickSet(hex2hsv(hx));
+  });
+  pHex.addEventListener('blur', () => { pHex.value = hsv2hex(pk.hsv); pHex.classList.remove('bad'); });
+  pick.addEventListener('click', e => {
+    const b = e.target.closest('button');
+    if (!b) return;
+    if (b.dataset.c) pickSet(hex2hsv(b.dataset.c));
+    else if (b === pOld) pickSet(hex2hsv(pk.old));
+    else if (b.classList.contains('cpk-ok') || b.classList.contains('cpk-x')) pickClose(true);
+  });
+  pick.addEventListener('keydown', e => {
+    e.stopPropagation();  // (Esc closes only the picker; the page's keys stay out of it)
+    if (e.key === 'Escape') { e.preventDefault(); pickClose(true); }
+    else if (e.key === 'Enter' && (e.target === pHex || e.target === pSv || e.target === pHue)) { e.preventDefault(); if (e.target === pHex) pHex.blur(); pickClose(true); }
+  });
+  pick.addEventListener('pointerdown', e => e.stopPropagation());
+  document.addEventListener('pointerdown', e => { if (!pick.hidden && pk.btn && !pk.btn.contains(e.target)) pickClose(false); });
+  addEventListener('resize', () => { if (!pick.hidden) pickPlace(); });
+  if (window.visualViewport) visualViewport.addEventListener('resize', () => { if (!pick.hidden) pickPlace(); });
+  function colourField(btn, title, init) {
+    let v = '#ffffff';
+    btn.type = 'button'; btn.classList.add('cpk'); btn.setAttribute('aria-haspopup', 'dialog'); btn.setAttribute('aria-expanded', 'false');
+    if (!btn.querySelector('.cpk-sw')) btn.prepend(Object.assign(document.createElement('i'), { className: 'cpk-sw' }));
+    if (title) btn.dataset.pkTitle = title;
+    Object.defineProperty(btn, 'value', { configurable: true, get: () => v,
+      set: x => {
+        x = String(x == null ? '' : x);
+        if (!COLOR_RE.test(x)) return;
+        v = x.toLowerCase(); btn.style.setProperty('--cpk-c', v);
+        if (pk.btn === btn && hsv2hex(pk.hsv) !== v) { pk.hsv = hex2hsv(v); pickShow(); }
+      } });
+    btn.value = init || v;
+    btn.addEventListener('click', () => { if (pk.btn === btn && !pick.hidden) pickClose(true); else pickOpen(btn); });
+    return btn;
+  }
+  window.mbaaPicker = { open: pickOpen, close: pickClose, el: pick };  // (the checks)
+
   // profile editor
   function profShow() {
     drawIcon($('.me'), prof.chara, prof.moon);
@@ -881,6 +1087,7 @@
     $('.phint').hidden = validChara(prof.chara) && prof.moon >= 0;
     const n = $('.mynick'); n.textContent = prof.nick; n.style.color = readable(prof.color);
     $('#chatnick').value = prof.nick; $('#chatcolor').value = prof.color;
+    $('#chatcolor').classList.toggle('on', !PRESETS.some(c => c.toLowerCase() === String(prof.color).toLowerCase()));
     sec.querySelectorAll('.sw').forEach(b => b.classList.toggle('on', b.dataset.c.toLowerCase() === prof.color.toLowerCase()));
     sec.querySelectorAll('.moons canvas').forEach((c, m) => c.classList.toggle('on', m === prof.moon));
     sec.querySelectorAll('.cgrid canvas').forEach(c => c.classList.toggle('on', +c.dataset.c === prof.chara));
@@ -892,6 +1099,7 @@
     b.onclick = () => { prof.color = c; saveProf(); profShow(); };
     $('.sws').append(b);
   }
+  colourField($('#chatcolor'), 'your name colour', prof.color);
   $('#chatcolor').oninput = e => { prof.color = e.target.value; saveProf(); profShow(); };
   [0, 1, 2].forEach(m => {
     const cv = document.createElement('canvas'); cv.width = cv.height = 24; cv.title = MOON_NAME[m];
@@ -1849,7 +2057,7 @@
   }
   const cmdJoin = st => [st.pos, st.size, st.font, st.color, ...st.rest].filter(Boolean).join(' ');
   const colorHex = c => !c ? readableHex(prof.color) : COLOR_RE.test(c) ? c : NICO_STD[c] || NICO_PREM[c] || NICO_ALIAS[c] || '#FFFFFF';
-  const tool = $('.ctool'), pop = $('.cpop'), colBtn = $('.ccol'), moreBtn = $('.cmore'), prev = $('.cprev'), custom = $('.ccustom');
+  const tool = $('.ctool'), pop = $('.cpop'), colBtn = $('.ccol'), moreBtn = $('.cmore'), prev = $('.cprev'), custom = colourField($('.ccustom'), 'custom comment colour');
   function cmdSet(st) {
     cmdIn.value = cmdJoin(st);
     store.set('mbaa-chat-cmd', cmdIn.value);
@@ -1866,6 +2074,7 @@
     pop.querySelector('.mine .dot').style.background = readableHex(prof.color);
     pop.querySelectorAll('[data-c]').forEach(b => b.setAttribute('aria-pressed', String(b.dataset.c === st.color)));
     if (COLOR_RE.test(st.color)) custom.value = st.color;
+    custom.classList.toggle('on', COLOR_RE.test(st.color));
     prev.style.color = hex;
     prev.style.fontSize = { small: '10px', big: '17px' }[st.size] || '13px';
     prev.style.fontFamily = { gothic: 'sans-serif', mincho: 'serif' }[st.font] || '';
@@ -1933,17 +2142,26 @@
   const oPan = document.createElement('div');
   oPan.className = 'ostyle'; oPan.hidden = true; oPan.setAttribute('role', 'dialog'); oPan.setAttribute('aria-label', 'your name style');
   oPan.innerHTML = `
-    <div class="oprev" aria-label="preview"><span class="cnick own"></span><span class="otxt"></span></div>
-    <div class="orow"><label><input type="checkbox" data-k="glow"> glow</label><input type="color" data-k="gc" aria-label="glow colour">
-      <input type="range" data-k="gr" min="1" max="12" step="1" aria-label="glow strength"></div>
-    <div class="orow"><label><input type="checkbox" data-k="grad"> gradient</label><input type="color" data-k="c1" aria-label="gradient colour 1">
-      <input type="color" data-k="c2" aria-label="gradient colour 2"><label title="a third colour"><input type="checkbox" data-k="c3on"> 3</label><input type="color" data-k="c3" aria-label="gradient colour 3">
-      <input type="range" data-k="gs" min="1" max="10" step="1" aria-label="gradient speed" title="speed"></div>
-    <div class="orow"><span>~wave~</span><input type="range" data-k="wa" min="1" max="10" step="1" aria-label="wave height" title="height">
-      <input type="range" data-k="ws" min="1" max="10" step="1" aria-label="wave speed" title="speed"></div>
-    <div class="orow"><button type="button" class="osave">save</button><button type="button" class="oclose">close</button><span class="ostat" role="status"></span></div>`;
+    <div class="otop"><div class="ohead"><h3>Your name style <small>(everyone sees it)</small></h3><button type="button" class="ox" aria-label="close" title="close">✕</button></div>
+      <div class="oprev" aria-label="preview: how everyone sees your name and a ~wave~"><span class="cnick own"></span><span class="otxt"></span></div></div>
+    <fieldset class="osec" data-s="glow"><legend><label><input type="checkbox" data-k="glow"> Glow <span class="oon"></span></label></legend>
+      <p class="ohint">A soft light around your name.</p>
+      <div class="orow"><span class="olbl">colour</span><button type="button" class="bare" data-k="gc" aria-label="glow colour"></button></div>
+      <div class="orow"><span class="olbl">strength</span><input type="range" data-k="gr" min="1" max="12" step="1" aria-label="glow strength"><output data-o="gr"></output></div></fieldset>
+    <fieldset class="osec" data-s="grad"><legend><label><input type="checkbox" data-k="grad"> Animated gradient <span class="oon"></span></label></legend>
+      <p class="ohint">Your name's colours slide through 2 or 3 colours, over and over.</p>
+      <div class="ostrip" aria-hidden="true"></div>
+      <div class="orow"><span class="olbl">colours</span><button type="button" class="bare" data-k="c1" aria-label="gradient colour 1"></button><button type="button" class="bare" data-k="c2" aria-label="gradient colour 2"></button>
+        <label title="use a third colour"><input type="checkbox" data-k="c3on"> 3rd</label><button type="button" class="bare" data-k="c3" aria-label="gradient colour 3"></button></div>
+      <div class="orow"><span class="olbl">speed</span><input type="range" data-k="gs" min="1" max="10" step="1" aria-label="gradient speed"><output data-o="gs"></output></div></fieldset>
+    <fieldset class="osec" data-s="wave"><legend>~Wave~ text</legend>
+      <p class="ohint">Put text between tildes in a message, <code>~like this~</code>, and those letters wave. Always on, your messages only.</p>
+      <div class="orow"><span class="olbl">height</span><input type="range" data-k="wa" min="1" max="10" step="1" aria-label="wave height"><output data-o="wa"></output></div>
+      <div class="orow"><span class="olbl">speed</span><input type="range" data-k="ws" min="1" max="10" step="1" aria-label="wave speed"><output data-o="ws"></output></div></fieldset>
+    <div class="orow ofoot"><button type="button" class="osave">save for everyone</button><button type="button" class="oclose">close</button><span class="ostat" role="status"></span></div>`;
   $('.cform').append(oPan);
   const oIn = k => oPan.querySelector(`[data-k="${k}"]`);
+  colourField(oIn('gc'), 'glow colour'); colourField(oIn('c1'), 'gradient colour 1'); colourField(oIn('c2'), 'gradient colour 2'); colourField(oIn('c3'), 'gradient colour 3');
   const OSTYLE_DEF = 'glow=ff4fd8.6,grad=ff4fd8-7a8cff-40e0ff.4,wave=4.5';
   // (the form from a style; a style from the form, every value checked again)
   function oFill(st) {
@@ -1959,33 +2177,60 @@
     st.wave = { a: clampI(oIn('wa').value, 1, 10), s: clampI(oIn('ws').value, 1, 10) };
     return styleParse(styleSpec(st)) || {};
   }
+  // (the saved state: the style every page shows now, the bot's last word; the panel compares its form with it)
+  const oCanon = st => styleSpec({ ...st, wave: st.wave || { a: 4, s: 5 } });
+  function oStat(sending) {
+    const el = oPan.querySelector('.ostat'), sv = oPan.querySelector('.osave');
+    const same = !!ownAcct && oCanon(oRead()) === oCanon(ownStyle);
+    el.textContent = sending ? 'sending to everyone…' : same ? '✓ saved: everyone sees this' : 'not saved yet: only you see this preview';
+    el.className = `ostat ${sending ? '' : same ? 'ok' : 'dirty'}`;
+    sv.disabled = same && !sending;
+  }
   function oPreview() {
     const pv = oPan.querySelector('.oprev'), st = oRead();
     styleApply(pv, st);
+    oPan.querySelector('[data-s="glow"]').classList.toggle('off', !st.glow);
+    oPan.querySelector('[data-s="grad"]').classList.toggle('off', !st.grad);
+    oPan.querySelectorAll('.oon').forEach(o => { o.textContent = o.closest('.osec').classList.contains('off') ? 'off' : 'on'; });
+    const cs = [oIn('c1').value, oIn('c2').value, ...(oIn('c3on').checked ? [oIn('c3').value] : [])], strip = oPan.querySelector('.ostrip');
+    strip.style.backgroundImage = `linear-gradient(90deg, ${[...cs, cs[0]].join(', ')})`;
+    strip.style.setProperty('--og-p', `${(16 / clampI(oIn('gs').value, 1, 10)).toFixed(2)}s`);
+    oIn('c3').style.opacity = oIn('c3on').checked ? '' : '.4';
+    const out = (k, t) => { oPan.querySelector(`[data-o="${k}"]`).textContent = t; };
+    out('gr', `${oIn('gr').value} px`); out('gs', `${oIn('gs').value} · ${(16 / clampI(oIn('gs').value, 1, 10)).toFixed(1)} s loop`);
+    out('wa', `${oIn('wa').value} px`); out('ws', `${oIn('ws').value} of 10`);
     pv.querySelector('.cnick').textContent = disp(shownNick(irc.account || 'Armontina-0000', irc.account || 'Armontina-0000', auth.name));
     pv.querySelector('.otxt').replaceChildren(...waveNodes('this is ~sinescroll~ cool', x => [document.createTextNode(x)]));
   }
-  oPan.addEventListener('input', () => { oPreview(); oPan.querySelector('.ostat').textContent = 'not saved'; });
+  oPan.addEventListener('input', e => {
+    // (touching a section's colour or slider turns that section on; picking the third colour turns it on)
+    const sct = e.target.closest && e.target.closest('.osec'), tog = sct && sct.querySelector('legend input[type=checkbox]');
+    if (tog && e.target !== tog && !tog.checked) tog.checked = true;
+    if (e.target === oIn('c3')) oIn('c3on').checked = true;
+    oPreview(); oStat();
+  });
+  oPan.addEventListener('change', e => { if (e.target.type === 'checkbox') { oPreview(); oStat(); } });
   function oOpen(on) {
     oPan.hidden = !on;
     if (!on) return;
     toolOpen(false);
     const saved = styleParse(store.get(OSTYLE_KEY, null));
     oFill(Object.keys(ownStyle).length ? ownStyle : saved && Object.keys(saved).length ? saved : styleParse(OSTYLE_DEF));
-    oPreview(); oPan.querySelector('.ostat').textContent = '';
-    popPlace(oPan, 300);
+    oPreview(); oStat();
+    popPlace(oPan, 560);
   }
   oBtn.onclick = () => oOpen(true);
   oPan.querySelector('.oclose').onclick = () => oOpen(false);
+  oPan.querySelector('.ox').onclick = () => oOpen(false);
   oPan.querySelector('.osave').onclick = () => {
     const spec = styleSpec(oRead());
     store.set(OSTYLE_KEY, spec);
     irc.send(`PRIVMSG ${BOT} :style ${spec || 'off'}`);
-    oPan.querySelector('.ostat').textContent = 'saved: sent to everyone';
+    oStat(true);
   };
   document.addEventListener('pointerdown', e => { if (!oPan.hidden && !oPan.contains(e.target) && !oBtn.contains(e.target)) oOpen(false); });
   document.addEventListener('keydown', e => { if (e.key === 'Escape' && !oPan.hidden) oOpen(false); });
-  ownPanelHook = () => { if (!oPan.hidden) oPan.querySelector('.ostat').textContent = 'saved: everyone sees it'; };
+  ownPanelHook = () => { if (!oPan.hidden) oStat(); };
   // ---- the overlay's renderer (danmaku) ----
   // Our own Niconico (html5) renderer, built so the overlay costs the game nothing: each comment is one DOM element whose
   // text is rasterised once, when it appears, and moved by the compositor (a Web Animations transform: no script, canvas

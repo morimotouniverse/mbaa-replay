@@ -1975,6 +1975,13 @@ async function liveListShow() {
   try { l = await liveList(); } catch (e) {}
   try { await playersArt(); } catch (e) {}
   sec.hidden = !l.length;
+  // a name the watched match didn't have at the join (the list learns it later: the host's GameSetup, a probe) fills in
+  // the session's, so the banner and the card show it (was: "Viper" missing for the whole session, user 2026-11-01)
+  for (const L of new Set([liveSrc, session && session.liveSrc].filter(Boolean))) {
+    const m = l.find(x => x.id === L.id), cur = L.info && L.info.names;
+    if (!m || !cur || !m.names) continue;  // (the same id: the same host session, the same players)
+    if (cur.some((n, i) => !(n || '').trim() && (m.names[i] || '').trim())) L.info.names = cur.map((n, i) => (n || '').trim() ? n : m.names[i] || '');
+  }
   const el = (tag, cls, txt) => { const e = document.createElement(tag); if (cls) e.className = cls; if (txt != null) e.textContent = txt; return e; };
   // a row whose players haven't changed is kept as it is (a rebuild would restart its names' scrolling mid-way)
   const old = new Map([...ol.children].map(li => [li.dataset.key, li]));
