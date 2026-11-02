@@ -673,10 +673,10 @@
   #chatlog .cspoil.open * { visibility: visible; }
   /* the site owner's name style and ~wave~ text (the owner's style section): values are custom properties set from the
      bot's checked spec; CSS animation only (no script per frame), the newest lines only (.ostill), none for reduced motion */
-  #chatsec .og-glow .cnick.own { text-shadow: 0 0 var(--og-r) var(--og-c), 0 0 var(--og-r2) var(--og-c); }
-  #chatsec .og-grad .cnick.own { background-image: var(--og-g); background-size: 200% 100%; -webkit-background-clip: text; background-clip: text;
+  #chatsec .og-glow .cnick.own, #chatsec .og-glow .mynick.own { text-shadow: 0 0 var(--og-r) var(--og-c), 0 0 var(--og-r2) var(--og-c); }
+  #chatsec .og-grad .cnick.own, #chatsec .og-grad .mynick.own { background-image: var(--og-g); background-size: 200% 100%; -webkit-background-clip: text; background-clip: text;
                                  -webkit-text-fill-color: transparent; text-shadow: none; animation: ogslide var(--og-p, 4s) linear infinite; }
-  #chatsec .og-grad.og-glow .cnick.own { filter: drop-shadow(0 0 calc(var(--og-r) / 2) var(--og-c)); }
+  #chatsec .og-grad.og-glow .cnick.own, #chatsec .og-grad.og-glow .mynick.own { filter: drop-shadow(0 0 calc(var(--og-r) / 2) var(--og-c)); }
   @keyframes ogslide { to { background-position: 200% 0; } }
   #chatsec .owave { display: inline-block; white-space: pre; }
   #chatsec .owave > i { display: inline-block; font-style: normal; animation: owave var(--ow-p, 1.3s) ease-in-out infinite alternate;
@@ -955,7 +955,14 @@
     const pos = $('.cseg[data-k="pos"]'); if (pos) pos.hidden = !op;
     const ob = $('.costyle'); if (ob) ob.hidden = !ownerMe();
     const pb = $('.postyle'); if (pb) pb.hidden = !ownerMe();  // (also in the profile, by the name colour: where it was looked for)
+    myNameStyle();
   };
+  // (the owner's own name under the chat: the same glow / gradient everyone sees on their lines)
+  function myNameStyle() {
+    const n = $('.mynick'); if (!n) return;
+    const on = ownerMe(); n.classList.toggle('own', on);
+    if (on) styleApply(n.parentElement, ownStyle); else n.parentElement.classList.remove('og-glow', 'og-grad');
+  }
   // ---- the site owner's style ----
   // One account, the bot's SITE_OWNER (tools/chat/meltybot.mjs: the owner named "Armontina-<tag>"; the name lives there
   // only), styles its name (a glow; an animated 2-3 colour gradient) and may write ~text~ (each character on a sine wave:
@@ -1005,7 +1012,7 @@
     if (!st) return;
     const was = ownAcct;
     ownAcct = a; ownStyle = st;
-    styleApply(logEl, st);
+    styleApply(logEl, st); myNameStyle();
     if (!was || key(was) !== key(a)) { spreadAdmin(); renderSoon(); }
     ownPanelHook();
   }
@@ -3855,6 +3862,12 @@
       row(button('kick from this channel', 'w', () => done(`kick ${who} ${c.name}`)));
       row(el('span', '', 'ban'), ...[['1d', '1 day'], ['1w', '1 week'], ['perm', 'permanently']].map(([d, t]) => button(d, 'mchip danger', () => confirmBan(d, t), `ban ${t}`)));
       row(button('whois (only you see it)', 'w', () => done(`whois ${who}`)));
+      // (the site owner: make / unmake a mod from here, the bot's "mod add|del <account>"; signed-in accounts only)
+      if (ownerMe() && l.acct) {
+        const isMod = c && c.ops.has(key(l.irc));
+        row(isMod ? button('remove as mod', 'w', () => done(`mod del ${l.acct}`), 'no longer a moderator (every channel)')
+                  : button('make mod', 'w', () => done(`mod add ${l.acct}`), 'a moderator: delete, mute, kick, ban, links that embed (every channel)'));
+      }
       if (chan(GENERAL).ops.has(key(irc.nick))) row(button('edit the MOTD…', 'w', () => motdEdit(anchor), 'the #melty topic: the banner everyone sees'));
     }
     function confirmBan(d, t) {
