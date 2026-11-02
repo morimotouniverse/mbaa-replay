@@ -2112,6 +2112,7 @@ async function stageShow(s) {
   box.hidden = false;
 }
 setInterval(() => {
+  if (document.hidden) return;  // (nothing to show on a hidden page: the next tick once it is back fills it in)
   stageShow(session).catch(() => {});
   playersArt().then(() => playersShow(session)).catch(() => {});
 }, 500);
@@ -2159,9 +2160,13 @@ function liveSide(m, p) {
   sp.title = `${mo === 9 ? 'Eclipse' : MOON_NAME[mo] || ''} ${CHARA[c] || ''}`.trim();
   return sp;
 }
+let liveListDeferred = false;
+document.addEventListener('visibilitychange', () => { if (!document.hidden && liveListDeferred) { liveListDeferred = false; liveListShow(); } });
 async function liveListShow() {
   const sec = document.getElementById('livesec'), ol = document.getElementById('liveitems');
   if (!LIVE_FEED) { sec.hidden = true; return; }
+  // a hidden page asks for no list (a phone's radio woken every 15 s for a list nobody sees): asked again once it is back
+  if (document.hidden) { liveListDeferred = true; return; }
   let l = [];
   // (a failed fetch, a phone's network dropping one request, keeps the list as it is and asks again in 5 s: it emptied
   // and hid the whole list for 15 s)
