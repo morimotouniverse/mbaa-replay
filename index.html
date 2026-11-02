@@ -18,7 +18,7 @@
 <meta name="twitter:description" content="Watch Melty Blood Actress Again Current Code replays in your browser, frame-exact.">
 <meta name="twitter:image" content="https://watch.meltyblood.org/preview.png">
 <meta name="mbaa-manifest" content="2a2e2bac19a8">
-<meta name="mbaa-chatjs" content="chat.js?v=fec7580a323c">
+<meta name="mbaa-chatjs" content="chat.js?v=c0fd7c6a3ec0">
 <link rel="manifest" href="site.webmanifest">
 <link rel="icon" href="icon-192.png">
 <link rel="apple-touch-icon" href="icon-192.png">
@@ -283,8 +283,13 @@
   body.mob #time { font-size: 13px; }  body.mob :is(#fc, #dur) { display: none; }
   body.mob #marks { height: 12px; }
   body.mob .tbar { flex-wrap: nowrap; }
-  body.mob .tbar button { padding: 0 6px; min-width: 30px; }
-  body.mob #pause { width: 34px; height: 34px; margin: 0 3px; }
+  body.mob .tbar button { padding: 0 3px; min-width: 27px; }
+  body.mob #pause { width: 34px; height: 34px; margin: 0 2px; }
+  /* (a live page's LIVE pill beside the time: compact, and the clock never shrinks under its content: the pill was drawn
+     over the previous-round button on every phone, 5-84 px; the bar's buttons give the room instead) */
+  body.mob .tbar .clock { flex: none; gap: 5px; padding-right: 4px; }
+  body.mob .clock #livebtn { margin-left: 0; padding: 3px 7px; }  body.mob .livebtn::before { display: none; }
+  @media (max-width: 380px) { body.mob .tbar .rl { display: none; } body.mob.live .clock #time { display: none; } body.mob .tbar button { min-width: 25px; padding: 0 2px; } }
   body.mob :is(.tg-view, #tclip, .tbar .deskonly, .tbar .tbreak) { display: none !important; }
   body.mob .tbar .tg.sep { border: 0; margin: 0; padding: 0; }
   body.mob.land .tbar { flex-wrap: wrap; justify-content: center; }
@@ -846,8 +851,8 @@
   </div>
 </div>
 </div>
-<script src="mbaa.js?v=7bb361fab9dc"></script>
+<script src="mbaa.js?v=6ece8ae47816"></script>
 <script src="bgm_stream.js?v=407ac29e5c89"></script>
-<script src="viewer.js?v=47b724d5f9ad"></script>
+<script src="viewer.js?v=65b1462a7158"></script>
 </body>
 </html>

@@ -647,7 +647,7 @@ async function glRecover() {
   // (low-memory mode dropped the files the match had read, the exe among them: a new instance needs them all again)
   const want = withSiblings(man, new Set([...(s.want || []), ...(s.freed || []), ...(s.M.mbaaBootOpened || [])]));
   await fetchAll(man, want, 'restoring the picture');
-  if (s.liveSrc) return startLive(s.liveSrc.id);
+  if (s.liveSrc) return startLive(s.liveSrc.id, s.liveSrc.info.match);
   return play(s.rep, s.name, curFrame(), s.want ? new Set([...s.want, ...want]) : null);
 }
 // Background play: a hidden page gets no animation frames, so a worker's timer (not slowed for hidden pages) ticks the
@@ -754,6 +754,14 @@ function bootSnapshot(M) {
   for (let i = 0; i < n; i++) { pages[i] = packPage(H, i * W, W); bytes += pages[i].bytes; }
   return { top: n * PAGE, pages, bytes };
 }
+// The picture's comment renderer (overlay_gl.cpp) keeps its fonts, glyph / emoji caches, registered comments and switches
+// in the wasm memory too: a restore (the boot snapshot of a live switch / reused session, a keyframe) put them back to the
+// snapshot's (before the fonts were sent: nothing drawn until a reload, user 2026-11-01). The page sets it up again.
+function ovRestored(s) {
+  s.M.mbaaMemGen = (s.M.mbaaMemGen || 0) + 1;
+  if (s.M._viewer_ov_restored) s.M._viewer_ov_restored();
+  try { if (window.mbaaChat && window.mbaaChat.ovRestored) window.mbaaChat.ovRestored(); } catch (e) { console.warn('overlay restore:', e); }
+}
 function restoreBoot(s) {
   const M = s.M, snap = s.boot, W = PAGE >> 2;
   call(s, 'viewer_restore_begin');
@@ -766,6 +774,7 @@ function restoreBoot(s) {
   // snapshot's, from before the page set it (the boot, an early keyframe). Set it again: was "CHALLENGER" in place of
   // both names after a catch-up jump or a seek for the rest of the session, user 2026-11-01)
   s.bannerKey = null;
+  ovRestored(s);
   M._viewer_tex_store_reset();  // the last match's sealed textures (the boot ones stay)
 }
 async function newSession(rep, name, want) {
@@ -1171,6 +1180,9 @@ function thin(t) {
 // apart; and a page once seen changing stays hot. At F the changed pages are copied raw and packed during the post
 // pass. Seeks (no frames shown) keyframe in one pass.
 const KF_PHASE = 60;
+// (the timeline's diagnostics: per frame and per keyframe all a live session long, so the newest STAT_MAX of each)
+const STAT_MAX = 2000;
+function statPush(a, v) { a.push(v); if (a.length > STAT_MAX + 200) a.splice(0, a.length - STAT_MAX); }
 // keyframe packing's time per display frame: PACK_MS from the first pack call of a window (a window = PACK_WIN ms, about
 // one refresh); at least one batch per window, so it always finishes
 const PACK_MS = 3, PACK_WIN = 12;
@@ -1233,7 +1245,7 @@ function incTick(s, f) {
       for (const i of part) if (!sameHash(hs, i, c.base.pages[i])) {
         c.bad = true; t.hotAt.set(i, t.kfs.length);
         const q = c.base.pages[i];
-        t.incStat.dropPages.push([i * PAGE, q.r ? 'raw' : q.z ? 'z' : q.v.length]);
+        statPush(t.incStat.dropPages, [i * PAGE, q.r ? 'raw' : q.z ? 'z' : q.v.length]);
       }
     }
     c.cur = n;
@@ -1254,7 +1266,7 @@ function incTick(s, f) {
   const dt = performance.now() - t0;
   c.ms = Math.max(c.ms, dt);
   const st = t.incStat || (t.incStat = { pre: [], commit: [], post: [], dropPages: [] });
-  st[phase].push(Math.round(dt * 10) / 10);
+  statPush(st[phase], Math.round(dt * 10) / 10);
 }
 function incCommit(s, f, c) {
   const t = s.tl, M = s.M, W = PAGE >> 2;
@@ -1288,7 +1300,7 @@ function incCommit(s, f, c) {
   t.bytes += changed.length * PAGE;
   const fresh = changed.length;
   for (let i = 0; i < n; i++) pageRef(t, pages[i], +1);
-  (t.commitParts || (t.commitParts = [])).push([now.length, Math.round(T1 - T0), Math.round(performance.now() - T1), fresh]);
+  statPush(t.commitParts || (t.commitParts = []), [now.length, Math.round(T1 - T0), Math.round(performance.now() - T1), fresh]);
   c.kf = { frame: f, pages, ms: 0, fresh, pending: true, inc: true };
   kfTexAdd(t, c.kf);
   t.kfs.push(c.kf);
@@ -1328,6 +1340,7 @@ function restore(s, kf) {
   // (liveBanner, by its key), the live pacing (1.05x trim / 2x catch-up) from 1x (the next poll sets what it wants).
   // Was: "CHALLENGER" in place of both names for the rest of a session after a catch-up jump, user 2026-11-01)
   s.bannerKey = null;
+  ovRestored(s);
   if (s.liveSrc) { s.liveTrim = false; s.liveFF = false; call(s, 'viewer_rate', 1); call(s, 'viewer_speed', ui.speed); }
   if (s.liveSrc) {
     liveRefeed(s);  // (the stream received since the keyframe)
@@ -1398,7 +1411,7 @@ async function seekTo(s, T) {
   uiApply(s);
   if (!ui.paused) s.bgmSync(M._viewer_frame());
   const r1 = x => Math.round(x * 10) / 10;
-  t.seekMs.push({ from: cur, to: T, ms: r1(performance.now() - t0), restoreMs: restored ? r1(t1 - t0) : 0,
+  statPush(t.seekMs, { from: cur, to: T, ms: r1(performance.now() - t0), restoreMs: restored ? r1(t1 - t0) : 0,
                   copied: restored ? t.lastCopied : 0, sim: T - f1,
                   simMs: r1(t2 - t1), drawMs: r1(t3 - t2) });
   overlayDirty = true;
@@ -1475,10 +1488,38 @@ async function liveFetch(url, opt) {
   liveNoticeShow();
   return r;
 }
-function liveRetry(id) {  // startLive could not reach the feed: again, unless a replay was opened meanwhile
+// the live match last asked for (startLive): a retry, or a start still waiting on the network, of another one does
+// nothing (was: a pending retry of the match the page had just left started it again: the page went back to it)
+let liveWant = null;
+function liveRetry(id, match) {  // startLive could not reach the feed: again, unless a replay or another match was opened meanwhile
   if (session && !session.liveSrc) return;
-  setTimeout(() => { if (!session || session.liveSrc) startLive(id); }, Math.max(2000, liveNet.delay()));
+  setTimeout(() => { if ((!session || session.liveSrc) && liveWant === id) startLive(id, match); }, Math.max(2000, liveNet.delay()));
 }
+// An update reload (updateWatch) of a live page: where it was (the match, its game, how far short of the stream's newest
+// frame) for the reloaded page, so it goes on from there: not that game again from its start (user 2026-11-01: a deploy's
+// reload at the end of a set rejoined the host's listing and replayed the set's last game), and not another match the
+// host started meanwhile (startLive's match)
+const LIVE_RESUME = 'mbaa-live-resume';
+let liveResume = null;
+function liveResumeSave() {
+  const s = session;
+  if (!s || !s.liveSrc || !s.M) return;
+  try {
+    const g = call(s, 'viewer_spectate_game');
+    sessionStorage.setItem(LIVE_RESUME, JSON.stringify({ id: s.liveSrc.id, match: s.liveSrc.info.match || null,
+      names: s.liveSrc.info.names || [], game: g >= 0 ? g : s.liveSrc.info.game, ahead: call(s, 'viewer_spectate_buffered'), at: Date.now() }));
+  } catch (e) {}
+}
+function liveResumeTake(id) {
+  try {
+    const r = JSON.parse(sessionStorage.getItem(LIVE_RESUME) || 'null');
+    sessionStorage.removeItem(LIVE_RESUME);
+    return r && r.id === id && Date.now() - r.at < 120000 ? r : null;
+  } catch (e) { return null; }
+}
+// a list entry is the session's own match: the same id (the host) and, both known, the same match key (the CCCaster
+// session: cc_live.mjs matchKey). The same id with another key is the host's next match: another match
+const liveOurs = (m, L) => !!m && !!L && m.id === L.id && (!m.match || !(L.info && L.info.match) || m.match === L.info.match);
 // a match whose host is still connected but nothing has been played for 5 min (the list's age: seconds since its capture
 // last grew; the players left CCCaster open on the result menu, a lobby bot still lists the host): idle, listed last
 // and dimmed, never followed or moved to
@@ -1488,25 +1529,40 @@ async function liveList() {
   if (!r.ok) throw new Error(`HTTP ${r.status}`);
   return r.json();
 }
-async function startLive(id) {
+// id: the host's live id. match: the match key the start must be (a fallback start of the session's own match, a game
+// it fell behind on): the host on another match by then is not that match, so ours has ended: the next-match card
+async function startLive(id, match = null) {
   let info;
   let all;
-  try { all = await liveList(); info = all.find(m => m.id === id); } catch (e) { status(`live feed unreachable: ${e.message}`); return liveRetry(id); }
+  liveWant = id;
+  try { all = await liveList(); info = all.find(m => m.id === id); } catch (e) { status(`live feed unreachable: ${e.message}`); return liveRetry(id, match); }
+  if (liveWant !== id) return;  // (another match asked for meanwhile)
+  if (info && match && info.match && info.match !== match) {
+    status('the match has ended');
+    if (session && session.liveSrc && session.liveSrc.id === id) { nextCardShow(session, all, 'Match over'); return; }
+    info = null;
+  }
   if (!info) {
     status('that match is not live any more');
     // (a page opened on a match that has ended (a reload after an update, an old link): the next-match card, its
     // countdown to the next live one or a wait for one; was a black picture, user 2026-11-01)
-    if (!session) { liveSrc = { id, info: { names: [] }, since: 0 }; if (nextCardShow(null, all, 'That match has ended')) return; }
-    return liveNet.recent() ? liveRetry(id) : undefined;
+    if (!session) {
+      // (after an update reload: the match it was on, so the card features a set of the same players: the host's next one)
+      liveSrc = { id, info: { names: (liveResume && liveResume.id === id && liveResume.names) || [], match }, since: 0 };
+      if (nextCardShow(null, all, 'That match has ended')) return;
+    }
+    return liveNet.recent() ? liveRetry(id, match) : undefined;
   }
   // the same match again (a fallback start): the streaks go on from the session's where the bridge has none for the game
   // (its game over: not mid-battle of an older one)
   const prev = session;
-  if (!info.streak && prev && prev.M && prev.liveSrc && prev.liveSrc.id === id && prev.streakKnown && prev.M.HEAP32[0x54EEE8 >> 2] !== 1)
+  // (the same match: the host's next match on the same id has its own streaks)
+  if (!info.streak && prev && prev.M && liveOurs(info, prev.liveSrc) && prev.streakKnown && prev.M.HEAP32[0x54EEE8 >> 2] !== 1)
     info.streak = STREAK.map(a => prev.M.HEAP32[a >> 2]);
-  liveSrc = { id, info, since: info.game };
   const r = await liveFetch(`${LIVE}/live/${id}/boot.rep?game=${info.game}`).catch(() => null);
-  if (!r || !r.ok) { status(`live match: ${r ? `HTTP ${r.status}` : 'unreachable'}`); return !r || r.status >= 500 ? liveRetry(id) : undefined; }
+  if (liveWant !== id) return;
+  if (!r || !r.ok) { status(`live match: ${r ? `HTTP ${r.status}` : 'unreachable'}`); return !r || r.status >= 500 ? liveRetry(id, match) : undefined; }
+  liveSrc = { id, info, since: info.game };
   window.__mbaaRepUrl = null;
   await start(new File([await r.arrayBuffer()], `LIVE ${info.names.map(n => n.trim()).join(' vs ')}`), false, id);
 }
@@ -2053,13 +2109,15 @@ async function liveListShow() {
   const sec = document.getElementById('livesec'), ol = document.getElementById('liveitems');
   if (!LIVE_FEED) { sec.hidden = true; return; }
   let l = [];
-  try { l = await liveList(); } catch (e) {}
+  // (a failed fetch, a phone's network dropping one request, keeps the list as it is and asks again in 5 s: it emptied
+  // and hid the whole list for 15 s)
+  try { l = await liveList(); } catch (e) { if (ol.children.length) { setTimeout(liveListShow, 5000); return; } }
   try { await playersArt(); } catch (e) {}
   sec.hidden = !l.length;
   // a name the watched match didn't have at the join (the list learns it later: the host's GameSetup, a probe) fills in
   // the session's, so the banner and the card show it (was: "Viper" missing for the whole session, user 2026-11-01)
   for (const L of new Set([liveSrc, session && session.liveSrc].filter(Boolean))) {
-    const m = l.find(x => x.id === L.id), cur = L.info && L.info.names;
+    const m = l.find(x => liveOurs(x, L)), cur = L.info && L.info.names;
     if (!m || !cur || !m.names) continue;  // (the same id: the same host session, the same players)
     if (cur.some((n, i) => !(n || '').trim() && (m.names[i] || '').trim())) L.info.names = cur.map((n, i) => (n || '').trim() ? n : m.names[i] || '');
   }
@@ -2088,7 +2146,9 @@ async function liveListShow() {
     li = document.createElement('li'); li.dataset.key = key;
     const a = document.createElement('a');
     // (the page's <base> is the site root on the live path: a bare ?live= would leave it)
-    a.href = `${location.pathname}?live=${m.id}` + (Q.get('liveUrl') ? `&liveUrl=${encodeURIComponent(Q.get('liveUrl'))}` : '');
+    a.href = `${location.pathname}?live=${m.id}` + (Q.get('liveUrl') ? `&liveUrl=${encodeURIComponent(Q.get('liveUrl'))}` : '')
+      // (a local test page: its chat switches carry over, as chat.js's links do)
+      + (/^(127\.0\.0\.1|localhost)$/.test(location.hostname) ? ['chat', 'chatUrl', 'chatAuth', 'lowmem'].filter(k => Q.has(k)).map(k => `&${k}=${encodeURIComponent(Q.get(k))}`).join('') : '');
     const names = (m.names || []).map(n => (n || '').trim());
     a.title = idleTip(m) || m.matchup || names.join(' vs ');
     const side = p => liveSide(m, p);
@@ -2153,7 +2213,12 @@ function liveCssFiles(man) {
 const CSS_SCENE = 20, CSS_OBJ = 0x773158, CSS_SLOT = 0x74D8E8, BATTLE_SLOT = 0x74D838, STAGE_ID = 0x74FD98;
 function liveCssWatch(s) {
   const H = s.M.HEAP32, g = a => H[a >> 2];
-  if (s.cssBgP && !s.cssBgReady && !s.cssBgHeld && (g(0x54EEE8) === 5 || call(s, 'viewer_spectate_in_retry'))) { s.cssBgHeld = true; liveHoldApply(s); }
+  // (held only for a game that goes to the select: the players' retry menu choice 'character select' received
+  // (liveCssChoice), or the select reached. A rematch reads none of these files: it was held all the same at every
+  // result screen until all ~80 MB were in, ~45 s on a phone that joined late in a game, the list meanwhile on the next
+  // game, then a fresh start: "they don't work on the phone", 2026-11-01)
+  const sc = g(0x54EEE8);
+  if (s.cssBgP && !s.cssBgReady && !s.cssBgHeld && (sc === CSS_SCENE || (s.cssChoice && (sc === 5 || call(s, 'viewer_spectate_in_retry'))))) { s.cssBgHeld = true; liveHoldApply(s); }
   if (g(0x54EEE8) !== CSS_SCENE) { if (s.cssHeld) liveCssHold(s, false); s.cssKey = null; return; }
   s.cssPassed = true;  // (the next game's load checks the select's picks against the stream's setup: liveLoaderGate)
   const done = g(CSS_OBJ + 0x3C) >= 4;
@@ -2355,6 +2420,7 @@ async function liveSwitch(s, p) {
   const info = p.info;
   if (!info.streak && s.streakKnown) info.streak = STREAK.map(a => s.M.HEAP32[a >> 2]);
   console.log(`live: on to game ${p.game} (a new session)`);
+  liveWant = s.liveSrc.id;
   status('live: on to the next game');
   liveSrc = { id: s.liveSrc.id, info, since: info.game };
   window.__mbaaRepUrl = null;
@@ -2470,6 +2536,14 @@ function liveRematch(s, b) {
     .catch(e => { console.warn('live: rematch files:', e); status(`live: the rematch's files did not load (${e.message})`); })
     .finally(() => { s.rematchFetch = null; if (s.rematchHeld) { s.rematchHeld = false; liveHoldApply(s); } });
 }
+// the players chose 'character select' at the retry menu (kind >> 8: the menu choice + 1; CCCaster MenuIndex 1), seconds
+// before the game plays it: from then on the select screen's files (liveCssBg) are needed, and the game waits for them
+function liveCssChoice(s, b) {
+  if (s.cssBgReady || s.cssChoice) return;
+  const dv = new DataView(b.buffer, b.byteOffset, b.byteLength);
+  for (let o = 0; o + 244 <= b.length; o += 244 + 4 * dv.getUint32(o + 240, true))
+    if ((dv.getUint32(o + 4, true) >> 8) === 2) { s.cssChoice = true; return; }
+}
 // fetched files into MEMFS (a stage .dat over its placeholder) and the want list (no miss for them; a freed one is back)
 function liveInstall(s, paths) {
   let n = 0, back = 0;
@@ -2524,7 +2598,7 @@ function liveFollow(s, on) {
 async function liveGoLive() {
   const s = session;
   if (!s || !s.liveSrc) return;
-  if (s.liveSrc.next) return startLive(s.liveSrc.id);  // the game being watched is over: the current one
+  if (s.liveSrc.next) return startLive(s.liveSrc.id, s.liveSrc.info.match);  // the game being watched is over: the current one
   if (ui.paused) setPaused(false);
   liveFollow(s, true);
   // (the stream grows while the jump runs: again until it is close)
@@ -2552,12 +2626,19 @@ function liveBegin(s) {  // play(): after viewer_play
   // arrived_for; was: at the stream's edge, artifacts/xz_check/live_winscreen)
   call(s, 'viewer_spectate_delay', LIVE_BEHIND);
   s.liveHeldSeen = call(s, 'viewer_spectate_held');
+  // (an update reload of this match and game: liveResumeTake)
+  const R = liveResume;
+  liveResume = null;
+  if (R && R.id === L.id && (R.match || null) === (L.info.match || null) && R.game === L.info.game) s.liveResumeN = R.ahead;
   const poll = async () => {
     if (session !== s) return;
     try {
       const r = await liveFetch(`${LIVE}/live/${L.id}/rec?from=${L.info.game}&since=${L.since}&v=${VIEWER}`,
         AbortSignal.timeout ? { signal: AbortSignal.timeout(5000) } : undefined);
-      if (!r.ok) L.failAt = performance.now();
+      // (a 404 is the bridge saying the capture or game is not there: its capture closed (the match over) or the host's
+      // id is on another match now: no data, so the stream reads as quiet, not an outage. Was: every 404 restarted the
+      // quiet clock, so a session whose match had left the bridge never read as dry and sat frozen)
+      if (!r.ok && r.status !== 404) L.failAt = performance.now();
       if (r.ok) {
         const b = new Uint8Array(await r.arrayBuffer());
         // (every answer repeats the newest index whole: new data = a later index or a longer answer, else the stream is
@@ -2569,6 +2650,7 @@ function liveBegin(s) {  // play(): after viewer_play
           liveKeep(L, b);
           liveFeed(s, b);
           liveRematch(s, b);
+          liveCssChoice(s, b);
           L.since = liveLastIndex(b);
         }
       }
@@ -2611,21 +2693,42 @@ function liveBegin(s) {  // play(): after viewer_play
       try {
         const l = await liveList(), now = l.find(m => m.id === L.id);
         if (session !== s) return;
-        if (!now && ((!over && !dry) || liveNet.recent())) {  // (the 5 s check: the session still has the stream's end to
-          // play; or the feed was just down: the restarted bridge re-joins its hosts)
-        } else if (now && (over || dry) && now.index < L.since && liveNet.recent()) {
-          return startLive(L.id);  // (after a restart: the bridge's new capture of the match, numbered from its own join)
-        } else if (!now || (liveGone(now) && ahead < 15)) {
-          // (the list's silent: seconds since the host last sent anything, keep-alives included, when the bridge gives
-          // it: the host gone, the match over, ~30 s before its capture closes and it leaves the list; or idle: liveIdle)
+        // OUR match on the list. A live id is the host's (cc_live.mjs liveId: a hash of its address), not the match's:
+        // when a set ends and the same host starts another (a new opponent), the id comes back on the list as that
+        // match, with its own match key and game numbers from 2 again. Never our next game: our match is over (user
+        // 2026-11-01: Counsel's set with tigre ended, Counsel hosted Inf20 on the same id; the page left, came back to
+        // it, and showed the next-match card there)
+        const mine = now && liveOurs(now, L) ? now : null, t = performance.now();
+        // The end, from evidence that holds up (a list read missing an entry or a host poll that failed is not an end;
+        // nor is a quiet stream: players at a result screen): the stream has nothing more for us (ended, or the buffer
+        // run down and no new data for 6 s; a 404 feed counts as no data) AND the list has said so: the host is in
+        // another match (at once), the list's silent / idle (liveGone: the host's keep-alives stopped) on 3 reads over
+        // 5 s, or the match missing from it for 30 s (the bridge's capture closes 30 s after the host goes silent; not
+        // while the feed was just down: a restarted bridge re-joins its hosts). Was: one read missing it with the
+        // stream quiet showed the card (and its countdown left the match), whatever the reason
+        const endSign = !mine || liveGone(mine);
+        if (!endSign) { L.endAt = null; L.endReads = 0; }
+        else { if (L.endAt == null) L.endAt = t; L.endReads = (L.endReads || 0) + 1; }
+        const streamOver = over || (ahead < 15 && quietFor > 6000);
+        const ended = streamOver && endSign && (!!now && !mine ||
+          (mine ? L.endReads >= 3 && t - L.endAt > 5000 : !liveNet.recent() && t - L.endAt > 30000));
+        if (endSign && !L.endSaid) {
+          L.endSaid = true;
+          slogAdd('live', now && !mine ? `the host is on another match (${liveName(now)}): ours is over` : mine ? `the list has the match silent ${mine.silent} s / idle ${mine.age} s` : 'the match is not on the list');
+        }
+        if (!endSign) L.endSaid = false;
+        if (mine && (over || dry) && mine.index < L.since && liveNet.recent()) {
+          return startLive(L.id, L.info.match);  // (after a restart: the bridge's new capture of the match, numbered from its own join)
+        } else if (ended) {
           if (!s.liveFollow) { status('the match has ended'); return; }
-          // (the next one: the card's countdown, or its wait for one; nextCardShow)
+          // (the next one: the card's countdown with jump to live on, else the card to pick from; or its wait for one)
           status('the match has ended');
+          slogAdd('live', 'the match has ended: the next-match card');
           nextCardShow(s, l, 'Match over');
           nextCard.why = null;
           return;
         }
-        else if (now.game !== L.info.game) {
+        else if (mine && mine.game !== L.info.game) {
           // the session goes on into the players' next game itself (retry menu, character select, loading; after a
           // character select its load checks the picks against the stream's setup: liveLoaderGate). A newer game on the
           // list it has not reached: prepared in the background at once (liveNextPrep), and switched to (liveSwitch) when
@@ -2633,12 +2736,12 @@ function liveBegin(s) {  // play(): after viewer_play
           // showed it (a rematch's menu takes ~1-2 s after the choice), or not there by the time its frames to it have played (+3 s). (Before: a fresh start 30 s after
           // the list showed it, the page sitting on the result menu or the select meanwhile.)
           const g0 = call(s, 'viewer_spectate_game'), g = g0 >= 0 ? g0 : L.info.game;  // (-1: still the first)
-          const behind = g < now.game, scene = s.M.HEAP32[0x54EEE8 >> 2], t = performance.now();
-          if (L.seenGame !== now.game) { L.seenGame = now.game; L.seenGameAt = t; L.haveAt = null; L.stuckAt = null; L.lostSaid = false; }
+          const behind = g < mine.game, scene = s.M.HEAP32[0x54EEE8 >> 2];
+          if (L.seenGame !== mine.game) { L.seenGame = mine.game; L.seenGameAt = t; L.haveAt = null; L.stuckAt = null; L.lostSaid = false; }
           // the stream as received has the new game (its Loading index): from then on the session should be getting there
-          if (L.haveAt == null && L.since >= now.game) { L.haveAt = t; L.haveAhead = ahead; }
-          if (behind && s.liveFollow) liveNextPrep(s, now.game, now).catch(e => console.warn(`live: game ${now.game} not prepared:`, e.message));
-          const p = behind ? livePrepOf(s, now.game) : null;
+          if (L.haveAt == null && L.since >= mine.game) { L.haveAt = t; L.haveAhead = ahead; }
+          if (behind && s.liveFollow) liveNextPrep(s, mine.game, mine).catch(e => console.warn(`live: game ${mine.game} not prepared:`, e.message));
+          const p = behind ? livePrepOf(s, mine.game) : null;
           const stuckScene = behind && (call(s, 'viewer_spectate_in_retry') || scene === SCENE_WIN);
           if (!stuckScene) L.stuckAt = null; else if (L.stuckAt == null) L.stuckAt = t;
           // LOST: our game did not follow a stream it has: the new game's records received, and the session still at the
@@ -2654,17 +2757,20 @@ function liveBegin(s) {  // play(): after viewer_play
           const same = p && scene !== 20 && call(s, 'viewer_spectate_next_game') === g0 && liveSameSetup(s, p.setup);
           if (lost && s.liveFollow && !over && !L.lostSaid) {
             L.lostSaid = true;
-            console.warn(`live: the list is on game ${now.game}, this session still on ${g} (scene ${scene}): ` +
+            console.warn(`live: the list is on game ${mine.game}, this session still on ${g} (scene ${scene}): ` +
               (same ? 'the same setup: waiting for it' : p ? 'switching' : 'preparing it'));
           }
           // (a quiet stream on the game the session is on is the players at its result menu, not an end: nothing to
           // start; restarting that game there replayed it from its start on every long result screen)
-          if (s.liveFollow && (over || ((dry && behind || lost) && !same))) {
+          // Only ever forward: to a game of this match newer than the session's (behind). Was: a session whose game had
+          // ended (over) restarted the list's game whatever it was, the one being watched included (the same game again
+          // from its start)
+          if (s.liveFollow && behind && (over || ((dry || lost) && !same))) {
             if (p) return liveSwitch(s, p);
             // (no prepared game: the plain start, once the session is over, or 30 s after the list showed the game)
-            if (over || t - L.seenGameAt > 30000) return startLive(L.id);
+            if (over || t - L.seenGameAt > 30000) return startLive(L.id, L.info.match);
           }
-          if (!s.liveFollow) {
+          if (!s.liveFollow && behind) {
             L.next = true;  // (DVR: stays on this game; LIVE goes to the current one)
             status('live: watching back; the next game is on (LIVE to join it)');
           }
@@ -2678,6 +2784,19 @@ function liveBegin(s) {  // play(): after viewer_play
       // there, unrendered as a seek ("jump to live" off: no jump, the game from its start); then normal speed, stalling
       // only when the stream runs dry (until 2 s are buffered again)
       if (ahead > 0) s.liveSynced = true;
+      // after an update reload: back where the page was (as many frames short of the stream's newest as then; the
+      // stream grown meanwhile: that much later), unrendered, whatever jump to live is (liveResumeTake)
+      if (s.liveResumeN != null && s.liveSynced && !s.seeking && !s.cssHeld && !s.loadHeld) {
+        const n = ahead - s.liveResumeN;
+        s.liveResumeN = null;
+        if (n > 0) {
+          slogAdd('live', `back where the page was before the update: ${n} frames on`);
+          await liveCatchUp(s, n);
+          if (session !== s) return;
+          ahead = call(s, 'viewer_spectate_buffered');
+          hist.length = 0; hist.push(ahead); s.liveJoined = true;
+        }
+      }
       if (s.liveSynced && liveJump() && !hidden() && !s.cssHeld && !s.loadHeld && !call(s, 'viewer_spectate_in_retry')) {
         // (the stream grows while the jump runs: again until it is close)
         // (at the join: a jump past 2 s over; later only a real backlog, 10 s over the floor: a hidden tab, a load. The
@@ -2769,8 +2888,12 @@ function nextCardShow(s, list, title) {
   if (session !== s || (s && nextCard.stay === s)) return false;  // (s null: a page with no match yet)
   const el = document.getElementById('nextcard');
   if (!el) return false;
-  const live = list.filter(m => m.id !== (s && s.liveSrc && s.liveSrc.id) && !liveGone(m));
-  const next = liveNextMatch(live);
+  // (the others: every live match but ours; the host's next match on our id is another match, and the likeliest next:
+  // it has one of our players)
+  const L0 = s ? s.liveSrc : liveSrc, live = list.filter(m => !liveOurs(m, L0) && !liveGone(m));
+  const next = liveNextMatch(live, L0);
+  // jump to live off: the card to pick from, no countdown (the page never moves to another match by itself)
+  const auto = liveJump();
   el.querySelector('.nc-t').textContent = title;
   const row = (m, cls) => {  // (the live list's row: icons, moons, names, watchers)
     const b = document.createElement('button');
@@ -2804,17 +2927,19 @@ function nextCardShow(s, list, title) {
       if (session !== s || nextCard.s !== s || nextCard.id) return;
       const l = await liveList().catch(() => null);
       if (session !== s || nextCard.s !== s) return;
-      if (l && l.some(m => m.id !== (s && s.liveSrc && s.liveSrc.id) && !liveGone(m))) nextCardShow(s, l, title);
+      if (l && l.some(m => !liveOurs(m, L0) && !liveGone(m))) nextCardShow(s, l, title);
       else nextCard.timer = setTimeout(wait, 10000);
     };
     nextCard.timer = setTimeout(wait, 10000);
     return true;
   }
   el.hidden = false;
-  if (nextCard.s === s && nextCard.id === next.id) return true;  // (counting down to it already)
+  if (nextCard.s === s && nextCard.id === next.id && nextCard.auto === auto) return true;  // (counting down to it already)
   clearTimeout(nextCard.timer); cancelAnimationFrame(nextCard.raf);
-  nextCard.s = s; nextCard.id = next.id; nextCard.at = performance.now() + NEXT_SECS * 1000;
+  nextCard.s = s; nextCard.id = next.id; nextCard.at = performance.now() + NEXT_SECS * 1000; nextCard.auto = auto;
   const bar = el.querySelector('.nc-bar i'), go = el.querySelector('.nc-go');
+  el.querySelector('.nc-bar').hidden = !auto;
+  if (!auto) { go.textContent = 'Go now'; return true; }
   const tick = () => {
     if (nextCard.s !== s) return;
     const left = Math.max(0, nextCard.at - performance.now());
@@ -2827,9 +2952,9 @@ function nextCardShow(s, list, title) {
   return true;
 }
 // after a match leaves the list: one with either of its players (a new set of theirs), else the most watched
-function liveNextMatch(l) {
-  const L = liveSrc || { id: null, info: {} }, names = new Set((L.info.names || []).map(n => (n || '').trim().toLowerCase()).filter(Boolean));
-  const others = l.filter(m => m.id !== L.id && !liveGone(m));
+function liveNextMatch(l, L0 = liveSrc) {
+  const L = L0 || { id: null, info: {} }, names = new Set((L.info.names || []).map(n => (n || '').trim().toLowerCase()).filter(Boolean));
+  const others = l.filter(m => !liveOurs(m, L) && !liveGone(m));
   return others.find(m => (m.names || []).some(n => names.has((n || '').trim().toLowerCase())))
       || others.sort((a, b) => (b.viewers || 0) - (a.viewers || 0))[0] || null;
 }
@@ -4351,7 +4476,9 @@ function fitStage() {
     let w;
     if (layMode === 'port') {  // the picture as wide as leaves chat its least height under it and the transport
       const trH = tr && tr.offsetParent ? tr.offsetHeight : 0;
-      w = Math.min(W, (vh - trH - (b.classList.contains('kbd') ? 170 : 220)) * 4 / 3);
+      // (typing, the keyboard up: 190 for the chat, its match card row hidden (chat.js): ~4 lines over the input; 170 with
+      // the card left ~1.5, "messaging kinda sux on mobile", 2026-11-01)
+      w = Math.min(W, (vh - trH - (b.classList.contains('kbd') ? 190 : 220)) * 4 / 3);
     } else w = Math.min(W - (b.classList.contains('nochat') ? 200 : Math.max(W * 0.35, 240)), vh * 4 / 3);
     if (/^\d$/.test(scaleMode)) w = Math.min(w, 640 * +scaleMode / dpr);
     return setW(Math.max(w, 120), 'fit');
@@ -4653,7 +4780,11 @@ async function main() {
     document.getElementById('livebtn').hidden = false;
     document.getElementById('livebtn').onclick = e => { e.target.blur(); liveGoLive(); };
   }
-  if (/^[A-Za-z0-9_]{4,64}$/.test(Q.get('live') || '')) return startLive(Q.get('live'));  // a live CCCaster match
+  if (/^[A-Za-z0-9_]{4,64}$/.test(Q.get('live') || '')) {  // a live CCCaster match
+    // (after an update reload: the match it was on, and where; liveResumeTake)
+    liveResume = liveResumeTake(Q.get('live'));
+    return startLive(Q.get('live'), liveResume && liveResume.match);
+  }
   const lq = Q.get('l') || '';
   if (/^[A-Za-z0-9_-]{8,43}$/.test(lq)) {  // a shared playlist
     try {
@@ -4702,6 +4833,7 @@ main().catch(e => { console.error(e); status('error: ' + e.message); });
     const c = document.getElementById('catchup');
     if (c) { c.querySelector('.cu-t').textContent = 'Updating to the new version'; c.querySelector('.cu-s').textContent = 'back in a moment';
              c.querySelector('.cu-bar i').style.width = '100%'; c.hidden = false; }
+    liveResumeSave();
     setTimeout(() => location.reload(), document.visibilityState === 'hidden' ? 0 : 1200);
   };
   setInterval(async () => {
