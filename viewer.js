@@ -2065,6 +2065,7 @@ function liveCssFiles(man) {
 const CSS_SCENE = 20, CSS_OBJ = 0x773158, CSS_SLOT = 0x74D8E8, BATTLE_SLOT = 0x74D838, STAGE_ID = 0x74FD98;
 function liveCssWatch(s) {
   const H = s.M.HEAP32, g = a => H[a >> 2];
+  if (s.cssBgP && !s.cssBgReady && !s.cssBgHeld && (g(0x54EEE8) === 5 || call(s, 'viewer_spectate_in_retry'))) { s.cssBgHeld = true; liveHoldApply(s); }
   if (g(0x54EEE8) !== CSS_SCENE) { if (s.cssHeld) liveCssHold(s, false); s.cssKey = null; return; }
   s.cssPassed = true;  // (the next game's load checks the select's picks against the stream's setup: liveLoaderGate)
   const done = g(CSS_OBJ + 0x3C) >= 4;
@@ -2338,7 +2339,7 @@ function liveCssHold(s, on) {
 }
 // the game held (no frame steps) while a next game's files are not in: picked at the select screen, or a rematch's
 const liveHoldApply = s => {
-  const on = !!(s.cssHeld || s.rematchHeld || s.loadHeld);
+  const on = !!(s.cssHeld || s.rematchHeld || s.loadHeld || s.cssBgHeld);
   call(s, 'viewer_live_hold', on ? 1 : 0);
   if (on) status('live: loading the next game');
 };
@@ -3360,7 +3361,11 @@ async function start(file, quiet = false) {
   const rep = new Uint8Array(await file.arrayBuffer());
   let keys, want;
   try { keys = repKeys(rep); want = wantFor(rep); } catch (e) { loading(false); status('error: ' + e.message); return; }
-  if (want && liveSrc) for (const p of liveCssFiles(man)) want.add(p);
+  // live: the select screen's files (every character's portraits and palettes, ~80 MB: they were 80% of a first live
+  // join's download, 10-30 s before the first frame) come in the background once the match plays; the retry menu's
+  // BGM (small) with the match. liveCssBg holds the game at the result screen if they are not in yet
+  const cssBg = want && liveSrc ? [...liveCssFiles(man)].filter(p => !/^bgm\//.test(p)) : null;
+  if (want && liveSrc) for (const p of liveCssFiles(man)) if (/^bgm\//.test(p)) want.add(p);
   if (want) {
     status(`stage ${keys.stage}, P1 ${keys.p1[0]}:${keys.p1[1]} vs P2 ${keys.p2[0]}:${keys.p2[1]}: fetching`);
     await fetchAll(man, want, 'match assets');
@@ -3372,7 +3377,16 @@ async function start(file, quiet = false) {
   if (CAPTURE) await movieLoad();
   await play(rep, file.name, 0, want);
   if (want && next) prefetch(next, want);
-  else if (want) for (const p of [...cache.keys()]) if (!want.has(p)) cache.delete(p);  // the last match: the previous one's files go
+  else if (want) for (const p of [...cache.keys()]) if (!want.has(p) && !(cssBg && cssBg.includes(p))) cache.delete(p);  // the last match: the previous one's files go
+  if (cssBg && session && session.liveSrc) liveCssBg(session, cssBg);
+}
+// (live) the select screen's files in the background; until they are in MEMFS the game is held on reaching the result
+// screen (scene 5) or the retry menu, where the next select may follow (a match lasts minutes: in practice never held)
+function liveCssBg(s, paths) {
+  s.cssBgReady = false;
+  s.cssBgP = fetchAll(man, paths, '', true)
+    .then(() => { if (session !== s) return; liveInstall(s, paths); s.cssBgReady = true; if (s.cssBgHeld) { s.cssBgHeld = false; liveHoldApply(s); } })
+    .catch(e => { console.warn('live: select screen files:', e); if (session === s) { s.cssBgP = null; s.cssBgHeld = false; liveHoldApply(s); } });
 }
 // ---- playlist: several replays played back to back (each from round 1); the next one's files load during play ----
 async function prefetch(it, cur) {
