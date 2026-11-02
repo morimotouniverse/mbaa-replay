@@ -2231,6 +2231,24 @@ const bootSetup = rep => {  // boot.rep's header (cc_live.mjs bootRep): the stag
   const dv = new DataView(rep.buffer, rep.byteOffset, rep.byteLength), i = o => dv.getInt32(o, true);
   return { stage: i(0x28), chara: [i(0x40), i(0x50)], moon: [i(0x44), i(0x54)], color: [i(0x48), i(0x58)] };
 };
+// A stage the stock game does not have: a player's own extended bg/BgList.ini (stages 60+, live eD8abT4HcJwn: 62, 66;
+// 2 of 746 captures, 2026-11-01). The game's table (BgList_Load 0x4B4A80, Bg_001..Bg_099) has no entry for it and the
+// stage load (Stage_LoadBgDat 0x4B6BF0) loads nothing: a black stage and no music. A stock opponent's game never has
+// it: their stage select steps through their own list and lands on a stage they have. So: after a select ours stands
+// (liveSetupCheck), the same; with no select to follow (a join, a replay) a stand-in, the same one for the same id.
+const stageOk = id => id === 0 || !man || !man.files || !!man.files[`bg/bg${String(id).padStart(2, '0')}.dat`];
+function stageStandIn(id) {
+  const ok = Object.keys(man.files).map(f => /^bg\/bg(\d\d)\.dat$/.exec(f)).filter(Boolean).map(m => +m[1])
+    .filter(n => n > 0 && n !== 57 && n !== 58).sort((a, b) => a - b);  // (not the two giant stages: wider)
+  return ok.length ? ok[id % ok.length] : 1;
+}
+function repStageFix(rep) {  // a .rep / boot tape's header stage (0x28), in place
+  const dv = new DataView(rep.buffer, rep.byteOffset, rep.byteLength), id = dv.getInt32(0x28, true);
+  if (stageOk(id)) return;
+  const to = stageStandIn(id);
+  console.warn(`stage ${id} is not a stock stage (a modded stage list): stage ${to} stands in`);
+  dv.setInt32(0x28, to, true);
+}
 const livePrepOf = (s, game) => { const p = s.liveSrc.preps && s.liveSrc.preps.get(game); return p && p.ready ? p : null; };
 function liveNextPrep(s, game, entry = null) {
   const L = s.liveSrc, preps = L.preps || (L.preps = new Map());
@@ -2242,7 +2260,8 @@ function liveNextPrep(s, game, entry = null) {
     const r = await liveFetch(`${LIVE}/live/${L.id}/boot.rep?game=${game}`);
     if (!r.ok) throw new Error(`HTTP ${r.status}`);
     p.rep = new Uint8Array(await r.arrayBuffer());
-    p.setup = bootSetup(p.rep);
+    p.setup = bootSetup(p.rep);  // (the players' stage as sent: liveSetupCheck keeps ours for one we do not have)
+    repStageFix(p.rep);  // (the tape a switch starts from, and its files: a stand-in for a stage we do not have)
     // (the list entry: names, settings, the streak the bridge has for it; else the session's own with this setup)
     p.info = Object.assign({}, entry && entry.game === game ? entry : L.info, p.setup, { game });
     if (!(entry && entry.game === game)) p.info.streak = null;
@@ -2258,7 +2277,7 @@ function liveNextPrep(s, game, entry = null) {
 // the session's game (its battle slots and stage) has this setup: characters, moons, palettes, stage
 function liveSameSetup(s, S) {
   const H = s.M.HEAP32, slot = (q, o) => H[(BATTLE_SLOT + q * 0x2C + o) >> 2];
-  return H[STAGE_ID >> 2] === S.stage && [0, 1].every(q => slot(q, 8) === S.chara[q] && slot(q, 0x14) === S.moon[q] && slot(q, 4) === S.color[q]);
+  return (H[STAGE_ID >> 2] === S.stage || !stageOk(S.stage)) && [0, 1].every(q => slot(q, 8) === S.chara[q] && slot(q, 0x14) === S.moon[q] && slot(q, 4) === S.color[q]);
 }
 // our load after a character select (liveLoaderGate) against the stream's setup of that game: the same characters and
 // moons: the stage and palettes set to the stream's (our select's stage pick, a random roll, and the palette step are
@@ -2275,6 +2294,8 @@ function liveSetupCheck(s, p) {
     liveSwitch(s, p);
     return false;
   }
+  // (a stage our list does not have: ours, from following their select, stands: as on a stock opponent's game)
+  if (!stageOk(S.stage)) { console.warn(`live: game ${p.game}: the players' stage ${S.stage} is not a stock stage: ours (${H[STAGE_ID >> 2]}) stands`); S.stage = stageOk(H[STAGE_ID >> 2]) && H[STAGE_ID >> 2] ? H[STAGE_ID >> 2] : stageStandIn(S.stage); }
   if (H[STAGE_ID >> 2] !== S.stage || ours.some((x, q) => H[slot(q, 4)] !== S.color[q]))
     console.log(`live: game ${p.game}: stage ${H[STAGE_ID >> 2]} -> ${S.stage}, palettes ${H[slot(0, 4)]},${H[slot(1, 4)]} -> ${S.color}`);
   // (the battle music: g_StageBgmId, the stage's own unless a pick set another (a replay's playback sets it to the
@@ -2320,7 +2341,7 @@ async function liveLateCheck(s, game) {
   }
   if (!p || session !== s) return;
   const H = s.M.HEAP32, slot = (q, o) => H[(BATTLE_SLOT + q * 0x2C + o) >> 2], S = p.setup;
-  const same = H[STAGE_ID >> 2] === S.stage && [0, 1].every(q => slot(q, 8) === S.chara[q] && slot(q, 0x14) === S.moon[q] && slot(q, 4) === S.color[q]);
+  const same = (H[STAGE_ID >> 2] === S.stage || !stageOk(S.stage)) && [0, 1].every(q => slot(q, 8) === S.chara[q] && slot(q, 0x14) === S.moon[q] && slot(q, 4) === S.color[q]);
   console.log(`live: game ${game}'s setup came after our load: ${same ? 'the same' : 'different: switching'}`);
   if (!same) liveSwitch(s, p);
 }
@@ -3448,7 +3469,7 @@ async function start(file, quiet = false) {
   if (ensureAudio()) actx.resume();  // (after a drop or file pick: the page has had its gesture)
   const rep = new Uint8Array(await file.arrayBuffer());
   let keys, want;
-  try { keys = repKeys(rep); want = wantFor(rep); } catch (e) { loading(false); status('error: ' + e.message); return; }
+  try { repKeys(rep); repStageFix(rep); keys = repKeys(rep); want = wantFor(rep); } catch (e) { loading(false); status('error: ' + e.message); return; }
   // live: the select screen's files (every character's portraits and palettes, ~80 MB: they were 80% of a first live
   // join's download, 10-30 s before the first frame) come in the background once the match plays; the retry menu's
   // BGM (small) with the match. liveCssBg holds the game at the result screen if they are not in yet
