@@ -413,7 +413,8 @@
   #chatlog li.sys { color: var(--faint); font-size: 11px; font-style: italic; }
   #chatlog li.hist { opacity: .72; }
   #chatlog .cico { width: 18px; height: 24px; flex: none; border-radius: 4px; background: #ffffff0a; }
-  #chatlog .cnick { font-weight: 700; }  /* (real spaces around the name, not margins: a copied line reads "time name message", gaku 2026-11-02) */
+  #chatlog .cnick { font-weight: 700; }
+  #chatsec .cpre { font-weight: 700; margin-right: 1px; }  /* (IRC prefix ~ & @ % +: part of the name, copies as ~Name) */  /* (real spaces around the name, not margins: a copied line reads "time name message", gaku 2026-11-02) */
   #chatlog .ctime { color: var(--faint); font-size: 10px; white-space: nowrap; }
   #chatlog .cnick[data-act], #chatlog .cacttext { font-style: italic; }
   #chatsec .ceprev { display: flex; align-items: center; gap: 6px; font-size: 13px; color: var(--fg); padding: 2px 4px 2px 8px; min-height: 30px;
@@ -1225,6 +1226,20 @@
   // (glow: the site owner and the accounts the bot names in +mbaa/glow, user 2026-11-02: the owner and gaku; the other
   // mods the gradient and the wave; the bot strips it from the rest too)
   let glowAccts = new Set();
+  // IRC name prefixes (user 2026-11-02): ~ founder (+q, the site owner), & admin (+a, gaku), @ operator (+o, mods), % half-op,
+  // + voice; the highest mode a name holds in the line's channel, from NAMES (multi-prefix) and MODE. The bot shows none (its tag says bot).
+  const PRE_OF = { q: '~', a: '&', o: '@', h: '%', v: '+' }, MODE_OF = { '~': 'q', '&': 'a', '@': 'o', '%': 'h', '+': 'v' };
+  const rankPre = (c, n) => { if (!c || !n || key(n) === key(BOT)) return ''; const m = c.modes.get(key(n)); if (!m) return '';
+    for (const ch of 'qaohv') if (m.has(ch)) return PRE_OF[ch]; return ''; };
+  const preSpan = pre => { const s = document.createElement('span'); s.className = 'cpre'; s.textContent = pre; return s; };
+  // a rank change redraws the prefix on that name's lines already in the log (lines are drawn once)
+  // (n null: every name, once per NAMES batch)
+  const preRefresh = (c, n) => { if (!c || key(c.name) !== key(shown)) return;
+    for (const el of logEl.querySelectorAll('.cnick[data-irc]')) { const irc = el.dataset.irc; if (n && key(irc) !== key(n)) continue;
+      const pre = rankPre(c, irc), old = el.querySelector('.cpre');
+      if ((old ? old.textContent : '') === pre) continue;
+      if (old) old.remove(); if (pre) el.insertBefore(preSpan(pre), el.dataset.act ? el.firstChild.nextSibling : el.firstChild); }
+    if (membOpen) membersShow(); };
   const ownerAcct = a => !!(a && ((ownAcct && key(a) === key(ownAcct)) || glowAccts.has(key(a))));
   const glowMe = () => ownerMe() || !!(irc.account && glowAccts.has(key(irc.account)));
   const styleOf = a => {
@@ -1564,7 +1579,7 @@
   const readLocal = store.get(READ_KEY, {}) || {};
   function chan(name) {
     let c = chans.get(key(name));
-    if (!c) chans.set(key(name), c = { name, lines: [], names: new Set(), ops: new Set(), joined: false, histDone: false, seen: new Set(),
+    if (!c) chans.set(key(name), c = { name, lines: [], names: new Set(), ops: new Set(), modes: new Map(), joined: false, histDone: false, seen: new Set(),
                                        tries: 0, retryAt: 0, unread: 0,
                                        // readTs: read up to; divTs: the read point when the viewer came back (the divider and the
                                        // mentions are the lines after it, up to backAt); typing: nick -> {nick, until}; reacts:
@@ -1622,8 +1637,9 @@
     const tm = document.createElement('span'); tm.className = 'ctime';
     tm.textContent = l.time.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
     const nk = document.createElement('span'); nk.className = 'cnick'; inkSet(nk, l.color);
-    nk.textContent = l.action ? `* ${disp(l.nick)}` : disp(l.nick);
-    nk.dataset.full = l.nick; nk.title = l.nick; if (l.action) nk.dataset.act = '1';
+    { const pre = l.irc ? rankPre(l.chan && chans.get(key(l.chan)), l.irc) : '';
+      if (l.action) nk.append('* '); if (pre) nk.append(preSpan(pre)); nk.append(disp(l.nick)); }
+    nk.dataset.full = l.nick; if (l.irc) nk.dataset.irc = l.irc; nk.title = l.nick; if (l.action) nk.dataset.act = '1';
     const lst = lineStyle(l), own = !!lst;
     if (own) { nk.classList.add('own'); li.classList.add('oown'); styleApply(li, lst); }
     // (a reply's leading "@<their nick> ", written for plain IRC clients, is said by the header already)
@@ -2534,7 +2550,7 @@
       const aw = irc.away.get(key(n));
       let col = null;
       for (let i = c.lines.length - 1; i >= 0; i--) if (c.lines[i].irc && key(c.lines[i].irc) === key(n)) { col = c.lines[i].color; break; }
-      return { n, name: disp(nameOf(n, c)), aw, idle: aw != null && /^idle$/i.test(aw), bot: key(n) === key(BOT), op: c.ops.has(key(n)), me: key(n) === key(irc.nick),
+      return { n, name: disp(nameOf(n, c)), aw, idle: aw != null && /^idle$/i.test(aw), bot: key(n) === key(BOT), op: c.ops.has(key(n)), pre: rankPre(c, n), me: key(n) === key(irc.nick),
                ty: c.typing.has(key(n)), col };
     });
     rows.sort((a, b) => (!!a.aw - !!b.aw) || (b.bot - a.bot) || a.name.localeCompare(b.name, undefined, { sensitivity: 'base' }));
@@ -2544,11 +2560,11 @@
     const els = rows.map(r => {
       const d = document.createElement('div'); d.className = 'mm' + (r.aw != null ? ' away' : '') + (r.idle ? ' idle' : '');
       const dot = document.createElement('i'); dot.className = 'dot';
-      const b = document.createElement('b'); b.textContent = r.name; if (r.col) inkSet(b, r.col);
+      const b = document.createElement('b'); if (r.pre) b.append(preSpan(r.pre)); b.append(r.name); if (r.col) inkSet(b, r.col);
       d.append(dot, b);
       const tag = (t, cls) => { const s = document.createElement('span'); s.className = 'tag' + (cls ? ` ${cls}` : ''); s.textContent = t; d.append(s); };
       if (r.me) tag('you');
-      if (r.bot) tag('bot'); else if (r.op) tag('mod');
+      if (r.bot) tag('bot'); else if (r.op && !r.pre) tag('mod');
       if (r.ty) tag('typing…');
       if (r.aw != null) tag(r.idle ? 'idle' : 'away', 'aw');
       d.title = r.aw != null && !r.idle && r.aw !== 'away' ? `${r.name}: away (${r.aw})` : r.name;
@@ -3674,7 +3690,7 @@
         if (irc.ws) irc.ws.close();  // (reconnects as a guest)
       };
       menuFill([['edit profile', profEdit], ['change name', () => { auth.renaming = true; authShow(); }], ['sign out', signOut]],
-        `signed in as ${disp(shownNick(irc.account, irc.account, auth.name))}${auth.provider ? ` (with ${auth.provider})` : ''}`);
+        `signed in as ${rankPre(chan(GENERAL), irc.nick)}${disp(shownNick(irc.account, irc.account, auth.name))}${auth.provider ? ` (with ${auth.provider})` : ''}`);
       if (auth.renaming) nameForm('name', irc.account.replace(/-\d{4}[a-z]?$/, ''), 'rename');
     } else if (auth.state === 'name') {
       const t = document.createElement('span'); t.textContent = 'Pick your name (your PovertyCaster account, the same one the launcher uses):';
@@ -3834,7 +3850,7 @@
       case 'NICK': {
         const to = p[0];
         // (a channel operator keeps +o across a nick change: the ops follow the nick, or a mod who changed name loses the menu)
-        for (const c of chans.values()) { if (c.names.delete(m.nick)) c.names.add(to); if (c.ops.delete(key(m.nick))) c.ops.add(key(to)); }
+        for (const c of chans.values()) { if (c.names.delete(m.nick)) c.names.add(to); if (c.ops.delete(key(m.nick))) c.ops.add(key(to)); const md = c.modes.get(key(m.nick)); if (md) { c.modes.delete(key(m.nick)); c.modes.set(key(to), md); } }
         const meNick = m.nick === irc.nick;
         if (meNick) irc.nick = to;
         const aw = irc.away.get(key(m.nick)); irc.away.delete(key(m.nick)); if (aw != null) irc.away.set(key(to), aw);
@@ -3844,11 +3860,11 @@
       }
       case 'JOIN': {
         const c = chan(p[0]);
-        if (m.nick === irc.nick) { c.joined = true; c.tries = 0; c.retryAt = 0; c.ops.clear(); }
+        if (m.nick === irc.nick) { c.joined = true; c.tries = 0; c.retryAt = 0; c.ops.clear(); c.modes.clear(); }
         c.names.add(m.nick); tabs();
         return;
       }
-      case 'PART': { const c = chan(p[0]); c.names.delete(m.nick); c.typing.delete(key(m.nick)); c.ops.delete(key(m.nick)); if (m.nick === irc.nick) { c.joined = false; c.names.clear(); } tabs(); return; }
+      case 'PART': { const c = chan(p[0]); c.names.delete(m.nick); c.typing.delete(key(m.nick)); c.ops.delete(key(m.nick)); c.modes.delete(key(m.nick)); if (m.nick === irc.nick) { c.joined = false; c.names.clear(); } tabs(); return; }
       case 'KICK': { const c = chan(p[0]); c.names.delete(p[1]); if (p[1] === irc.nick) { c.joined = false; c.names.clear(); sys(`kicked from ${p[0]}`, p[0]); } tabs(); return; }
       case 'QUIT': for (const c of chans.values()) { c.names.delete(m.nick); c.typing.delete(key(m.nick)); } irc.away.delete(key(m.nick)); typingShow(); tabs(); return;
       // presence: away-notify's AWAY (a reason: away; none: back), our own (305 / 306), WHO's H / G at joining
@@ -3885,7 +3901,9 @@
           const pre = n.match(/^[~&@%+]*/)[0], nk = n.slice(pre.length).split('!')[0];
           c.names.add(nk);
           if (/[~&@%]/.test(pre)) c.ops.add(key(nk)); else c.ops.delete(key(nk));
+          const md = new Set([...pre].map(x => MODE_OF[x])); if (md.size) c.modes.set(key(nk), md); else c.modes.delete(key(nk));
         }
+        preRefresh(c, null);
         return;
       }
       case 'MODE': {  // (operator status: who gets delete buttons)
@@ -3897,6 +3915,7 @@
           if ('qaohv'.includes(ch)) {
             const nk = p[ai++] || '';
             if ('qaoh'.includes(ch)) { if (add) c.ops.add(key(nk)); else c.ops.delete(key(nk)); if (key(nk) === key(irc.nick)) mine = true; }
+            { let md = c.modes.get(key(nk)); if (add) { if (!md) c.modes.set(key(nk), md = new Set()); md.add(ch); } else if (md) md.delete(ch); preRefresh(c, nk); }
           } else if ('beIkf'.includes(ch) || (ch === 'l' && add)) ai++;
         }
         if (mine) spreadAdmin();
@@ -4420,7 +4439,7 @@
     const done = t => { toBot(t); modClose(); };
     function main() {
       modm.replaceChildren();
-      const h = el('div', 'mh'); h.append(el('b', '', name), el('small', '', who === name ? 'guest or plain IRC' : who)); modm.append(h);
+      const h = el('div', 'mh'), hb = el('b', '', name), hp = rankPre(c, who); if (hp) hb.prepend(preSpan(hp)); h.append(hb, el('small', '', who === name ? 'guest or plain IRC' : who)); modm.append(h);
       const row = (...kids) => { const r = el('div', 'mr'); r.append(...kids); modm.append(r); };
       row(button('delete message', 'w', () => done(`del ${l.msgid} ${c.name}`), 'delete this message for everyone'));
       row(el('span', '', 'mute'), ...[['10m', '10 minutes'], ['1h', '1 hour'], ['1d', '1 day']].map(([d, t]) => button(d, 'mchip', () => done(`mute ${who} ${d}`), `mute for ${t} in every channel`)));
