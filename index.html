@@ -387,12 +387,14 @@
      cut at the picture's edge, under the names; with them the small icons are not needed in the card */
   #matchcard { position: relative; }
   #matchcard .por { display: none; }
-  #matchcard.pors:has(#stageblk:not([hidden])) .por:not([hidden]) { display: block; position: absolute; z-index: 1; top: -22%; left: 25%;
-    transform: translateX(-50%); height: 165%; width: auto; max-width: none; pointer-events: none; filter: drop-shadow(0 0 8px #000c); }
+  /* (each character's own fit, viewer.js POR_ADJ: --por-y / --por-x in % of the card, --por-s a scale; ?portune=1 dials them) */
+  #matchcard.pors:has(#stageblk:not([hidden])) .por:not([hidden]) { display: block; position: absolute; z-index: 1;
+    top: calc(-22% + var(--por-y, 0) * 1%); left: calc(25% + var(--por-x, 0) * 1%);
+    transform: translateX(-50%); height: calc(165% * var(--por-s, 1)); width: auto; max-width: none; pointer-events: none; filter: drop-shadow(0 0 8px #000c); }
   /* (the song line under the picture covers the figures' lower part: they end at the picture's edge, uncut by a fade) */
   #matchcard.pors:has(#stageblk:not([hidden])) .trk { position: relative; z-index: 3; background: var(--panel); margin-top: 0; padding-top: 4px; }
   /* (each figure centred on its half; P2 mirrored, facing P1) */
-  #matchcard.pors:has(#stageblk:not([hidden])) .por.p2:not([hidden]) { left: 75%; transform: translateX(-50%) scaleX(-1); }
+  #matchcard.pors:has(#stageblk:not([hidden])) .por.p2:not([hidden]) { left: calc(75% - var(--por-x, 0) * 1%); transform: translateX(-50%) scaleX(-1); }
   #matchcard.pors:has(#stageblk:not([hidden])) { overflow: hidden; border-radius: 8px; }
   /* (over the portraits: the names, the VS / watchers and the stage's name plate) */
   #matchcard:has(#stageblk:not([hidden])) .name { z-index: 2; position: relative; }
@@ -424,8 +426,9 @@
   /* wide (desktop: the card under the picture, as wide as the controls): a banner, not a 256:110 picture 500 px tall */
   body:is(.deskchat, :not(.side)) #matchcard:has(#stageblk:not([hidden])) .view { aspect-ratio: auto; height: clamp(150px, 15vw, 210px); object-fit: cover; }
   body:is(.deskchat, :not(.side)) #matchcard:has(#stageblk:not([hidden])) .plate { width: 34%; --stack-top: 32px; }
-  body:is(.deskchat, :not(.side)) #matchcard.pors:has(#stageblk:not([hidden])) .por:not([hidden]) { height: 250%; top: -37%; left: 27%; }
-  body:is(.deskchat, :not(.side)) #matchcard.pors:has(#stageblk:not([hidden])) .por.p2:not([hidden]) { left: 73%; }
+  body:is(.deskchat, :not(.side)) #matchcard.pors:has(#stageblk:not([hidden])) .por:not([hidden]) { height: calc(250% * var(--por-s, 1));
+    top: calc(-37% + var(--por-y, 0) * 1%); left: calc(27% + var(--por-x, 0) * 1%); }
+  body:is(.deskchat, :not(.side)) #matchcard.pors:has(#stageblk:not([hidden])) .por.p2:not([hidden]) { left: calc(73% - var(--por-x, 0) * 1%); }
   body:is(.deskchat, :not(.side)) #matchcard:has(#stageblk:not([hidden])) #players { padding: 0 14px 9px; }
   body:is(.deskchat, :not(.side)) #matchcard:has(#stageblk:not([hidden])) #players .nm { font-size: 22px; }
   body:is(.deskchat, :not(.side)) #matchcard:has(#stageblk:not([hidden])) #players .ch .mqx { font-size: 15px; }
@@ -864,6 +867,6 @@
 </div>
 <script src="mbaa.js?v=b569d032d18d"></script>
 <script src="bgm_stream.js?v=407ac29e5c89"></script>
-<script src="viewer.js?v=bd0c5e62dafa"></script>
+<script src="viewer.js?v=abf28292464b"></script>
 </body>
 </html>

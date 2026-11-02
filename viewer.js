@@ -1731,6 +1731,14 @@ function playersShow(s) {
 // figure CharaSelectPanel_LoaderThread loads for the hovered character), P1 on the left, P2 mirrored on the right, over
 // the stage picture. Fetched on first use (a replay's plan has no select screen); a boss has its base character's.
 const porUrls = new Map();
+// each portrait's fit on the card, by the portrait's character id (a boss uses its base's): y = down by % of the card's
+// height, s = scale (of today's height), x = inward by % of the card's width (P2 mirrored). {0, 1, 0} = the plain rule.
+// Dialled on the real card with ?portune=1 (its "Copy JSON" output is pasted here as it is).
+const POR_ADJ = {};
+function porApply(el, path) {
+  const id = path ? +path.match(/csel_c(\d+)\.png$/)[1] : -1, a = (porTune ? porTune.adj : POR_ADJ)[id] || {};
+  el.style.setProperty('--por-y', +a.y || 0); el.style.setProperty('--por-s', a.s > 0 ? +a.s : 1); el.style.setProperty('--por-x', +a.x || 0);
+}
 function porPath(c) {
   const at = id => `grp/c_sel_aa/chara/csel_c${String(id).padStart(2, '0')}.png`;
   if (man && man.files[at(c)]) return at(c);
@@ -1738,6 +1746,7 @@ function porPath(c) {
   return base >= 0 && man && man.files[at(base)] ? at(base) : null;
 }
 async function porShow(p, c) {
+  if (porTune) c = porTuneChar(p);  // (tuning: the panel's pick, whatever is playing)
   const el = document.querySelectorAll('#matchcard .por:not(.xfghost)')[p], path = porPath(c);
   if (!el) return;
   el.dataset.c = c;
@@ -1751,8 +1760,178 @@ async function porShow(p, c) {
     }
     if (+el.dataset.c !== c) return;  // (another pick meanwhile)
     xfadeSrc(el, porUrls.get(path)); el.hidden = false;
+    porApply(el, path);  // (after the fade's ghost is cloned: the ghost keeps the old character's fit)
   } catch (e) { el.hidden = true; }
   document.getElementById('matchcard').classList.toggle('pors', [...document.querySelectorAll('#matchcard .por:not(.xfghost)')].some(e => !e.hidden));
+}
+// ---- ?portune=1: dial each character's portrait fit (POR_ADJ) on the real card ----
+// A floating panel: the character (and the side it stands on), the opponent (the same one, another, none), y / s / x
+// sliders, prev / next, arrow-key nudges, an eye-line guide. Kept in this browser (localStorage) while tuning; "Copy JSON"
+// / "Download" give the whole table, pasted into POR_ADJ as it is. With no match playing the card shows a stage picture.
+const PORTUNE_KEY = 'mbaa.portune.v1';
+const porTune = Q.get('portune') ? (() => {
+  let saved = null;
+  try { saved = JSON.parse(localStorage.getItem(PORTUNE_KEY) || 'null'); } catch (e) {}
+  const adj = JSON.parse(JSON.stringify(POR_ADJ));
+  if (saved && saved.adj) Object.assign(adj, saved.adj);
+  return { adj, c: saved && saved.c >= 0 ? saved.c : 0, side: saved && saved.side ? 1 : 0, opp: saved && saved.opp !== undefined ? saved.opp : 'same',
+           guide: saved ? !!saved.guide : true, guideY: saved && saved.guideY !== undefined ? saved.guideY : 30, roster: [], stageDone: false };
+})() : null;
+function porTuneChar(p) {
+  const t = porTune;
+  if (p === t.side) return t.c;
+  return t.opp === 'same' ? t.c : t.opp === 'none' ? -1 : +t.opp;
+}
+function porTuneSave() {
+  const t = porTune;
+  try { localStorage.setItem(PORTUNE_KEY, JSON.stringify({ adj: t.adj, c: t.c, side: t.side, opp: t.opp, guide: t.guide, guideY: t.guideY })); } catch (e) {}
+}
+// the table as pasted into POR_ADJ: only the characters moved off the default, one per line, by id (valid JSON)
+function porTuneJson() {
+  const ids = Object.keys(porTune.adj).map(Number).sort((a, b) => a - b).filter(id => {
+    const a = porTune.adj[id]; return a && ((+a.y || 0) !== 0 || (a.s > 0 ? +a.s : 1) !== 1 || (+a.x || 0) !== 0);
+  });
+  if (!ids.length) return '{}';
+  return '{\n' + ids.map((id, i) => { const a = porTune.adj[id];
+    return `  "${id}": { "y": ${+a.y || 0}, "s": ${a.s > 0 ? +a.s : 1}, "x": ${+a.x || 0} }${i < ids.length - 1 ? ',' : ''}`; }).join('\n') + '\n}';
+}
+async function porTuneStage(box) {
+  if (porTune.stageDone) return;
+  porTune.stageDone = true;
+  const id = Object.keys(stagePanel.stages).find(k => stagePanel.stages[k].art.includes('view'));
+  if (id === undefined) return;
+  const n = String(id).padStart(2, '0'), paths = stagePanel.stages[id].art.map(k => `web/stage/${k}_${n}.png`);
+  await fetchAll(man, paths, '', true);
+  for (const k of ['view', 'name']) {
+    const img = box.querySelector('.' + k), d = cache.get(`web/stage/${k}_${n}.png`);
+    let blob = d ? new Blob([d], { type: 'image/png' }) : null;
+    if (blob && k === 'name') try { blob = await trimAlpha(blob); } catch (e) {}
+    if (blob) img.src = URL.createObjectURL(blob);
+    img.hidden = !blob;
+  }
+  box.hidden = false;
+  porTuneShow();
+}
+function porTuneShow() {
+  if (!porTune.ui) return;
+  porShow(0, 0); porShow(1, 0);  // (porShow takes the panel's picks)
+  porTune.ui.sync();
+  porTuneSave();
+}
+function porTuneInit() {
+  const t = porTune;
+  if (!man || t.ui) return !!t.ui;
+  const at = id => `grp/c_sel_aa/chara/csel_c${String(id).padStart(2, '0')}.png`;
+  t.roster = Object.keys(CHARA).map(Number).filter(id => man.files[at(id)]);
+  if (!t.roster.length) return false;
+  if (!t.roster.includes(t.c)) t.c = t.roster[0];
+  const css = document.createElement('style');
+  css.textContent = `#portune { position: fixed; z-index: 10000; top: 8px; right: 8px; width: 300px; max-width: calc(100vw - 16px);
+      max-height: calc(100vh - 16px); overflow: auto; box-sizing: border-box; padding: 8px 10px; border-radius: 8px;
+      background: #15151ef0; color: #eee; font: 12px/1.35 system-ui, sans-serif; box-shadow: 0 4px 18px #000a; }
+    #portune.min > :not(.hd) { display: none; }
+    #portune .hd { display: flex; justify-content: space-between; align-items: center; font-weight: 700; margin-bottom: 4px; }
+    #portune .row { display: flex; gap: 6px; align-items: center; margin: 4px 0; }
+    #portune .row > label:first-child { width: 62px; flex: none; }
+    #portune select, #portune input[type=number] { background: #222; color: #eee; border: 1px solid #444; border-radius: 4px; font: inherit; }
+    #portune select { flex: 1; min-width: 0; }
+    #portune input[type=range] { flex: 1; min-width: 0; }
+    #portune input[type=number] { width: 58px; }
+    #portune button { background: #2c2c3a; color: #eee; border: 1px solid #555; border-radius: 4px; padding: 2px 7px; font: inherit; cursor: pointer; }
+    #portune button.on { background: #6a4cc8; border-color: #8a6cf0; }
+    #portune textarea { width: 100%; box-sizing: border-box; height: 74px; background: #111; color: #cfc; border: 1px solid #444; font: 11px monospace; }
+    #portune .hint { color: #999; font-size: 11px; }
+    #matchcard .porguide { position: absolute; left: 0; right: 0; height: 0; border-top: 1px dashed #0ff; z-index: 4; pointer-events: none;
+      box-shadow: 0 0 2px #000; }`;
+  document.head.append(css);
+  const box = document.createElement('div');
+  box.id = 'portune';
+  box.innerHTML = `<div class="hd"><span>Portrait tuning</span><button data-a="min" title="fold the panel">–</button></div>
+    <div class="row"><label>character</label><button data-a="prev" title="previous (PageUp)">◀</button><select data-k="c"></select><button data-a="next" title="next (PageDown)">▶</button></div>
+    <div class="row"><label>side</label><button data-side="0">P1</button><button data-side="1">P2</button></div>
+    <div class="row"><label>opponent</label><select data-k="opp"></select></div>
+    <div class="row"><label>y (% down)</label><input type="range" data-k="y" min="-80" max="80" step="0.5"><input type="number" data-k="y" step="0.5"></div>
+    <div class="row"><label>s (scale)</label><input type="range" data-k="s" min="0.4" max="2.5" step="0.01"><input type="number" data-k="s" step="0.01" min="0.1"></div>
+    <div class="row"><label>x (% in)</label><input type="range" data-k="x" min="-40" max="40" step="0.5"><input type="number" data-k="x" step="0.5"></div>
+    <div class="row"><label><input type="checkbox" data-k="guide"> guide</label><input type="range" data-k="guideY" min="0" max="100" step="0.5"><input type="number" data-k="guideY" step="0.5"></div>
+    <div class="row"><button data-a="reset">Reset this character</button><button data-a="copy">Copy JSON</button><button data-a="dl">Download</button></div>
+    <textarea data-k="json" spellcheck="false" title="the whole table (POR_ADJ); edit or paste, then Apply JSON"></textarea>
+    <div class="row"><button data-a="apply">Apply JSON</button><span class="hint" data-k="msg"></span></div>
+    <div class="hint">keys: ↑↓ y, ←→ x, +/− scale (shift: ×4), PgUp/PgDn character. Kept in this browser.</div>`;
+  document.body.append(box);
+  const q = s => box.querySelector(s), qa = s => [...box.querySelectorAll(s)];
+  const opt = (v, txt) => { const o = document.createElement('option'); o.value = v; o.textContent = txt; return o; };
+  q('select[data-k=c]').append(...t.roster.map(id => opt(id, `${CHARA[id]} (${id})`)));
+  q('select[data-k=opp]').append(opt('same', 'the same character'), opt('none', 'none'), ...t.roster.map(id => opt(id, CHARA[id])));
+  const guide = document.createElement('div');
+  guide.className = 'porguide';
+  document.getElementById('matchcard').append(guide);
+  const cur = () => ({ y: 0, s: 1, x: 0, ...(t.adj[t.c] || {}) });
+  const msg = m => { q('[data-k=msg]').textContent = m; };
+  const set = (k, v) => {
+    if (!Number.isFinite(v)) return;
+    const a = cur();
+    a[k] = Math.round(v * 1000) / 1000;
+    if (k === 's' && a.s <= 0) a.s = 0.01;
+    t.adj[t.c] = a;
+    porTuneShow();
+  };
+  t.ui = { sync() {
+    const a = cur();
+    q('select[data-k=c]').value = t.c; q('select[data-k=opp]').value = t.opp;
+    for (const k of ['y', 's', 'x']) for (const e of qa(`input[data-k=${k}]`)) if (document.activeElement !== e || e.type === 'range') e.value = a[k];
+    for (const e of qa('input[data-k=guideY]')) if (document.activeElement !== e || e.type === 'range') e.value = t.guideY;
+    q('input[data-k=guide]').checked = t.guide;
+    qa('[data-side]').forEach(b => b.classList.toggle('on', +b.dataset.side === t.side));
+    guide.hidden = !t.guide; guide.style.top = t.guideY + '%';
+    if (document.activeElement !== q('textarea')) q('textarea').value = porTuneJson();
+  } };
+  const step = d => { const i = t.roster.indexOf(t.c); t.c = t.roster[(i + d + t.roster.length) % t.roster.length]; porTuneShow(); };
+  q('select[data-k=c]').onchange = e => { t.c = +e.target.value; porTuneShow(); };
+  q('select[data-k=opp]').onchange = e => { t.opp = e.target.value; porTuneShow(); };
+  qa('[data-side]').forEach(b => b.onclick = () => { t.side = +b.dataset.side; porTuneShow(); });
+  for (const k of ['y', 's', 'x']) for (const e of qa(`input[data-k=${k}]`)) e.oninput = () => set(k, parseFloat(e.value));
+  for (const e of qa('input[data-k=guideY]')) e.oninput = () => { const v = parseFloat(e.value); if (Number.isFinite(v)) { t.guideY = v; porTuneShow(); } };
+  q('input[data-k=guide]').onchange = e => { t.guide = e.target.checked; porTuneShow(); };
+  const copy = async txt => {
+    try { await navigator.clipboard.writeText(txt); return true; } catch (e) {}
+    const ta = q('textarea'); ta.value = txt; ta.select();
+    try { return document.execCommand('copy'); } catch (e) { return false; }
+  };
+  box.onclick = async e => {
+    const a = e.target.dataset && e.target.dataset.a;
+    if (a === 'prev') step(-1); else if (a === 'next') step(1);
+    else if (a === 'min') box.classList.toggle('min');
+    else if (a === 'reset') { delete t.adj[t.c]; porTuneShow(); msg(`${CHARA[t.c]}: back to the default`); }
+    else if (a === 'copy') { const j = porTuneJson(); q('textarea').value = j; msg(await copy(j) ? 'copied: paste it into POR_ADJ' : 'select the text and copy it'); }
+    else if (a === 'dl') {
+      const u = URL.createObjectURL(new Blob([porTuneJson() + '\n'], { type: 'application/json' })), l = document.createElement('a');
+      l.href = u; l.download = 'por_adj.json'; document.body.append(l); l.click(); l.remove(); setTimeout(() => URL.revokeObjectURL(u), 5000);
+    } else if (a === 'apply') {
+      try {
+        const o = JSON.parse(q('textarea').value);
+        t.adj = {};
+        for (const [id, v] of Object.entries(o)) t.adj[+id] = { y: +v.y || 0, s: v.s > 0 ? +v.s : 1, x: +v.x || 0 };
+        q('textarea').blur(); porTuneShow(); msg('applied');
+      } catch (err) { msg('not JSON: ' + err.message); }
+    }
+  };
+  // (the viewer's own keys wait while tuning; a text field keeps its keys)
+  addEventListener('keydown', e => {
+    if (e.target && e.target.closest && e.target.closest('input[type=number], textarea, select')) return;
+    const m = e.shiftKey ? 4 : 1, a = cur();
+    const k = { ArrowUp: ['y', -0.5], ArrowDown: ['y', 0.5], ArrowLeft: ['x', -0.5], ArrowRight: ['x', 0.5], '+': ['s', 0.01], '=': ['s', 0.01], '-': ['s', -0.01], '_': ['s', -0.01] }[e.key];
+    if (k) set(k[0], a[k[0]] + k[1] * m);
+    else if (e.key === 'PageUp') step(-1); else if (e.key === 'PageDown') step(1);
+    else return;
+    e.preventDefault(); e.stopImmediatePropagation();
+  }, true);
+  porTuneShow();
+  return true;
+}
+if (porTune) {
+  const iv = setInterval(() => { if (porTuneInit()) clearInterval(iv); }, 300);
+  window.__porTune = { json: porTuneJson, get state() { return porTune; } };
 }
 // the cursor frames' loop over the icons, at the select screen's rate (CharaSelectIcons_Update, CE 0x48BAB0: the next of
 // 10 frames every 2 game ticks)
@@ -2179,6 +2358,7 @@ function xfadeSrc(img, src, revoke) {
 }
 async function stageShow(s) {
   const box = document.getElementById('stageblk');
+  if (porTune && stagePanel && !(s && s.M)) return porTuneStage(box);  // (tuning with no match: a stage picture anyway)
   if (!stagePanel || !s || !s.M) { box.hidden = true; return; }
   const id = radio && radio.stageNow ? radio.stageNow : s.M.HEAP32[STAGE_ID >> 2], st = stagePanel.stages[id];  // (an MBAACC pick's stage)
   const mu = musicNow(), own = musicPick === 'match' ? s.bgmNow : null;
