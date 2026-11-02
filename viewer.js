@@ -117,7 +117,70 @@ async function fetchRaw(h) {
   if (objCache) objCache.put(url, new Response(buf.slice(0))).catch(() => {});
   return buf;
 }
-function status(t) { document.getElementById('status').textContent = t; }
+function status(t) { document.getElementById('status').textContent = t; slogStatus(t); }
+// ---- the session log (user 2026-11-01: "I wish I had a log ... x player x match x time and how long x phase took"):
+// every status line (a progress run kept as one entry, first and last), each live session's scene changes (VS,
+// select, battle, result), holds and their reason, 2x / catch-up, switches, and the game's own spectate: / live:
+// console lines, timestamped. ⚙ "copy session log" puts it on the clipboard; a live picture stuck 20 s sends it to the
+// bridge (/live/<id>/diag: kept with the captures, no addresses) once per stall ----
+const SLOG_MAX = 800, slog = [], slogT0 = performance.now();
+let slogNorm = '';
+function slogAdd(ev, d = '') {
+  slog.push([Math.round(performance.now() - slogT0), new Date().toISOString().slice(11, 23), ev, String(d).slice(0, 300)]);
+  if (slog.length > SLOG_MAX) slog.splice(0, slog.length - SLOG_MAX);
+}
+function slogStatus(t) {
+  const n = String(t).replace(/[\d.]+/g, '#');
+  const last = slog[slog.length - 1];
+  if (n === slogNorm && last && last[2] === 'status') { last[4] = String(t).slice(0, 300); return; }  // (a progress run: its last line)
+  slogNorm = n; slogAdd('status', t);
+}
+for (const k of ['warn', 'error']) {
+  const o = console[k].bind(console);
+  console[k] = (...a) => { try { const t = a.map(String).join(' '); if (k === 'error' || /^(spectate|live|radio):/.test(t)) slogAdd(k, t); } catch (e) {} o(...a); };
+}
+addEventListener('error', e => slogAdd('error', `${e.message} @${(e.filename || '').split('/').pop()}:${e.lineno}`));
+addEventListener('unhandledrejection', e => slogAdd('error', `promise: ${e.reason && e.reason.message || e.reason}`));
+const SCENE_NAME = { 0: 'boot', 1: 'battle', 2: 'title', 5: 'result', 8: 'VS screen', 20: 'character select' };
+function slogWatch(s) {
+  const M = s.M; if (!M) return;
+  const w = s.slogW || (s.slogW = { scene: null, holds: '', ff: false, f: -1, fAt: performance.now(), sent: false });
+  const scene = M.HEAP32[0x54EEE8 >> 2], f = M._viewer_frame();
+  if (scene !== w.scene) { slogAdd('scene', `${SCENE_NAME[scene] || 'scene ' + scene} (frame ${f})`); w.scene = scene; }
+  const holds = [s.cssHeld && 'next game files (select)', s.loadHeld && 'next game setup', s.rematchHeld && 'rematch files',
+    s.cssBgHeld && 'select screen files', s.liveHeld && 'stream', s.seeking && 'seeking'].filter(Boolean).join(', ');
+  if (holds !== w.holds) { slogAdd('hold', holds ? `held: ${holds}` : 'running'); w.holds = holds; }
+  if (!!s.liveFF !== w.ff) { w.ff = !!s.liveFF; slogAdd('speed', w.ff ? '2x catching up' : '1x'); }
+  const now = performance.now();
+  if (f !== w.f) { w.f = f; w.fAt = now; w.sent = false; }
+  else if (!w.sent && s.liveSrc && !ui.paused && !document.hidden && now - w.fAt > 20000) {
+    w.sent = true; slogAdd('stall', `no frame for ${Math.round((now - w.fAt) / 1000)} s at frame ${f}`); slogSend(s, 'stall');
+  }
+}
+function slogText() {
+  const L = liveSrc, head = [`MBAACC viewer session log, ${new Date(Date.now() - (performance.now() - slogT0)).toISOString()} (UTC)`,
+    L ? `live ${L.id}: ${(L.info.names || []).map(n => (n || '?').trim() || '?').join(' vs ')} (game ${L.info.game})` : `page ${location.search.slice(0, 80)}`,
+    `${navigator.userAgent.match(/(Firefox|Chrome|Safari|Edg)\/[\d.]+/)?.[0] || ''}${matchMedia('(pointer: coarse)').matches ? ', touch' : ''}${typeof LOWMEM !== 'undefined' && LOWMEM ? ', low memory' : ''}`, ''];
+  return head.concat(slog.map(([ms, at, ev, d, d2]) => `+${(ms / 1000).toFixed(1).padStart(7)}s ${at} ${ev.padEnd(6)} ${d}${d2 && d2 !== d ? ` … ${d2}` : ''}`)).join('\n')
+    .replace(/\b\d{1,3}(\.\d{1,3}){3}(:\d+)?\b/g, '<ip>');  // (a player named by their address: never shown)
+}
+function slogSend(s, why) {
+  const L = s && s.liveSrc;
+  if (!L || !LIVE) return;
+  fetch(`${LIVE}/live/${L.id}/diag`, { method: 'POST', body: JSON.stringify({ why, text: slogText() }).slice(0, 120000) }).catch(() => {});
+}
+window.mbaaSessionLog = slogText;  // (tests, and the console)
+document.getElementById('slogcopy')?.addEventListener('click', async e => {
+  const b = e.currentTarget, t = slogText();
+  try { await navigator.clipboard.writeText(t); b.textContent = 'copied ✓'; }
+  catch (err) {  // (no clipboard permission: a box to copy from)
+    const ta = Object.assign(document.createElement('textarea'), { value: t, readOnly: true });
+    Object.assign(ta.style, { position: 'fixed', inset: '10% 10%', zIndex: 99, background: '#111', color: '#ddd', font: '11px monospace' });
+    ta.onblur = () => ta.remove(); document.body.append(ta); ta.focus(); ta.select(); b.textContent = 'select all + copy';
+  }
+  if (session && session.liveSrc) slogSend(session, 'copied');
+  setTimeout(() => { b.textContent = 'copy session log'; }, 2500);
+});
 // chara id -> display name (charaselect.txt CharaNo_<id>; replay header side block +4), moon (+8): 0 C, 1 F, 2 H
 const CHARA = { 0: 'Sion', 1: 'Arcueid', 2: 'Ciel', 3: 'Akiha', 4: 'Hisui & Kohaku', 5: 'Hisui', 6: 'Kohaku', 7: 'Shiki',
   8: 'Miyako', 9: 'Warachia', 10: 'Nrvnqsr', 11: 'V. Sion', 12: 'Red Arcueid', 13: 'V. Akiha', 14: 'Mech-Hisui', 15: 'Nanaya',
@@ -906,7 +969,7 @@ function timelineInit(s) {
       t.intro = scene === 1 ? intro : -1;
       if (t.end === null && M._viewer_ended()) t.end = f;
     }
-    if (s.liveSrc) { liveCssWatch(s); liveRematchHold(s); liveBanner(s); liveStreak(s); }
+    if (s.liveSrc) { liveCssWatch(s); liveRematchHold(s); liveBanner(s); liveStreak(s); slogWatch(s); }
     else if (TUNE) liveBanner(s);
     if (!s.seeking) incTick(s, f);
     else if (f >= t.lastKf + KF_EVERY && f >= t.simMax && !M._viewer_files_open() && !(LOWMEM && !t.marks.length)) keyframe(s, f);  // phones: none in the intro (incTick)
@@ -2282,6 +2345,7 @@ function liveBanner(s) {
   if (key !== s.bannerKey) {
     s.bannerKey = key;
     call(s, 'viewer_banner_enable', ui.names && (TUNE || names.some(Boolean)) ? 1 : 0);
+    slogAdd('names', `banner ${ui.names ? 'on' : 'OFF (the NAMES button)'}: ${names.map(n => n ? JSON.stringify(n) : '(none)').join(' vs ')}`);
     for (const p of [0, 1]) {
       const n = names[p], game = asciiName(n);
       s.M.ccall('viewer_banner_name', null, ['number', 'string', 'number'], [p, game ? n : '', n && !game ? 1 : 0]);
@@ -2611,6 +2675,7 @@ function liveBegin(s) {  // play(): after viewer_play
       // (starved: the game waited for the stream since the last poll, in a battle. ahead is read just after the poll's
       // data went in, so at the stream's edge it was never low here: the game ran dry between polls, ~0.5 s of every
       // second frozen, and the hold that builds 2 s back up never came on)
+      slogWatch(s);  // (here too: a stalled game steps no frames, so the frame hook never runs)
       const heldNow = call(s, 'viewer_spectate_held'), starved = heldNow > s.liveHeldSeen && s.M.HEAP32[0x54EEE8 >> 2] === 1;
       s.liveHeldSeen = heldNow;
       // (nor in the last win pose once the players' retry menu choice is in: the game plays the pose out, the win quote

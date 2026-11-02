@@ -1183,6 +1183,9 @@
     membersShow();
   }
   const clean = t => String(t).replace(/\x03\d{0,2}(,\d{1,2})?/g, '').replace(/[\x00-\x1f\x7f]/g, '');
+  // at most MARKS_MAX combining marks in a row (real scripts stack 2 - 4; a Zalgo stack of dozens ran over the lines
+  // round it and cost the layout; the picture's overlay keeps as many: glovCps)
+  const MARKS_MAX = 5, marksCap = t => String(t).replace(/(\p{M}{5})\p{M}+/gu, '$1');
   function lineEl(l) {
     const li = document.createElement('li');
     if (l.sys) {
@@ -1214,7 +1217,7 @@
     const own = ownLine(l);
     if (own) { nk.classList.add('own'); li.classList.add('oown'); }
     // (a reply's leading "@<their nick> ", written for plain IRC clients, is said by the header already)
-    let text = l.text;
+    let text = marksCap(l.text);
     if (orig && orig.irc && text.toLowerCase().startsWith(`@${orig.irc.toLowerCase()} `)) text = text.slice(orig.irc.length + 2);
     // (a match channel line carries where its sender's picture was (+mbaa/at): its time seeks there)
     if (l.at && isMatch(l.chan)) atTime(tm, l.at);
@@ -2313,7 +2316,10 @@
     madyellow: '#999900', green2: '#00CC66', elementalgreen: '#00CC66', cyan2: '#00CCCC', blue2: '#3399FF', marinblue: '#3399FF',
     purple2: '#6633CC', nobleviolet: '#6633CC', black2: '#666666' };
   // On the picture a comment is the whole line, never clipped (a long one scrolls by faster: its speed grows with its width)
-  const NICO_ON_SCREEN = 60;
+  let NICO_ON_SCREEN = 60;
+  // (benches: ?ovperf=1 times the overlay's steps per comment into window.__ovp: name -> [calls, total ms, max ms])
+  const OVP = /[?&]ovperf=1/.test(location.search) ? (window.__ovp = {}) : null;
+  const ovp = (n, t0) => { const d = performance.now() - t0, e = OVP[n] || (OVP[n] = [0, 0, 0]); e[0]++; e[1] += d; e[2] = Math.max(e[2], d); };
   const measure = document.createElement('canvas').getContext('2d');
   // a comment's look and timing; t: when it enters, in seconds on its stage's clock
   // the overlay's text of a line: a reply's or a mention's leading "@nick" (and a ':' or ',' after it) left out
@@ -2347,12 +2353,15 @@
     const said = dmText(l);
     const text = l.action ? `${disp(l.nick)} ${said}` : said;
     const [px, row] = DM_SIZE[size], [wt, fam] = DM_FONT[font], css = `${wt} ${px}px ${fam}`;
-    const gw = glovMeasure(text, px * 1);
+    const face = GLOV_FACE[font] || 0;
+    if (face) glovFace(face);
+    const cps = glovReady() ? glovCps(text, face) : null;  // (once: measured here, registered by glovPut)
+    const gw = cps ? glovMeasureCps(cps, px * 1, face) : null;
     let w;
     if (gw != null) w = Math.ceil(gw) + 8;
     else { measure.font = css; w = Math.ceil(measure.measureText(text).width) + 8; }  // (+ the outline)
     let seed = 0; for (const ch of (l.msgid || text) + t) seed = (seed * 31 + ch.charCodeAt(0)) >>> 0;
-    const c = { msgid: l.msgid, text, loc, css, px, col, w, h: row, t, y: 0, scale: 1, seed, el: null, anim: null, gid: 0, gM: null };
+    const c = { msgid: l.msgid, text, loc, css, px, col, w, h: row, t, y: 0, scale: 1, seed, el: null, anim: null, gid: 0, gM: null, face, cps };
     if (loc === 'naka') { c.v = (1530 + 0.95 * w) / 4; c.life = (1725 + w) / c.v; }
     else { c.life = 3; const max = cmds.includes('full') ? 1920 : 1530; if (w > max) c.scale = max / w; }
     return c;
@@ -2406,28 +2415,58 @@
   function dmClear(st) { for (const c of [...st.list]) dmRemove(st, c); }
 
   // ---- the native renderer (web/host/browser/overlay_gl.cpp): the comments drawn by the game's own GL compositor ----
-  // Each comment is registered once with the session's wasm instance (its text as code points, an emoji grapheme as one
-  // code point U+100000 + its id here; colours; where it is at its time t and how fast it moves) and drawn by the
-  // renderer at every present, between the stage and the fighters when they go behind. A new instance (a new match, a
-  // restored GL context) gets the font and every comment on screen again. The font is the bundled Noto Sans JP Bold
-  // subset (fonts/chatfont.ttf, OFL), fetched the first time the overlay is wanted; emoji are drawn here once per size
-  // (the system emoji font) and kept by the renderer.
-  const glov = { M: null, font: null, fontP: null, emo: new Map(), emoList: [null], cv: '', next: 1 };
+  // Each comment is registered once with the session's wasm instance (its text as code points; colours; its font; where
+  // it is at its time t and how fast it moves) and drawn by the renderer at every present, between the stage and the
+  // fighters when they go behind. A new instance (a new match, a restored GL context) gets the fonts and every comment on
+  // screen again. Fonts (OFL, tools/web/fonts/make_chat_font.py): default the bundled Noto Sans JP Bold subset
+  // (fonts/chatfont.ttf, fetched the first time the overlay is wanted); gothic Noto Sans JP Regular and mincho Noto Serif
+  // JP (fetched only when a comment wants them; meanwhile it draws in the default). Code points past Unicode's:
+  //   U+100000 + id  an emoji grapheme (glov.emoList[id]): drawn here once per size (the system emoji font)
+  //   U+180000 + id  a text run the bundled fonts lack (glov.runList[id]: Arabic, Hebrew, Thai, Devanagari, Hangul,
+  //                  Tibetan, math symbols, combining marks, ...): drawn here by the browser's text engine (shaping,
+  //                  right to left, ligatures; our font first, then the system's), its coverage outlined and coloured by
+  //                  the renderer like any glyph
+  const glov = { M: null, font: null, fontP: null, emo: new Map(), emoList: [null], runs: new Map(), runList: [null], has: new Map(),
+    faces: [null, null, null], faceP: [null, null, null], cv: '', next: 1 };
+  const GLOV_FACE = { defont: 0, gothic: 1, mincho: 2 };
+  const GLOV_FILE = ['fonts/chatfont.ttf?v=1', 'fonts/chatfont_gothic.ttf?v=1', 'fonts/chatfont_mincho.ttf?v=1'];  /* (bump v with a new font) */
+  // a font's bytes, also as a page font (MbaaOv0..2) so text runs drawn by the canvas use it for what it covers
+  function glovFaceLoad(f) {
+    if (!glov.faceP[f]) glov.faceP[f] = fetch(GLOV_FILE[f]).then(r => r.ok ? r.arrayBuffer() : null).then(async b => {
+      if (!b) return null;
+      try { const ff = new FontFace(`MbaaOv${f}`, b.slice(0)); await ff.load(); document.fonts.add(ff); } catch (e) {}
+      glov.faces[f] = new Uint8Array(b);
+      glovRunMeasure.clear();
+      return glov.faces[f];
+    }, () => null);
+    return glov.faceP[f];
+  }
   function glovFont() {
-    if (!glov.fontP) glov.fontP = fetch('fonts/chatfont.ttf?v=1')  /* (bump v with a new font: make_chat_font.py) */.then(r => r.ok ? r.arrayBuffer() : null)
-      .then(b => { glov.font = b ? new Uint8Array(b) : null; if (glov.font) { glovReady(); tlRelayout && tl.st && tlRelayout(); } }, () => {});
+    if (!glov.fontP) glov.fontP = glovFaceLoad(0).then(b => { glov.font = b; if (b) { glovReady(); tlRelayout && tl.st && tlRelayout(); } });
     return glov.font;
   }
+  function glovFaceSend(M, f) {
+    const b = glov.faces[f]; if (!b) return;
+    const p = M._malloc(b.length); M.HEAPU8.set(b, p);
+    if (M._viewer_ov_font_face) M._viewer_ov_font_face(f, p, b.length); else if (!f) M._viewer_ov_font(p, b.length);
+    M._free(p);
+  }
+  // face f wanted by a comment: fetched once, then sent to the renderer (its comments are laid out again there)
+  function glovFace(f) {
+    if (!f || glov.faces[f]) return;
+    glovFaceLoad(f).then(b => { const M = glov.M; if (b && M) glovFaceSend(M, f); });
+  }
   const glovSession = () => { const s = window.__mbaaSession && window.__mbaaSession(); return s && s.M && s.M._viewer_ov_add ? s.M : null; };
-  // the instance to draw with, set up (font, canvas size, the emoji hook, every comment again if it is new); null: not yet
+  // the instance to draw with, set up (fonts, canvas size, the emoji and text run hooks, every comment again if it is
+  // new); null: not yet
   function glovReady() {
     const M = glovSession();
     if (!M || !glovFont()) return null;
     if (glov.M !== M) {
       glov.M = M;
-      const p = M._malloc(glov.font.length); M.HEAPU8.set(glov.font, p);
-      M._viewer_ov_font(p, glov.font.length); M._free(p);
-      M.mbaaOvEmoji = glovEmoji;
+      for (let f = 0; f < 3; f++) glovFaceSend(M, f);
+      M.mbaaOvEmoji = glovEmoji; M.mbaaOvRunW = glovRunW; M.mbaaOvRun = glovRun;
+      glov.has.clear();
       glov.cv = ''; tl.follow = undefined;
       M._viewer_ov_behind(behind ? 1 : 0); M._viewer_ov_on(overOn.checked && !over.hidden ? 1 : 0);
       for (const c of nico.list) { c.gM = null; glovPut(c, 0); }
@@ -2448,14 +2487,86 @@
     M._viewer_ov_canvas(w, h);
     if (M._viewer_represent) M._viewer_represent();
   }
-  function glovCps(text) {
+  // does the bundled font have code point cp (asked of the renderer once per code point)
+  function glovHas(M, cp) {
+    let h = glov.has.get(cp);
+    if (h === undefined) { h = !M._viewer_ov_has || M._viewer_ov_has(cp) === 1; glov.has.set(cp, h); }
+    return h;
+  }
+  const GLOV_ASCII = /^[\x20-\x7e]*$/;
+  const GLOV_RTL = /[֐-ࣿיִ-﷿ﹰ-ﻼ]|\ud802[\udc00-\udfff]|\ud83a[\udc00-\udfff]/;  // (Hebrew, Arabic, Syriac, Thaana, N'Ko, ...)
+  const GLOV_STRONG = /[\p{L}]/u;
+  const GLOV_RUN_MAX = 24;    // (a text run longer than this many graphemes is cut, at a space where it can be)
+  const GLOV_MARKS_MAX = MARKS_MAX;  // (combining marks kept on one grapheme: a Zalgo stack is cut, its tile clips the rest)
+  // a comment's text as the renderer's code points (face: its font, for the text runs)
+  function glovCps(text, face = 0) {
+    if (!OVP) return glovCps_(text, face);
+    const t0 = performance.now(), r = glovCps_(text, face); ovp('glovCps', t0); return r;
+  }
+  function glovCps_(text, face) {
     const out = [];
-    for (const g of graphemes(text)) {
-      if (isEmo(g)) {
-        let id = glov.emo.get(g);
-        if (!id) { id = glov.emoList.length; glov.emoList.push(g); glov.emo.set(g, id); }
-        out.push(0x100000 + id);
-      } else for (const ch of g) out.push(ch.codePointAt(0));
+    if (GLOV_ASCII.test(text)) { for (let i = 0; i < text.length; i++) out.push(text.charCodeAt(i)); return out; }
+    const M = glov.M;
+    // graphemes: E an emoji, C covered by our font (letters, digits), N covered but neutral (spaces, punctuation,
+    // symbols: they join a run next to them), U something our font lacks
+    const gs = [], kinds = [];
+    for (let g of graphemes(text)) {
+      if (isEmo(g)) { gs.push(g); kinds.push('E'); continue; }
+      let cov = true, marks = 0, cut = '';
+      for (const ch of g) {
+        const cp = ch.codePointAt(0);
+        if (/\p{M}/u.test(ch) && ++marks > GLOV_MARKS_MAX) continue;
+        cut += ch;
+        if (cp >= 0x80 && M && !glovHas(M, cp)) cov = false;
+      }
+      g = cut;
+      gs.push(g); kinds.push(!cov ? 'U' : /[\p{L}\p{N}]/u.test(g) ? 'C' : 'N');
+    }
+    const firstStrong = text.match(GLOV_STRONG);
+    const rtl = !!(firstStrong && GLOV_RTL.test(firstStrong[0])) && kinds.includes('U');
+    const emoCp = g => { let id = glov.emo.get(g); if (!id) { id = glov.emoList.length; glov.emoList.push(g); glov.emo.set(g, id); } return 0x100000 + id; };
+    const runCps = (t, dir) => {  // (a run, cut into pieces of at most GLOV_RUN_MAX graphemes, as their code points)
+      const parts = [];
+      let rest = Array.from(graphemes(t));
+      while (rest.length) {
+        let n = rest.length;
+        if (n > GLOV_RUN_MAX) { n = GLOV_RUN_MAX; for (let i = GLOV_RUN_MAX; i > GLOV_RUN_MAX / 2; i--) if (/^\s$/.test(rest[i])) { n = i + 1; break; } }
+        parts.push(rest.slice(0, n).join('')); rest = rest.slice(n);
+      }
+      if (dir === 'rtl') parts.reverse();  // (pieces of a right-to-left run go right to left)
+      return parts.map(p => {
+        const k = `${face}|${dir}|${p}`;
+        let id = glov.runs.get(k);
+        if (!id) { id = glov.runList.length; glov.runList.push({ t: p, dir, face }); glov.runs.set(k, id); }
+        return 0x180000 + id;
+      });
+    };
+    if (rtl) {
+      // right to left: each stretch between emoji is one run (the browser orders its words and any Latin in it); the
+      // stretches and the emoji go right to left
+      const segs = [];
+      let cur = '';
+      for (let i = 0; i < gs.length; i++) {
+        if (kinds[i] === 'E') { if (cur) segs.push({ t: cur }); cur = ''; segs.push({ e: gs[i] }); } else cur += gs[i];
+      }
+      if (cur) segs.push({ t: cur });
+      for (const s of segs.reverse()) {
+        if (s.e) out.push(emoCp(s.e));
+        else { const t = s.t.trim(); if (t) out.push(...runCps(t, 'rtl')); }
+      }
+      return out;
+    }
+    // left to right: runs of U (and N between them) drawn by the browser, the rest by our font
+    for (let i = 0; i < gs.length;) {
+      if (kinds[i] === 'U') {
+        let j = i + 1, end = i + 1;
+        while (j < gs.length && (kinds[j] === 'U' || kinds[j] === 'N')) { if (kinds[j] === 'U') end = j + 1; j++; }
+        out.push(...runCps(gs.slice(i, end).join(''), 'ltr'));
+        i = end; continue;
+      }
+      if (kinds[i] === 'E') out.push(emoCp(gs[i]));
+      else for (const ch of gs[i]) out.push(ch.codePointAt(0));
+      i++;
     }
     return out;
   }
@@ -2464,10 +2575,18 @@
     M.HEAPU32 ? M.HEAPU32.set(cps, p >> 2) : new Uint32Array(M.HEAPU8.buffer, p, cps.length).set(cps);
     return cps.length;
   }
-  function glovMeasure(text, px) {
+  // the width of a comment's code points at font size px (its font f), stage units; null: no renderer yet
+  function glovMeasureCps(cps, px, f = 0) {
     const M = glovReady();
     if (!M) return null;
-    return M._viewer_ov_measure(glovSend(M, glovCps(text)), px);
+    const t0 = OVP && performance.now(), n = glovSend(M, cps);
+    const r = M._viewer_ov_measure_face ? M._viewer_ov_measure_face(n, px, f) : M._viewer_ov_measure(n, px);
+    if (OVP) ovp('glovMeasure', t0);
+    return r;
+  }
+  function glovMeasure(text, px, f = 0) {
+    if (!glovReady()) return null;
+    return glovMeasureCps(glovCps(text, f), px, f);
   }
   const glovRgba = hex => { const m = /^#?([0-9a-f]{6})$/i.exec(hex || ''); return m ? ((parseInt(m[1], 16) << 8) | 0xFF) >>> 0 : 0xFFFFFFFF; };
   function glovPut(c, clock) {
@@ -2477,8 +2596,10 @@
     if (c.gM === M) { M._viewer_ov_move(c.gid, c.t, dmX(c, 0), c.loc === 'naka' ? -c.v : 0, c.y); c.gy = c.y; c.gt = c.t; return; }
     if (!c.gid) c.gid = glov.next++;
     const black = c.col.toUpperCase() === '#000000';
-    M._viewer_ov_add(c.gid, glovSend(M, glovCps(c.text)), clock, c.t, dmX(c, 0), c.loc === 'naka' ? -c.v : 0, c.y, c.scale, c.life,
+    if (!c.cps) c.cps = glovCps(c.text, c.face || 0);
+    M._viewer_ov_add(c.gid, glovSend(M, c.cps), clock, c.t, dmX(c, 0), c.loc === 'naka' ? -c.v : 0, c.y, c.scale, c.life,
       c.px, glovRgba(c.col), black ? 0xFFFFFF66 : 0x00000066);
+    if (c.face && M._viewer_ov_face) { M._viewer_ov_face(c.gid, c.face); glovFace(c.face); }
     c.gM = M; c.gy = c.y; c.gt = c.t;
   }
   window.mbaaOvSync = () => { const M = glovReady(); if (M) M._viewer_ov_on(overOn.checked && !over.hidden ? 1 : 0); };
@@ -2498,6 +2619,44 @@
     M.HEAPU8.set(x.getImageData(0, 0, box, box).data, ptr);
     return 1;
   }
+  // text runs: the comment font first (the page font of the bundled file), then the system's for every script
+  const GLOV_SANS = '"Noto Sans", "Segoe UI", Arial, "Noto Sans Arabic", "Noto Naskh Arabic", Tahoma, "Noto Sans Hebrew", "Noto Sans Thai", "Leelawadee UI", Thonburi, "Noto Sans Devanagari", "Nirmala UI", "Kohinoor Devanagari", "Malgun Gothic", "Apple SD Gothic Neo", "Noto Sans KR", "Noto Sans CJK KR", "Noto Sans Tibetan", "Microsoft Himalaya", "Noto Sans Math", "Cambria Math", "Segoe UI Symbol", "Noto Sans Symbols", "Noto Sans Symbols 2", sans-serif';
+  const GLOV_SERIF = '"Noto Serif", "Times New Roman", "Noto Naskh Arabic", "Noto Serif Hebrew", "Noto Serif Thai", "Noto Serif Devanagari", "Noto Serif KR", "Batang", "AppleMyungjo", "Noto Serif Tibetan", "Cambria Math", serif';
+  const glovRunFont = (f, px) => f === 2 ? `400 ${px}px MbaaOv2, ${GLOV_SERIF}` : f === 1 ? `400 ${px}px MbaaOv1, ${GLOV_SANS}` : `700 ${px}px MbaaOv0, ${GLOV_SANS}`;
+  let glovRunCv = null;
+  const glovRunCtx = (w, h) => {
+    if (!glovRunCv) glovRunCv = document.createElement('canvas');
+    if (glovRunCv.width < w || glovRunCv.height < h) { glovRunCv.width = Math.max(glovRunCv.width, w); glovRunCv.height = Math.max(glovRunCv.height, h); }
+    return glovRunCv.getContext('2d', { willReadFrequently: true });
+  };
+  const glovRunMeasure = new Map();  // `${id}|${px}|${face}` -> width
+  // a run's advance at font size px in face f (the renderer asks: measuring and laying out)
+  function glovRunW(id, px, f) {
+    const r = glov.runList[id];
+    if (!r) return 0;
+    const k = `${id}|${px}|${f}`;
+    let w = glovRunMeasure.get(k);
+    if (w === undefined) {
+      const x = glovRunCtx(1, 1);
+      x.font = glovRunFont(f, px); x.direction = r.dir;
+      w = x.measureText(r.t).width;
+      glovRunMeasure.set(k, w);
+    }
+    return w;
+  }
+  // a run's coverage for the renderer: W x H alpha bytes at ptr, the run's left end on the baseline at (x, y)
+  function glovRun(id, spx, f, W, H, x0, y0, ptr) {
+    const r = glov.runList[id], M = glov.M;
+    if (!r || !M) return 0;
+    const x = glovRunCtx(W, H);
+    x.clearRect(0, 0, W, H);
+    x.font = glovRunFont(f, spx); x.direction = r.dir; x.textAlign = 'left'; x.textBaseline = 'alphabetic';
+    x.fillStyle = '#fff';
+    x.fillText(r.t, x0, y0);
+    const d = x.getImageData(0, 0, W, H).data, h = M.HEAPU8;
+    for (let i = 0, j = 3; i < W * H; i++, j += 4) h[ptr + i] = d[j];
+    return 1;
+  }
   { const ro = new ResizeObserver(() => { const M = glovSession(); if (M && glov.M === M) glovCanvas(M); });
     const watch = () => { const cv = document.getElementById('canvas'); if (cv && cv !== glov.ro) { if (glov.ro) ro.unobserve(glov.ro); ro.observe(cv); glov.ro = cv; } };
     watch(); setInterval(() => { watch(); glovReady(); }, 1000);
@@ -2507,54 +2666,80 @@
   const nico = dmStage('dmlive');
   const wallNow = () => performance.now() / 1000;
   function danmaku(l) {
+    if (!OVP) return danmaku_(l);
+    const t0 = performance.now(); danmaku_(l); ovp('danmaku', t0);
+  }
+  function danmaku_(l) {
     if (!overOn.checked || document.visibilityState === 'hidden' || l.gone) return;
     pin();
-    swellFeed(l);
+    { const t0 = OVP && performance.now(); swellFeed(l); if (OVP) ovp('swellFeed', t0); }
     if (!dmFit(nico)) return;
     const now = wallNow(), spread = spreadOf();
     for (const a of [...nico.list]) if (a.t + a.life + spread < now) dmRemove(nico, a);
     // (a crowded picture: past NICO_ON_SCREEN at once a new comment stays in the chat only)
     if (nico.list.filter(a => a.t + a.life > now).length >= NICO_ON_SCREEN) return;
+    let t0 = OVP && performance.now();
     const c = dmMake(l, now);
+    if (OVP) { ovp('dmMake', t0); t0 = performance.now(); }
     if (!c.text.trim()) return;  // (only emoji, and the emoji amount at 0)
     dmPlace(nico.list, c, spread);
+    if (OVP) { ovp('dmPlace', t0); t0 = performance.now(); }
     nico.list.push(c);
     glovPut(c, 0);
+    if (OVP) ovp('glovPut', t0);
   }
-  // ---- the swell: an emoji spammed (SWELL_MIN copies within SWELL_WIN, by anyone) gets one big copy in the picture's
-  // lower right, growing with each copy (a pulse per hit, at most SWELL_MAX of the picture's height), the running count
-  // under it; it fades SWELL_FADE after the spam stops. Several at once stack upward (at most 3). Live comments only
-  // (the overlay's own layer: off with "on picture"). ----
+  // ---- the swell: an emoji spammed (SWELL_MIN copies within SWELL_WIN, by anyone) gets one big copy riding across the
+  // picture right to left, as the comments do, growing with each copy (a pulse per hit, at most SWELL_MAX of the
+  // picture's height), its count under it at milestones; it fades SWELL_FADE after the spam stops. Several at once stack
+  // upward (at most 3). Live comments only (the overlay's own layer: off with "on picture"). ----
   const SWELL_MIN = 5, SWELL_WIN = 4000, SWELL_FADE = 3000, SWELL_MAX = 0.25, SWELL_N = 3, SWELL_RIDE = 6000, SWELL_TILT = 6, SWELL_TILT_MAX = 24;
+  const SWELL_PULSE = 0.15, SWELL_LEAN = 0.35;  // (s: a hit's growth; a milestone's lean, both eased)
   // Drawn by the renderer (overlay_gl viewer_ov_fx: the ride, the tilt, the pulse and the fades run in wasm at each
   // present), so a swell goes behind the fighters with the comments and costs no DOM or script per frame. Geometry in
   // the comments' stage units (1920 x 1080, 16:9, centred on the picture).
+  // Every corner of the emoji only ever moves right to left (swell_direction_check.py, a capture of the renderer's own
+  // quads at each frame): it is anchored at its right end and its line's bottom, so growing extends it left and up; the
+  // lean eases from where it is to the milestone's (a snap swung its corners back); a pulse eases from the size it
+  // shows; a swell that ends and comes back within a ride keeps its place on the ride (it was reset to the right edge:
+  // read as the emoji jumping back).
   const swells = new Map();  // emoji key -> {e, hits: [t], count, on, gid, nid, ds, at, tilt, t0, shownMs, numT}
   const SWELL_RASTER = 400;  // (the emoji rasterised once at most this many device px, scaled as it grows)
   const swellNow = () => performance.now() / 1000;
+  const swellEase = (a, b, t0, d, t) => { if (d <= 0 || t >= t0 + d) return t >= t0 ? b : a; if (t <= t0) return a; const u = (t - t0) / d; return a + (b - a) * u * u * (3 - 2 * u); };
   function swellGeom() {
     const H = over.clientHeight || 360, W = over.clientWidth || 480, k = 1080 / H, offX = (W - H * 16 / 9) / 2;
     const dpr = window.devicePixelRatio || 1;
     return { H, W, k, offX, R: Math.min(270, SWELL_RASTER * 1080 / (H * dpr)), numPx: Math.max(11, H * 0.03) * k };
   }
+  const SWELL_EMO = /\p{Extended_Pictographic}|\p{Regional_Indicator}/u;
   function swellFeed(l) {
     if (emoAmt <= 0) return;  // (no emoji on the picture)
+    const text = l.pic != null ? l.pic : l.text;
+    if (!SWELL_EMO.test(text)) return;  // (most lines: no emoji, nothing to do)
     const M = glovReady();
     if (!M) return;
     const now = performance.now(), per = new Map();
-    for (const g of graphemes(l.pic != null ? l.pic : l.text)) if (isEmo(g)) { const k = emoKey(g); const x = per.get(k) || { e: g, n: 0 }; x.n++; per.set(k, x); }
+    let changed = false;
+    for (const g of graphemes(text)) if (isEmo(g)) { const k = emoKey(g); const x = per.get(k) || { e: g, n: 0 }; x.n++; per.set(k, x); }
     for (const [k, { e, n }] of per) {
       let s = swells.get(k);
       if (!s) swells.set(k, s = { e, hits: [], count: 0, on: false });
-      s.hits = s.hits.filter(t => now - t <= SWELL_WIN);
+      let drop = 0; while (drop < s.hits.length && now - s.hits[drop] > SWELL_WIN) drop++;
+      if (drop) s.hits.splice(0, drop);
       for (let i = 0; i < n; i++) s.hits.push(now);
       if (s.on) s.count += n;
       else if (s.hits.length >= SWELL_MIN && [...swells.values()].filter(x => x.on).length < SWELL_N) {
-        s.count = s.hits.length; s.at = now; s.on = true; s.tilt = 0; s.ds = 0; s.t0 = swellNow(); s.shownMs = 0;
+        const t = swellNow();
+        // (back within a ride of its end: the same place on the ride, not the right edge again)
+        if (!(s.endT && t - s.endT < SWELL_RIDE / 1000 && s.endM === M)) s.t0 = t;
+        s.startT = t;  // (it fades in: a swell back on its ride shows up mid-picture)
+        s.count = s.hits.length; s.at = now; s.on = true; s.tilt = 0; s.ds = 0; s.shownMs = 0;
+        s.rot = 0; s.rotFrom = 0; s.rotTo = 0; s.rotT = 0;
         s.gid = glov.next++; s.nid = glov.next++; s.M = M;
         const G = swellGeom();
         M._viewer_ov_add(s.gid, glovSend(M, glovCps(e)), 0, s.t0, 0, 0, 0, 1, 1e6, G.R, 0xFFFFFFFF, 0);
       } else continue;
+      changed = true;
       // the count shows for a moment when the riding emoji appears and each time it passes a milestone (10, 25, 50,
       // 100, 250, 500, 1000, ...), then fades: the number marks the spam growing, not every copy
       const ms = swellMilestone(s.count);
@@ -2567,7 +2752,7 @@
       clearTimeout(s.fadeT);
       s.fadeT = setTimeout(() => swellEnd(k), SWELL_FADE);
     }
-    swellLayout();
+    if (changed) swellLayout();
   }
   // the last milestone a count has passed: 5 (the start), 10, 25, 50, 100, 250, 500, 1000, 2500, ...
   function swellMilestone(n) {
@@ -2575,22 +2760,33 @@
     for (let m = 10; m <= n; m *= 10) for (const f of [1, 2.5, 5]) if (m * f <= n) best = Math.max(best, m * f);
     return best;
   }
+  // the emoji's motion beyond the ride (viewer_ov_fx): its lean eased to s.rot from what it showed, its size eased
+  // from what it showed to ds (anchors: its right end, its line's bottom); a0 -> a1 over [at, at + ad]
+  function swellFx(M, s, P, ds, t, a0, a1, at, ad) {
+    const rNow = swellEase(s.rotFrom || 0, s.rotTo || 0, s.rotT || 0, SWELL_LEAN, t);
+    if ((s.rotTo || 0) !== s.rot) { s.rotFrom = rNow; s.rotTo = s.rot; s.rotT = t; }
+    const sNow = s.dsTo ? swellEase(s.dsFrom, s.dsTo, s.dsT, SWELL_PULSE, t) : ds;
+    if (s.dsTo !== ds) { s.dsFrom = sNow; s.dsTo = ds; s.dsT = t; }
+    M._viewer_ov_fx(s.gid, P, 0, s.rotTo, s.dsFrom, s.dsTo, s.dsT, SWELL_PULSE, a0, a1, at, ad, s.rotFrom, s.rotT, SWELL_LEAN, 3);
+  }
   function swellEnd(k) {
     const s = swells.get(k);
     if (!s || !s.on) return;
     s.on = false; s.hits = []; s.count = 0; s.shownMs = 0;
     const M = s.M, t = swellNow(), gid = s.gid, nid = s.nid;
+    s.endT = t; s.endM = M;
     if (M === glov.M) {  // (fades out in half a second, then goes)
-      M._viewer_ov_fx(gid, SWELL_RIDE / 1000, s.vy || 0, s.rot || 0, s.ds, s.ds, t, 0, 1, 0, t, 0.5);
-      M._viewer_ov_fx(nid, SWELL_RIDE / 1000, s.vy || 0, 0, 1, 1, t, 0, 0, 0, t, 0);
+      swellFx(M, s, SWELL_RIDE / 1000, s.ds, t, 1, 0, t, 0.5);
+      M._viewer_ov_fx(nid, SWELL_RIDE / 1000, 0, 0, 1, 1, t, 0, 0, 0, t, 0, 0, t, 0, 2);
     }
+    s.dsTo = 0;
     setTimeout(() => { if (M === glov.M) { M._viewer_ov_remove(gid); M._viewer_ov_remove(nid); } swellLayout(); }, 500);
   }
   function swellClear() {
     for (const s of swells.values()) { clearTimeout(s.fadeT); if (s.on && s.M === glov.M) { s.M._viewer_ov_remove(s.gid); s.M._viewer_ov_remove(s.nid); } }
     swells.clear();
   }
-  // sizes from the picture's height, the oldest at the bottom; each swell's ride (left to right, again and again, flat,
+  // sizes from the picture's height, the oldest at the bottom; each swell's ride (right to left, again and again, flat,
   // the emoji leaning by its tilt), its pulse to the new size and its count
   function swellLayout() {
     const M = glovReady();
@@ -2600,22 +2796,22 @@
     const numH = Math.max(11, G.H * 0.03) * 1.1;
     for (const s of [...swells.values()].filter(x => x.on && x.M === M).sort((a, b) => a.at - b.at)) {
       const sz = Math.min(SWELL_MAX, 0.07 + 0.006 * s.count) * G.H, szS = sz * G.k, ds = szS / G.R;
-      const topS = (G.H - yb - numH - sz) * G.k;
-      // (right to left, the way the comments go: enters past the right edge, leaves past the left; user 2026-11-01)
-      const x0 = (1.05 * G.W - G.offX) * G.k, x1 = (-0.25 * G.W - G.offX) * G.k, P = SWELL_RIDE / 1000;
+      const botS = (G.H - yb - numH) * G.k;  // (the bottom of its row: the count's top)
+      // its right end from past the picture's right edge (room for the biggest, leaning) to past its left edge
+      const x0 = (1.05 * G.W - G.offX) * G.k + SWELL_MAX * G.H * G.k * 1.3, x1 = (-0.05 * G.W - G.offX) * G.k, P = SWELL_RIDE / 1000;
       const vx = (x1 - x0) / P;
-      // (the path stays flat, one direction always; a milestone only leans the emoji more. A climbing path read as the
+      // (the path stays flat, always right to left; a milestone only leans the emoji more. A climbing path read as the
       // emoji turning back at each wrap: user 2026-11-01)
       s.vy = 0; s.rot = -s.tilt * Math.PI / 180;
-      // (the emoji's middle a little above its row's: its quad sits on the font's baseline)
-      M._viewer_ov_move(s.gid, s.t0, x0, vx, topS - 0.1 * szS);
-      M._viewer_ov_fx(s.gid, P, s.vy, s.rot, s.ds || ds, ds, t, s.ds ? 0.15 : 0, 1, 1, t, 0);
+      // (its line box's bottom: the emoji's own bottom a little above it, its quad sits on the font's baseline)
+      M._viewer_ov_move(s.gid, s.t0, x0, vx, botS + 0.15 * szS);
+      swellFx(M, s, P, ds, t, 0, 1, s.startT, 0.3);
       s.ds = ds;
       // the count under it, centred, riding with it (not turned); shown at a milestone, faded after a second
       const nw = glovMeasure(s.numText || '', G.numPx) || 0;
-      M._viewer_ov_add(s.nid, glovSend(M, glovCps(s.numText || '')), 0, s.t0, x0 + (szS - nw) / 2, vx, topS + szS, 1, 1e6, G.numPx, 0xFFFFFFFF, 0x000000FF);
+      M._viewer_ov_add(s.nid, glovSend(M, glovCps(s.numText || '')), 0, s.t0, x0 - (szS - nw) / 2 + 8, vx, botS, 1, 1e6, G.numPx, 0xFFFFFFFF, 0x000000FF);
       const sh = s.numShow || 0;
-      M._viewer_ov_fx(s.nid, P, s.vy, 0, 1, 1, t, 0, 1, 0, sh + 1, 0.6);
+      M._viewer_ov_fx(s.nid, P, 0, 0, 1, 1, t, 0, 1, 0, sh + 1, 0.6, 0, t, 0, 2);
       yb += sz * 1.12 + numH;
     }
   }
@@ -3576,6 +3772,6 @@
 
   tabs(); render();
   start();
-  window.mbaaChat = { irc, auth, nameOk, chans, prof, danmaku, say, nico, tl, clockPos, localOf, posOf, nowOf, feed: raw => on(parse(raw)), spread: () => spread, owner: () => ({ acct: ownAcct, spec: styleSpec(ownStyle) }), md: mdPlain, mirc: t => mircNodes(t).map(n => n.outerHTML || n.textContent).join(''),
+  window.mbaaChat = { nicoMax: n => { NICO_ON_SCREEN = n; }, swellMap: swells, ovReset: () => { dmClear(nico); swellClear(); }, irc, auth, nameOk, chans, prof, danmaku, say, nico, tl, clockPos, localOf, posOf, nowOf, feed: raw => on(parse(raw)), spread: () => spread, owner: () => ({ acct: ownAcct, spec: styleSpec(ownStyle) }), md: mdPlain, mirc: t => mircNodes(t).map(n => n.outerHTML || n.textContent).join(''),
     idle: ms => { idleMs = ms; }, swells: () => [...swells.values()].filter(x => x.el).map(x => ({ e: x.e, n: x.count, size: parseFloat(x.em.style.fontSize), op: x.el.style.opacity })), typingTimes: { TYPE_EVERY, TYPE_TTL }, show: name => { chan(name); shown = name; tabs(); render(); }, status: () => ({ connected: irc.registered, nick: irc.nick, caps: [...irc.caps], shown, matchChan }) };  // (tests)
 })();
