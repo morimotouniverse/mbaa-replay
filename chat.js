@@ -385,7 +385,7 @@
   #chatlog li.hist { opacity: .72; }
   #chatlog .cico { width: 18px; height: 24px; flex: none; border-radius: 4px; background: #ffffff0a; }
   #chatlog .cnick { font-weight: 700; margin-right: 4px; }
-  #chatlog .ctime { color: var(--faint); font-size: 10px; margin-right: 4px; }
+  #chatlog .ctime { color: var(--faint); font-size: 10px; margin-right: 4px; white-space: nowrap; }
   #chatsec .cform { display: flex; gap: 6px; }
   #chatsec .cform input { flex: 1 1 auto; min-width: 0; background: var(--raise); color: var(--fg); border: 1px solid var(--line);
                           border-radius: 8px; padding: 5px 8px; font: inherit; }
@@ -834,12 +834,15 @@
                                  -webkit-text-fill-color: transparent; text-shadow: none; animation: ogslide var(--og-p, 4s) linear infinite; }
   #chatsec .og-grad.og-glow .cnick.own, #chatsec .og-grad.og-glow .mynick.own { filter: drop-shadow(0 0 calc(var(--og-r) / 2) var(--og-c)); }
   @keyframes ogslide { to { background-position: 200% 0; } }
-  #chatsec .owave { display: inline-block; white-space: pre; }
-  #chatsec .owave > i { display: inline-block; font-style: normal; animation: owave var(--ow-p, 1.3s) ease-in-out infinite alternate;
+  /* (inline, wrapping like text: a long ~run~ made the log scroll sideways, gaku 2026-11-02; a word kept whole (.ow) up to
+     24 characters, a longer one wraps anywhere) */
+  #chatsec .owave { display: inline; white-space: normal; }
+  #chatsec .owave .ow { white-space: nowrap; }
+  #chatsec .owave i { display: inline-block; white-space: pre; font-style: normal; animation: owave var(--ow-p, 1.3s) ease-in-out infinite alternate;
                         animation-delay: calc(var(--i, 0) * var(--ow-d, -.25s)); }
   @keyframes owave { from { transform: translateY(var(--ow-a, 4px)); } to { transform: translateY(calc(-1 * var(--ow-a, 4px))); } }
-  #chatsec .ostill .cnick.own, #chatsec .ostill .owave > i { animation: none; }
-  @media (prefers-reduced-motion: reduce) { #chatsec .cnick.own, #chatsec .owave > i { animation: none !important; } }
+  #chatsec .ostill .cnick.own, #chatsec .ostill .owave i { animation: none; }
+  @media (prefers-reduced-motion: reduce) { #chatsec .cnick.own, #chatsec .owave i { animation: none !important; } }
   #chatsec .ctool .costyle { order: 10; flex: 1 0 100%; text-align: left; border: 1px solid var(--line); border-radius: 8px; padding: 5px 8px; color: var(--fg); }
   #chatsec .ctool .costyle[hidden] { display: none; }
   #chatsec .cform > .ostyle { position: absolute; z-index: 7; left: 0; right: 0; bottom: calc(100% + 4px); background: var(--raise, #1c1c28); border: 1px solid var(--line);
@@ -1269,7 +1272,15 @@
     for (const mm of String(text).matchAll(WAVE_RE)) {
       if (mm.index > i) out.push(...leaf(text.slice(i, mm.index)));
       const w = document.createElement('span'); w.className = 'owave'; w.setAttribute('aria-label', mm[1]);
-      graphemes(mm[1]).forEach((g, k) => { const c = document.createElement('i'); c.textContent = g; c.style.setProperty('--i', String(k)); c.setAttribute('aria-hidden', 'true'); w.append(c); });
+      // (the characters of a word grouped in .ow so lines wrap between words; the spaces stand alone)
+      const gs = graphemes(mm[1]);
+      let word = null, wlen = 0;
+      gs.forEach((g, k) => {
+        const c = document.createElement('i'); c.textContent = g; c.style.setProperty('--i', String(k)); c.setAttribute('aria-hidden', 'true');
+        if (/^\s$/.test(g)) { word = null; w.append(c); return; }
+        if (!word) { word = document.createElement('span'); wlen = 0; let n = k; while (n < gs.length && !/^\s$/.test(gs[n])) n++; if (n - k <= 24) word.className = 'ow'; w.append(word); }
+        word.append(c); wlen++;
+      });
       out.push(w); i = mm.index + mm[0].length;
     }
     if (i < text.length) out.push(...leaf(text.slice(i)));
