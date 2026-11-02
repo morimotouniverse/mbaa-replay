@@ -401,8 +401,11 @@
      under them, between the two figures; bottom: the names and moons on a dark band at the picture's foot) */
   #matchcard:has(#stageblk:not([hidden])) #players { align-self: stretch; align-items: flex-end; padding: 0 8px 7px;
     background: linear-gradient(transparent 58%, #000b 100%); border-radius: 0 0 8px 8px; }
-  #matchcard:has(#stageblk:not([hidden])) #players .vs { position: absolute; top: 5px; left: 50%; transform: translateX(-50%);
-    flex-direction: column; align-items: center; gap: 2px; padding: 0; line-height: 1.1; }
+  /* (VS at the bottom between the names, user 2026-11-02; the watchers stay at the top centre, the plate moves up) */
+  #matchcard:has(#stageblk:not([hidden])) #players .vs { position: static; align-self: flex-end; padding: 0 0 3px; line-height: 1.1;
+    text-shadow: 0 1px 3px #000, 0 0 6px #000c; }
+  #matchcard:has(#stageblk:not([hidden])) #players #watching { position: absolute; top: 5px; left: 50%; transform: translateX(-50%); }
+  #matchcard:has(#stageblk:not([hidden])) .plate { --stack-top: 26px; }
   #matchcard:has(#stageblk:not([hidden])) #players .pl { align-self: flex-end; }
   /* with portraits the small icons go; each side: the name across, the moon and the character under it */
   #matchcard.pors:has(#stageblk:not([hidden])) #players .ico { display: none; }
@@ -420,7 +423,7 @@
   #matchcard.pors:has(#stageblk:not([hidden])) #players .pl:last-child .ch .mqx { grid-area: 2 / 1; }
   /* wide (desktop: the card under the picture, as wide as the controls): a banner, not a 256:110 picture 500 px tall */
   body:is(.deskchat, :not(.side)) #matchcard:has(#stageblk:not([hidden])) .view { aspect-ratio: auto; height: clamp(150px, 15vw, 210px); object-fit: cover; }
-  body:is(.deskchat, :not(.side)) #matchcard:has(#stageblk:not([hidden])) .plate { width: 34%; --stack-top: 50px; }
+  body:is(.deskchat, :not(.side)) #matchcard:has(#stageblk:not([hidden])) .plate { width: 34%; --stack-top: 32px; }
   body:is(.deskchat, :not(.side)) #matchcard.pors:has(#stageblk:not([hidden])) .por:not([hidden]) { height: 250%; top: -37%; left: 27%; }
   body:is(.deskchat, :not(.side)) #matchcard.pors:has(#stageblk:not([hidden])) .por.p2:not([hidden]) { left: 73%; }
   body:is(.deskchat, :not(.side)) #matchcard:has(#stageblk:not([hidden])) #players { padding: 0 14px 9px; }
