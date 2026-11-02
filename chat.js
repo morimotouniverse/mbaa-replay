@@ -922,7 +922,7 @@
   // (the bot's "+mbaa/style" value)
   function ownSet(v) {
     v = String(v); const i = v.lastIndexOf('|'), a = v.slice(0, Math.max(0, i));
-    const st = i > 0 && /^[A-Za-z0-9_-]{1,40}$/.test(a) ? styleParse(v.slice(i + 1)) : null;
+    const st = i > 0 && /^[\p{L}\p{M}\p{N}_-]{1,40}$/u.test(a) ? styleParse(v.slice(i + 1)) : null;
     if (!st) return;
     const was = ownAcct;
     ownAcct = a; ownStyle = st;
