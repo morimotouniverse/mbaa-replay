@@ -2296,9 +2296,10 @@
     for (const s of [...swells.values()].filter(x => x.on && x.M === M).sort((a, b) => a.at - b.at)) {
       const sz = Math.min(SWELL_MAX, 0.07 + 0.006 * s.count) * G.H, szS = sz * G.k, ds = szS / G.R;
       const topS = (G.H - yb - numH - sz) * G.k;
-      const x0 = (-0.25 * G.W - G.offX) * G.k, x1 = (1.05 * G.W - G.offX) * G.k, P = SWELL_RIDE / 1000;
+      // (right to left, the way the comments go: enters past the right edge, leaves past the left; user 2026-11-01)
+      const x0 = (1.05 * G.W - G.offX) * G.k, x1 = (-0.25 * G.W - G.offX) * G.k, P = SWELL_RIDE / 1000;
       const vx = (x1 - x0) / P;
-      // (the path stays flat, always left to right; a milestone only leans the emoji more. A climbing path read as the
+      // (the path stays flat, one direction always; a milestone only leans the emoji more. A climbing path read as the
       // emoji turning back at each wrap: user 2026-11-01)
       s.vy = 0; s.rot = -s.tilt * Math.PI / 180;
       // (the emoji's middle a little above its row's: its quad sits on the font's baseline)
