@@ -385,6 +385,19 @@
   #chatsec .ctab .cunread { margin-left: 4px; padding: 0 5px; border-radius: 999px; background: var(--accent, #e04a5a); color: #fff; font-size: 10px; }
   /* links to our site, their cards, clickable times */
   #chatlog a.clink { color: var(--accent2, #8ab4ff); text-decoration: underline; text-underline-offset: 2px; word-break: break-all; }
+  /* a mod's link elsewhere: a picture, a video's thumbnail, or a one-line card */
+  #chatlog a.xcard { display: flex; flex-direction: column; gap: 4px; margin-top: 4px; max-width: min(320px, 100%); text-decoration: none; color: var(--fg);
+    border: 1px solid var(--line); border-left: 3px solid var(--accent2, #8ab4ff); border-radius: 8px; padding: 6px 8px; background: #ffffff08; }
+  #chatlog a.xcard:hover { background: #ffffff12; }
+  #chatlog a.xcard .xcap { font-size: 11px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  #chatlog a.xcard .xcap b { color: var(--fg); }
+  #chatlog a.xcard img { display: block; max-width: 100%; max-height: 220px; border-radius: 6px; object-fit: contain; background: #0006; }
+  #chatlog a.xcard.ximg { padding: 4px; border-left-width: 1px; }
+  #chatlog a.xcard .xthumb { position: relative; display: block; aspect-ratio: 16 / 9; overflow: hidden; border-radius: 6px; background: #000; }
+  #chatlog a.xcard .xthumb img { width: 100%; height: 100%; max-height: none; object-fit: cover; }
+  #chatlog a.xcard .xplay { position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%); width: 46px; height: 32px; border-radius: 9px;
+    background: #e02020e6; color: #fff; font-style: normal; display: grid; place-items: center; font-size: 15px; }
+  #chatlog a.xcard.noimg img, #chatlog a.xcard.noimg .xthumb { display: none; }
   #chatlog .cts { cursor: pointer; color: var(--accent2, #8ab4ff); border-bottom: 1px dotted currentColor; }
   #chatlog .ctime.cts { color: var(--faint); }
   #chatlog .ctime.cts:hover, #chatlog .cts:hover { color: var(--fg); }
@@ -1224,6 +1237,7 @@
       body.append(tm, nk, j);
     } else body.append(tm, nk, ...mdNodes(text, own ? seg => waveNodes(seg, x => richText(emoRuns(x), l)) : seg => richText(emoRuns(seg), l)));
     for (const sl of linksOf(text).slice(0, 2)) body.append(linkCard(sl));
+    if (opLine(l)) for (const u of extLinksOf(text).slice(0, 2)) { const e = extEmbed(u); if (e) body.append(e); }
     li.append(body);
     if (l.msgid && c) reactDraw(li, c, l.msgid);
     if (l.msgid) {
@@ -1310,6 +1324,42 @@
     return null;
   }
   const linksOf = text => [...String(text).matchAll(URL_RE)].map(m => siteLink(urlEnd(m[0]))).filter(Boolean);
+  // ---- links elsewhere: a mod's / the owner's line only (channel operators); embedded when they are a picture or a
+  // YouTube / Twitch / X post, else just the clean link. Nothing is fetched for anyone else's line ----
+  const opLine = l => { const c = l && l.chan && chans.get(key(l.chan)); return !!(c && l.irc && c.ops.has(key(l.irc))); };
+  const extUrl = u => { try { const x = new URL(u); return /^https?:$/.test(x.protocol) && !SITE_HOSTS.has(x.hostname) ? x : null; } catch (e) { return null; } };
+  const extLinksOf = text => [...String(text).matchAll(URL_RE)].map(m => urlEnd(m[0])).filter(extUrl);
+  function ytId(x) {
+    const h = x.hostname.replace(/^(www\.|m\.|music\.)/, '');
+    if (h === 'youtu.be') return x.pathname.slice(1).split('/')[0];
+    if (h !== 'youtube.com') return null;
+    if (x.pathname === '/watch') return x.searchParams.get('v');
+    const mm = /^\/(shorts|live|embed)\/([\w-]{6,20})/.exec(x.pathname);
+    return mm ? mm[2] : null;
+  }
+  function extEmbed(u) {
+    const x = extUrl(u);
+    if (!x) return null;
+    const a = document.createElement('a');
+    a.className = 'xcard'; a.href = u; a.target = '_blank'; a.rel = 'noopener noreferrer nofollow'; a.title = u;
+    const img = src => { const i = document.createElement('img'); i.loading = 'lazy'; i.decoding = 'async'; i.alt = ''; i.referrerPolicy = 'no-referrer'; i.src = src;
+      i.onerror = () => a.classList.add('noimg'); return i; };
+    const cap = (site, t) => { const d = document.createElement('span'); d.className = 'xcap'; const b = document.createElement('b'); b.textContent = site; d.append(b, ' ', t); return d; };
+    const yt = ytId(x);
+    if (yt && /^[\w-]{6,20}$/.test(yt)) {
+      a.classList.add('xvid');
+      const f = document.createElement('span'); f.className = 'xthumb'; f.append(img(`https://i.ytimg.com/vi/${yt}/hqdefault.jpg`));
+      const pl = document.createElement('i'); pl.className = 'xplay'; pl.textContent = '▶'; f.append(pl);
+      a.append(f, cap('YouTube', cleanUrl(u)));
+      return a;
+    }
+    if (/\.(png|jpe?g|gif|webp|avif)$/i.test(x.pathname)) { a.classList.add('ximg'); a.append(img(u)); return a; }
+    const h = x.hostname.replace(/^www\./, '');
+    const site = /(^|\.)twitch\.tv$/.test(h) ? 'Twitch' : /^(x|twitter)\.com$/.test(h) ? 'X' : /(^|\.)discord\.(gg|com)$/.test(h) ? 'Discord'
+      : /(^|\.)start\.gg$/.test(h) ? 'start.gg' : /(^|\.)reddit\.com$/.test(h) ? 'Reddit' : h;
+    a.append(cap(site, cleanUrl(u)));
+    return a;
+  }
   // the overlay's text: links left out (a line that is only a link stays in the chat)
   const picText = text => String(text).replace(URL_RE, ' ').replace(/\s+/g, ' ').trim();
   // timestamps seek in a match channel, or anywhere while a replay plays (not #melty on a live page: no shared clock)
@@ -1324,7 +1374,15 @@
     let i = 0;
     for (const m of text.matchAll(URL_RE)) {
       const u = urlEnd(m[0]), sl = siteLink(u);
-      if (!sl) continue;
+      if (!sl) {
+        // a mod's (or the owner's) link elsewhere: a link too, shown clean; anyone else's stays text (user 2026-11-01)
+        if (!opLine(l) || !extUrl(u)) continue;
+        if (m.index > i) out.push(...tsText(text.slice(i, m.index), l));
+        const a = document.createElement('a');
+        a.className = 'clink'; a.href = u; a.target = '_blank'; a.rel = 'noopener noreferrer nofollow'; a.title = u; a.textContent = cleanUrl(u);
+        out.push(a); i = m.index + u.length;
+        continue;
+      }
       if (m.index > i) out.push(...tsText(text.slice(i, m.index), l));
       const a = document.createElement('a');
       a.className = 'clink'; a.href = openUrl(sl); a.textContent = linkLabel(sl); a.title = u;
