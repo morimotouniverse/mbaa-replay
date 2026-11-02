@@ -42,6 +42,7 @@ const PHONE = matchMedia('(pointer: coarse)').matches && Math.min(screen.width, 
 const LOWMEM = Q.get('lowmem') !== null ? Q.get('lowmem') === '1' : PHONE;
 const FREE_FILES = Q.get('free') !== '0';  // (low memory: a match's files freed once it has loaded; ?free=0: kept, tests)
 const KZ = Q.get('kz') !== '0';  // keyframe pages zlib-compressed (?kz=0: zero-word packing only)
+const KF_VERIFY = Q.get('kfverify') === '1';  // checks: a commit's reused pre-pass copies compared word for word with the page at the commit (window.__kfVerify)
 const KF_BUDGET = +(Q.get('kfmb') || (LOWMEM ? 40 : 450)) * 1e6;
 // the store textures the kept keyframes pin (kfTexBytes) have a budget of their own: over it, keyframes thin as over KF_BUDGET
 const KF_TEX_BUDGET = +(Q.get('kftexmb') || (LOWMEM ? 64 : 256)) * 1e6;
@@ -1206,6 +1207,32 @@ function hashRuns(M, idx) {  // hash the listed pages (sorted), one wasm call pe
 }
 const sameHash = (hs, i, q) => q && q.h[0] === hs[4 * i] && q.h[1] === hs[4 * i + 1] && q.h[2] === hs[4 * i + 2] && q.h[3] === hs[4 * i + 3];
 function hashView(M, n) { return new Int32Array(M.HEAPU8.buffer, M._viewer_page_hash_area(0), n * 4); }
+// The commit copies, in one tick, every page changed since the base keyframe: ~250 pages in play, but after a radio
+// stage swap ~3000 (50 MB: 35-50 ms desktop, 200+ ms on a phone, user 2026-11-02 "the stage change still hiccups"). The
+// pre pass copies changed pages ahead, a slice a tick (preCopy: a cold page found changed; preCopyHot: the hot pages,
+// ~1.5 ms a tick), each with its hash at the copy; the commit takes a copy whose page hashes the same then, so only
+// pages changed again since are copied in the commit's tick. (The keyframe is the same: equal hash, equal page.)
+function preCopy(M, c, i, hs) {
+  const W = PAGE >> 2, H = new Int32Array(M.HEAPU8.buffer);
+  (c.pre || (c.pre = new Map())).set(i, { r: H.slice(i * W, i * W + W), h: [hs[4 * i], hs[4 * i + 1], hs[4 * i + 2], hs[4 * i + 3]] });
+}
+function preCopyHot(M, c) {
+  if (!c.hot) {
+    const n = Math.ceil(M._viewer_mem_top() / PAGE), cold = new Uint8Array(n);
+    const x0 = Math.floor(M._viewer_page_hash_area(0) / PAGE), x1 = Math.ceil(M._viewer_page_hash_area(1) / PAGE);
+    for (const i of c.cold) if (i < n) cold[i] = 1;
+    c.hot = []; c.hcur = 0;
+    for (let i = 0; i < n; i++) if (!cold[i] && !(i >= x0 && i < x1)) c.hot.push(i);
+  }
+  const t0 = performance.now();
+  while (c.hcur < c.hot.length && performance.now() - t0 < 1.5) {
+    const part = c.hot.slice(c.hcur, c.hcur + 64);
+    c.hcur += part.length;
+    hashRuns(M, part);
+    const hs = hashView(M, part[part.length - 1] + 1);
+    for (const i of part) if (!sameHash(hs, i, c.base.pages[i]) && !(c.pre && c.pre.has(i))) preCopy(M, c, i, hs);
+  }
+}
 function incTick(s, f) {
   const t = s.tl, M = s.M;
   let c = t.inc;
@@ -1221,7 +1248,9 @@ function incTick(s, f) {
       const q = base.pages[i];
       if (q && !hot.has(i) && !(q.v && q.v.length === 0)) cold.push(i);  // a zero page is free heap: hot
     }
-    c = t.inc = { F: base.frame + KF_EVERY, base, cold, cur: 0, changed: [], kf: null, t0: 0, ms: 0 };
+    // (F at least a pre pass ahead: a commit dropped late, or one started past its frame, had no pre pass, so it hashed
+    // and copied every changed page in one tick: after a radio stage swap, several 40-50 ms ticks in a row)
+    c = t.inc = { F: Math.max(base.frame + KF_EVERY, f + KF_PHASE), base, cold, cur: 0, changed: [], kf: null, t0: 0, ms: 0 };
   }
   const t0 = performance.now(), phase = c.kf ? 'post' : f >= c.F ? 'commit' : 'pre';
   const slice = Math.ceil(c.cold.length / KF_PHASE);
@@ -1231,9 +1260,10 @@ function incTick(s, f) {
       const part = c.cold.slice(c.cur, n);
       hashRuns(M, part);
       const hs = hashView(M, part[part.length - 1] + 1);
-      for (const i of part) if (!sameHash(hs, i, c.base.pages[i])) c.changed.push(i);
+      for (const i of part) if (!sameHash(hs, i, c.base.pages[i])) { c.changed.push(i); if (f < c.F) preCopy(M, c, i, hs); }
       c.cur = n;
     }
+    if (f < c.F) preCopyHot(M, c);
     if (f >= c.F && c.cur === c.cold.length && !M._viewer_files_open() && !t.kfs.some(k => k.frame === f)) incCommit(s, f, c);
   } else {  // post pass
     // packed against wall time, not a share per game frame: a catch-up tick runs several game frames, and a share each
@@ -1291,10 +1321,22 @@ function incCommit(s, f, c) {
     else if (sameHash(hs, i, q)) pages[i] = q;
     else { changed.push(i); if (q) t.hotAt.set(i, t.kfs.length); }
   }
-  // the changed pages, copied into one buffer (one allocation, not one per page)
-  if (!t.commitBuf || t.commitBuf.length < changed.length * W) t.commitBuf = new Int32Array(Math.ceil(changed.length * 1.5) * W);
-  const buf = t.commitBuf, raw = [];  // reused: every raw page is packed or copied out during the post pass
-  changed.forEach((i, k) => {
+  // the changed pages copied ahead in the pre pass and the same since (its hash now = at the copy): that copy; the
+  // rest copied now into one buffer (one allocation, not one per page)
+  const raw = [], late = [];
+  for (const i of changed) {
+    const p = c.pre && c.pre.get(i);
+    if (p && sameHash(hs, i, p)) {
+      if (KF_VERIFY) { const V = window.__kfVerify || (window.__kfVerify = { reused: 0, bad: 0, late: 0 }); V.reused++;
+        for (let j = 0, o = i * W; j < W; j++) if (p.r[j] !== H[o + j]) { V.bad++; break; } }
+      pages[i] = { r: p.r, bytes: PAGE, h: p.h }; raw.push(pages[i]);
+    }
+    else late.push(i);
+  }
+  c.pre = null;
+  if (late.length && (!t.commitBuf || t.commitBuf.length < late.length * W)) t.commitBuf = new Int32Array(Math.ceil(late.length * 1.5) * W);
+  const buf = t.commitBuf;  // reused: every raw page is packed or copied out during the post pass
+  late.forEach((i, k) => {
     buf.set(H.subarray(i * W, i * W + W), k * W);
     pages[i] = { r: buf.subarray(k * W, k * W + W), bytes: PAGE, h: [hs[4 * i], hs[4 * i + 1], hs[4 * i + 2], hs[4 * i + 3]] };
     raw.push(pages[i]);
