@@ -3645,7 +3645,7 @@
   setInterval(() => { if (matchChan && tl.entries.length) { tlPlace(); tlKick(); } }, 1000);
 
   // ---- IRC ----
-  const irc = { ws: null, registered: false, nick: prof.nick, caps: new Set(), batches: new Map(), retry: 0, lastSend: -1e9, account: null, away: new Map() };
+  const irc = { ws: null, registered: false, nick: prof.nick, caps: new Set(), batches: new Map(), retry: 0, lastSend: -1e9, account: null, away: new Map(), spreadGot: false, stylesAsk: 0 };
   const WANT = ['message-tags', 'server-time', 'echo-message', 'batch', 'draft/chathistory', 'chathistory', 'draft/message-redaction',
     'multi-prefix', 'sasl', 'account-tag',
     // read markers (MARKREAD), presence (AWAY to channel members), history's TAGMSGs (reactions, when the server stores
@@ -3769,7 +3769,7 @@
     state('connecting');
     let ws;
     try { ws = new WebSocket(WS_URL, ['text.ircv3.net']); } catch (e) { state('offline'); return later(); }
-    irc.ws = ws; irc.registered = false; irc.caps.clear(); irc.batches.clear();
+    irc.ws = ws; irc.registered = false; irc.caps.clear(); irc.batches.clear(); irc.spreadGot = false; clearTimeout(irc.stylesAsk); irc.stylesAsk = 0;
     ws.onopen = () => {
       irc.account = null;
       irc.send('CAP LS 302');
@@ -3935,6 +3935,10 @@
         // (the first join: the divider and the mentions start at the read point; history fills up to backAt)
         if (!c.histDone) { c.divTs = c.readTs; c.backAt = Infinity; c.backHist = true; c.firstMark = true; }
         if (!c.names.has(BOT) && ![...c.names].some(n => key(n) === key(BOT))) { c.retryAt = 0; irc.send(`PRIVMSG ${BOT} :open ${c.name}`); }
+        // (the bot sends the spread and the name styles when it sees us join; a second device on a signed-in account is
+        // attached by the server to the session already here, a join the bot never sees: the owner's phone showed no
+        // one's glow / gradient, 2026-11-02. None by 3 s: ask it, once a connection)
+        else if (!irc.spreadGot && !irc.stylesAsk) { const ws = irc.ws; irc.stylesAsk = setTimeout(() => { if (irc.ws === ws && !irc.spreadGot) irc.send(`PRIVMSG ${BOT} :styles`); }, 3000); }
         const hasHist = irc.caps.has('draft/chathistory') || irc.caps.has('chathistory');
         // joined again (a reconnect: signing in or out, the server or the network restarting): what was said while away,
         // from the newest line we have (nothing doubled: msgids are seen once)
@@ -3997,6 +4001,7 @@
         // (the site-wide spread: to a channel, or to us on joining)
         // (only with the bot's account-tag: the server says who sent it, a nick alone proves nothing)
         const fromBot = key(m.nick) === key(BOT) && key(m.tags.account || '') === BOT_ACCT;
+        if (fromBot && m.tags['+mbaa/spread'] != null) irc.spreadGot = true;
         const sp = m.tags['+mbaa/spread'];
         if (sp != null && fromBot && /^\d{1,2}(\.\d{1,3})?$/.test(sp)) spreadSet(+sp, 'bot');
         // (the site owner's account and style, sent with the spread)

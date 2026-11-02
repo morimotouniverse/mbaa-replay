@@ -3342,17 +3342,30 @@ async function copyPlaylist() {
   const shots = session ? grabCard() : null;  // the playlist's link card: what is on screen now
   let text;
   try {
-    const items = [];
-    for (const [k, it] of pl.items.entries()) {
-      status(`uploading playlist ${k + 1}/${pl.items.length}…`);
-      if (!it.id) it.id = await uploadRep(new Uint8Array(await (await itemFile(it)).arrayBuffer()));
-      items.push({ id: it.id, name: it.name.replace(/\.rep$/i, '') });
-    }
+    // (4 uploads at a time, counted as they finish, then each later step named: one by one, a phone's round trips were
+    // most of the wait, and "uploading playlist 17/17" was shown from the last upload's start through the list and its
+    // preview picture, which read as stuck; the store allows 120 a minute)
+    const n = pl.items.length;
+    let done = pl.items.filter(it => it.id).length, next = 0;
+    const shown = () => status(`uploading playlist replays ${done}/${n}…`);
+    shown();
+    const up = async () => {
+      while (next < n) {
+        const it = pl.items[next++];
+        if (it.id) continue;
+        it.id = await uploadRep(new Uint8Array(await (await itemFile(it)).arrayBuffer()));
+        done++; shown();
+      }
+    };
+    await Promise.all(Array.from({ length: Math.min(4, n) }, up));
+    const items = pl.items.map(it => ({ id: it.id, name: it.name.replace(/\.rep$/i, '') }));
+    status('creating the playlist link…');
     const r = await fetch(`${REPLAY_STORE}/list`, { method: 'POST', body: JSON.stringify({ items }), headers: { 'Content-Type': 'application/json' } });
     const j = await r.json();
     if (!r.ok) throw new Error(j.error || `HTTP ${r.status}`);
     const u = new URL(location.origin + location.pathname);
     u.searchParams.set('l', j.id);
+    status('adding the link\'s preview picture…');
     await shareThumb(j.id, 0, shots);
     text = u.toString();
   } catch (e) { console.warn('playlist upload failed:', e); status(`playlist link failed: ${e.message}`); return; }
@@ -3741,7 +3754,9 @@ function controls() {
     // touch: outside fullscreen a tap goes fullscreen; in it, a tap shows / hides the controls over the picture (beside
     // it they stay); pause is a button. A mouse click pauses / plays, as always.
     if (e.pointerType !== 'mouse') {
-      if (!stageEl.classList.contains('fs')) { toggleFullscreen(); return; }
+      // (going fullscreen waits for the finger's lift: a touch pointerdown is no user activation, so requestFullscreen
+      // there was refused and the page's own fullscreen taken instead: upright, the browser's bars kept; pointerup is one)
+      if (!stageEl.classList.contains('fs')) { tapFs = e.pointerId; return; }
       if (stageEl.classList.contains('sidebar')) return;
       if (stageEl.classList.contains('idle')) fsWake(); else { clearTimeout(fsTimer); stageEl.classList.add('idle'); }
       return;
@@ -3751,6 +3766,13 @@ function controls() {
     if (actx && actx.state !== 'running') return;  // this click only turns sound on (the page-wide unlock handles it)
     togglePlay();
   });
+  let tapFs = null;
+  stageEl.addEventListener('pointerup', e => {
+    if (e.pointerId !== tapFs) return;
+    tapFs = null;
+    if (!stageEl.classList.contains('fs')) toggleFullscreen();
+  });
+  stageEl.addEventListener('pointercancel', () => { tapFs = null; });  // (a scroll or a pinch, not a tap)
   const si = document.getElementById('skipintro');
   si.checked = ui.skipIntro;
   si.onchange = () => {
