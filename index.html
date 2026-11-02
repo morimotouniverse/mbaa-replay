@@ -87,6 +87,10 @@
   /* while a match loads: the game's opening movie (muted) over the black picture */
   #loadvid { position: absolute; left: 0; top: 0; width: 100%; aspect-ratio: 4 / 3; object-fit: cover; background: #000; pointer-events: none; }
   #loadvid[hidden] { display: none; }
+  #loadvid { transition: opacity .35s ease; }  #loadvid.xfout { opacity: 0; }
+  /* the crossfade: the last picture over the new one, faded out, then display: none (viewer.js xfGrab) */
+  #xfcv { position: absolute; pointer-events: none; image-rendering: pixelated; }
+  #xfcv[hidden] { display: none; }
   .stage.fs #loadvid { inset: auto; left: auto; top: auto; width: var(--w); }
   /* Layout (viewer.js fitStage sets the body classes). The transport (time, seek bar, buttons) is always under the
      picture. Without chat: the rest is one panel, beside the picture when that gives a larger picture (body.side), else
@@ -534,6 +538,8 @@
   #radiosec .rtitle::before { content: '\266A  RADIO'; font-size: 10px; letter-spacing: .12em; color: var(--accent); }
   #radiosec .rtitle small { font-size: 11px; font-weight: 400; color: var(--muted); }
   #radiosec.open { background: #ffffff06; border-radius: 8px; }
+  .radiostg { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+  #radiomusic { max-width: 100%; min-width: 0; flex: 1 1 140px; font-size: 12px; }
   #radiogrid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px; max-height: 330px; overflow-y: auto; margin-top: 6px; padding-right: 2px; }
   #radiogrid .tile { display: flex; flex-direction: column; gap: 3px; padding: 4px; border-radius: 8px; background: #ffffff08; border: 1px solid transparent; color: inherit; text-align: left; cursor: pointer; min-width: 0; }
   #radiogrid .tile:hover { background: #ffffff12; }
@@ -659,6 +665,7 @@
 <div class="main">
 <div class="stage">
   <canvas id="canvas" width="640" height="480" oncontextmenu="event.preventDefault()"></canvas>
+  <canvas id="xfcv" aria-hidden="true" hidden></canvas>
   <canvas id="overlay"></canvas>
   <div class="banner" id="banner0" hidden><span></span></div><div class="banner" id="banner1" hidden><span></span></div>
   <div id="livenotice" role="status" aria-live="polite" hidden></div>
@@ -826,7 +833,8 @@
   </div>
   <div class="sec" id="radiosec" hidden>
     <div class="row spread radiohead"><span class="rtitle">Raito Radio<small>Raito's Melty Blood music in place of the match's</small></span><button class="txt" id="radiotog" title="Raito Radio: play any of Raito's Melty Blood tracks instead of the match's music (stays until set back to match music); an older game's stage track also shows its stage"></button></div>
-    <div class="row radiostg"><label class="chip" title="On: a track from another stage brings its stage with it. Off: only the music changes, the match's own stage stays"><input id="radiostage" type="checkbox" checked>stage changes with the music</label></div>
+    <div class="row radiostg"><label class="chip" title="On: a track from another stage brings its stage with it. Off: only the music changes, the match's own stage stays"><input id="radiostage" type="checkbox" checked>stage changes with the music</label>
+      <select id="radiomusic" title="The music on its own: the stage's (the pick above or the match's), the match's own, or any track" aria-label="music"><option value="">music: same as stage</option><option value="match">music: the match's own</option></select></div>
     <div id="radiogames" hidden></div>
     <div id="radiogrid" hidden></div>
   </div>
@@ -853,6 +861,6 @@
 </div>
 <script src="mbaa.js?v=6ece8ae47816"></script>
 <script src="bgm_stream.js?v=407ac29e5c89"></script>
-<script src="viewer.js?v=65b1462a7158"></script>
+<script src="viewer.js?v=b56f5df0917b"></script>
 </body>
 </html>

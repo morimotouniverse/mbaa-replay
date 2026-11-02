@@ -500,7 +500,7 @@ function audioHooks(Module, s) {
   const log = ev => { const k = Module._viewer_frame(); if (!s.tl || k >= s.tl.simMax) s.bgmLog.push([k, ...ev]); };
   // Melty radio (radio, set from the panel): its track replaces the match's music (a replay: until its end; a live match: its later games too, start), straight
   // through the game's track changes, stops and seeks, at a steady volume (radioLevel: the music's own level, without its fades)
-  const radioOn = () => radio && !HASH;
+  const radioOn = () => !!musicNow() && !HASH;  // (the radio's music: the pick's, or the music chosen on its own)
   const play = (path, loop, loopPos, offset) => {
     // (the "...and nothing heart" stage's music: off unless the viewer turned it on; songSub)
     const sub = !radioOn() && songSub(path, Module.HEAP32[STAGE_ID >> 2]);
@@ -516,8 +516,9 @@ function audioHooks(Module, s) {
       path = sub.path; loop = true; loopPos = sub.loopPos;
     }
     if (radioOn()) {
-      if (bgm && bgmPath === radio.path) return;
-      path = radio.path; loop = true; loopPos = radio.loopPos; offset = 0;
+      const mu = musicNow();
+      if (bgm && bgmPath === mu.path) return;
+      path = mu.path; loop = true; loopPos = mu.loopPos; offset = 0;
     }
     halt();
     if (!graph()) return;
@@ -885,6 +886,7 @@ async function play(rep, name, catchUp = 0, want = null) {
   }
   if (s !== session) return;
   call(s, 'viewer_run');
+  xfRuns++;
   loading(false);
   if (!HASH) movieLoad();
   status(`playing ${name}`);
@@ -1766,12 +1768,13 @@ async function stagePanelLoad() {
     grid.hidden = !grid.hidden; bar.hidden = grid.hidden || !bar.children.length;
     document.getElementById('radiosec').classList.toggle('open', !grid.hidden);
     if (!grid.hidden) {
-      radioArt(); radioOldLoad().then(radioLinks).catch(() => {});
+      radioArt(); radioOldLoad().then(() => { radioLinks(); musicOpts(); }).catch(() => {});
       // the picker opens under the panel, often below the window's edge: bring it into view
       requestAnimationFrame(() => grid.scrollIntoView({ block: 'nearest', behavior: 'smooth' }));
     }
   };
   document.getElementById('radiosec').hidden = false;
+  musicOpts();
   await radioShowGame('aacc');
   radioSet('');
 }
@@ -1882,6 +1885,49 @@ function radioTrack(f) {
 }
 let radioPick = '';
 let radioLiveId = null;  // (the live match the pick was made on: it lasts for that match's sessions; start)
+let xfStagePending = false;  // (a pick's stage swap to crossfade: radioStageSync)
+// floatsis (user 2026-11-01): the music chosen apart from the stage. '' the stage's (the radio pick's track, else the
+// match's own), 'match' the match's own whatever the pick, or a track (as radioTrack). Kept like the pick: a replay's
+// for that replay, a live match's for its whole live match (musicLiveId; start).
+let musicPick = '', musicLiveId = null, musicSel = null;
+const musicNow = () => musicPick === 'match' ? null : musicPick ? musicSel : radio;
+async function musicSet(f) {
+  musicPick = f;
+  musicLiveId = f && session && session.liveSrc ? session.liveSrc.id : null;
+  const sel = document.getElementById('radiomusic');
+  if (sel) { if (f && ![...sel.options].some(o => o.value === f)) musicOpts(); sel.value = f; }
+  const t = f && f !== 'match' ? radioTrack(f) : null;
+  if (t) await fetchAll(man, t.fetch, '', true);
+  if (musicPick !== f) return;  // (chosen again meanwhile)
+  musicSel = t ? { path: `/game/${t.key}`, loopPos: t.loopPos, file: f, title: t.title, game: t.game } : null;
+  if (session && session.radioChanged) session.radioChanged();
+  stageKey = '';
+}
+// the music list: MBAACC's looping tracks, then the older games' once old.json is in
+function musicOpts() {
+  const sel = document.getElementById('radiomusic');
+  if (!sel || !stagePanel) return;
+  const keep = sel.value, base = [...sel.options].slice(0, 2);
+  const grp = (label, items) => {
+    const g = document.createElement('optgroup'); g.label = label;
+    for (const [v, t] of items) { const o = document.createElement('option'); o.value = v; o.textContent = t; g.append(o); }
+    return g;
+  };
+  const out = [...base, grp('MBAACC', Object.entries(stagePanel.tracks).filter(([, x]) => x.loop).map(([f, x]) => [f, x.title]))];
+  if (oldRadio) for (const g of oldRadio.games) {
+    const name = (RADIO_GAMES.find(([id]) => id === g.id) || [])[1] || g.id;
+    out.push(grp(name, g.tracks.map(t => [`${g.id}:${t.id}`, t.title])));
+  }
+  sel.replaceChildren(...out);
+  sel.value = [...sel.options].some(o => o.value === keep) ? keep : '';
+}
+(() => {
+  const sel = document.getElementById('radiomusic');
+  if (!sel) return;
+  const more = () => { if (!oldRadio) radioOldLoad().then(o => { if (o) musicOpts(); }).catch(() => {}); };
+  sel.addEventListener('pointerdown', more); sel.addEventListener('focus', more);
+  sel.onchange = () => musicSet(sel.value).catch(e => console.warn('radio: music:', e));
+})();
 // floatsis: the music picked on its own, the stage left alone (off: a radio track changes only the music; remembered)
 let radioStageFollow = true;
 try { radioStageFollow = localStorage.getItem('mbaaRadioStage') !== '0'; } catch (e) {}
@@ -1893,6 +1939,7 @@ try { radioStageFollow = localStorage.getItem('mbaaRadioStage') !== '0'; } catch
     radioStageFollow = cb.checked;
     try { localStorage.setItem('mbaaRadioStage', radioStageFollow ? '1' : '0'); } catch (e) {}
     stageKey = '';
+    xfStagePending = true;
     radioStageSync(session);
     if (ui.paused && session && session.tl) requestSeek(curFrame());  // (paused: the frame drawn again, with its stage)
   };
@@ -1909,6 +1956,7 @@ async function radioSet(f) {
                 game: t.game, dat: t.dat && cache.has(t.dat) ? t.dat : '', lights: t.lights, stages: t.stages || null } : null;
   if (session && session.radioChanged) session.radioChanged();
   stageKey = '';
+  xfStagePending = true;
   radioStageSync(session);
   if (ui.paused && session && session.tl) requestSeek(curFrame());  // (paused: the frame drawn again, with its stage)
 }
@@ -1972,9 +2020,14 @@ function radioStageSync(s) {
   if (radio) radio.stageNow = stage;
   const want = st ? radioDatId(st.dat) : stage ? radioDatId(`stage:${stage}`) : 0;
   if (!want && M._viewer_radio_stage_in()) radioOwnStage(s);
-  if (M._viewer_radio_stage_id() === want) return;
-  if (stage) { if (radioFilesIn(s, stage)) M._viewer_radio_stage_want_stage(stage, want); return; }
+  if (M._viewer_radio_stage_id() === want) { xfStagePending = false; return; }
+  // (a pick's stage swap: crossfaded once it is sent; a keyframe restore sending it again is not)
+  // (in battle only: elsewhere the stage comes in with the battle's own load and fade, and a held copy would freeze the
+  // VS screen)
+  const fade = () => { if (xfStagePending) { xfStagePending = false; if (M.HEAP32[0x54EEE8 >> 2] === 1) xfGrab(() => M._viewer_radio_stage_in() === want); } };
+  if (stage) { if (radioFilesIn(s, stage)) { fade(); M._viewer_radio_stage_want_stage(stage, want); } return; }
   if (st && !radioPut(s, st.dat)) return;
+  fade();
   if (st) st.lights.forEach(([pos, power], i) => M._viewer_radio_stage_light(i, pos, power));
   M.ccall('viewer_radio_stage_want', null, ['string', 'number', 'number'], [st ? st.dat : '', want, st ? st.lights.length : 0]);
 }
@@ -2025,11 +2078,12 @@ async function stageShow(s) {
   const box = document.getElementById('stageblk');
   if (!stagePanel || !s || !s.M) { box.hidden = true; return; }
   const id = radio && radio.stageNow ? radio.stageNow : s.M.HEAP32[STAGE_ID >> 2], st = stagePanel.stages[id];  // (an MBAACC pick's stage)
-  const f = radio ? radio.file : trackOf(s.bgmNow) || (st && st.track), key = `${id}/${f}/${+radioStageFollow}`;
+  const mu = musicNow(), own = musicPick === 'match' ? s.bgmNow : null;
+  const f = mu ? mu.file : trackOf(own || s.bgmNow) || (st && st.track), key = `${id}/${f}/${+radioStageFollow}/${radio ? radio.file : ''}/${musicPick}`;
   if (key === stageKey) return;
   stageKey = key;
-  const tr = radio ? radio : stagePanel.tracks[f];
-  document.getElementById('trk').textContent = tr ? tr.title + (radio ? ` (radio${radio.game ? `, ${radio.game}` : ''})` : '') : '';
+  const tr = mu ? mu : stagePanel.tracks[f];
+  document.getElementById('trk').textContent = tr ? tr.title + (mu ? ` (radio${mu.game ? `, ${mu.game}` : ''})` : '') : '';
   if (radio && radioStageFollow && (radio.tile || radio.tileUrl)) {  // an older game's stage: its picture, its name for the plate
     const view = box.querySelector('.view'), name = box.querySelector('.name'), d = radio.tile && cache.get(radio.tile);
     const old = view.dataset.src && view.dataset.src.startsWith('blob:') ? view.dataset.src : '';
@@ -3580,21 +3634,78 @@ function movieVideo(b) {
 }
 // the loading picture: the game's opening movie (web/shell/opening.webm, from Movie/Original MBAA_OP.mpeg: 640x480 60 fps VP9, artifacts/opening/README.md; no
 // sound), fetched the first time a match loads; shown from the first fetch until the game draws
+// (user 2026-11-01: it fades in over the last picture and out over the game's first frames, XF_STAGE_MS; hidden and
+// paused once faded: nothing composited after)
+let loadFadeT = 0;
 function loading(on) {
   const v = document.getElementById('loadvid');
   if (HASH || CAPTURE || PERF) return;
+  clearTimeout(loadFadeT);
   if (on) {
     if (!v.src) v.src = 'opening.webm?v=640p60';  // (the query: past the edge's copy of the old 480x360 file)
-    v.hidden = false; v.play().catch(() => {});
-  } else if (!v.hidden) { v.hidden = true; v.pause(); }
+    if (v.hidden && !xfReduced()) { v.classList.add('xfout'); v.hidden = false; requestAnimationFrame(() => requestAnimationFrame(() => v.classList.remove('xfout'))); }
+    else { v.hidden = false; v.classList.remove('xfout'); }
+    v.play().catch(() => {});
+  } else if (!v.hidden) {
+    if (xfReduced()) { v.hidden = true; v.pause(); return; }
+    // (two frames on: the game's first frame drawn under it; the game is not held back meanwhile)
+    requestAnimationFrame(() => requestAnimationFrame(() => {
+      if (v.hidden) return;
+      v.classList.add('xfout');
+      loadFadeT = setTimeout(() => { v.hidden = true; v.pause(); v.classList.remove('xfout'); }, XF_STAGE_MS + 60);
+    }));
+  }
+}
+// The stage crossfade (user 2026-11-01): a new match / live switch, a radio stage pick. The picture on screen is copied
+// (the GL canvas keeps its drawing buffer) into #xfcv, laid over the game canvas; once the new stage is drawn (until():
+// true for 2 frames; 4 s at most) it fades out over XF_STAGE_MS and is hidden (display: none, its pixels let go): no
+// per-frame work once done, and the game is never held back (it runs and draws under the copy). Reduced motion: a cut.
+const XF_STAGE_MS = 350;
+let xf = null, xfRuns = 0;
+const xfReduced = () => !!(window.matchMedia && matchMedia('(prefers-reduced-motion: reduce)').matches);
+function xfGrab(until) {
+  if (HASH || CAPTURE || PERF || xfReduced()) return false;
+  const src = document.getElementById('canvas'), c = document.getElementById('xfcv');
+  if (!c || !src || !src.offsetWidth || !session) return false;
+  if (!xf || xf.fading) {  // (a grab already up: it holds the older picture, which is what was on screen)
+    try {
+      c.width = src.width; c.height = src.height;
+      c.getContext('2d').drawImage(src, 0, 0);
+    } catch (e) { return false; }
+    Object.assign(c.style, { left: `${src.offsetLeft}px`, top: `${src.offsetTop}px`, width: `${src.offsetWidth}px`,
+                             height: `${src.offsetHeight}px`, transition: 'none', opacity: '1' });
+    c.hidden = false;
+  }
+  xf = { until, t0: performance.now(), n: 0 };
+  window.__mbaaXf = (window.__mbaaXf || 0) + 1;  // (the checks: grabs made)
+  requestAnimationFrame(xfWatch);
+  return true;
+}
+function xfWatch() {
+  const me = xf;
+  if (!me || me.fading || me.watching === false) return;
+  let ok = false;
+  try { ok = me.until(); } catch (e) { ok = true; }
+  if (ok ? ++me.n >= 2 : performance.now() - me.t0 > 4000) { xfFade(me); return; }
+  requestAnimationFrame(xfWatch);
+}
+function xfFade(me) {
+  const c = document.getElementById('xfcv');
+  me.fading = true;
+  c.style.transition = `opacity ${XF_STAGE_MS}ms ease`;
+  requestAnimationFrame(() => { if (xf === me) c.style.opacity = '0'; });
+  setTimeout(() => { if (xf !== me) return; xf = null; c.hidden = true; c.width = c.height = 1; }, XF_STAGE_MS + 60);
 }
 async function start(file, quiet = false, liveId = null) {
   nextCardHide();  // (a new session: any next-match card was the old one's)
+  if (quiet && session) { const n0 = xfRuns; xfGrab(() => xfRuns > n0); }  // (the last game's picture, faded into the next's)
   if (!quiet) loading(true);  // (quiet: a live switch, the last game's picture stays until the next one draws)
   // a pick on the radio lasts for its match: a replay's for that replay (a playlist's next, another file has its own
   // music); a live match's for the whole live match (liveId: its next games on a new session, a fallback start), until
   // the viewer changes it or goes to another match (user 2026-11-01)
   if (radioPick && !(liveId && radioLiveId === liveId)) radioSet('');
+  if (musicPick && !(liveId && musicLiveId === liveId)) musicSet('');
+  xfStagePending = false;  // (the session's start has its own fade)
   if (ensureAudio()) actx.resume();  // (after a drop or file pick: the page has had its gesture)
   const rep = new Uint8Array(await file.arrayBuffer());
   let keys, want;
