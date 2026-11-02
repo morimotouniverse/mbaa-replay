@@ -498,7 +498,7 @@ function audioHooks(Module, s) {
   s.bgmTrack = () => bgmPath;  // (the track playing or decoding: the radio's when it is on)
   s.bgmLog = [];
   const log = ev => { const k = Module._viewer_frame(); if (!s.tl || k >= s.tl.simMax) s.bgmLog.push([k, ...ev]); };
-  // Melty radio (radio, set from the panel): its track replaces the match's music (until the next match: start), straight
+  // Melty radio (radio, set from the panel): its track replaces the match's music (a replay: until its end; a live match: its later games too, start), straight
   // through the game's track changes, stops and seeks, at a steady volume (radioLevel: the music's own level, without its fades)
   const radioOn = () => radio && !HASH;
   const play = (path, loop, loopPos, offset) => {
@@ -1508,7 +1508,7 @@ async function startLive(id) {
   const r = await liveFetch(`${LIVE}/live/${id}/boot.rep?game=${info.game}`).catch(() => null);
   if (!r || !r.ok) { status(`live match: ${r ? `HTTP ${r.status}` : 'unreachable'}`); return !r || r.status >= 500 ? liveRetry(id) : undefined; }
   window.__mbaaRepUrl = null;
-  await start(new File([await r.arrayBuffer()], `LIVE ${info.names.map(n => n.trim()).join(' vs ')}`));
+  await start(new File([await r.arrayBuffer()], `LIVE ${info.names.map(n => n.trim()).join(' vs ')}`), false, id);
 }
 // the last index number in a block of .ccs records (u32 index, u32 kind, rng 12 + ring 220, u32 frames, u16 x 2 x frames)
 function liveLastIndex(b) {
@@ -1825,6 +1825,7 @@ function radioTrack(f) {
                 game: (RADIO_GAMES.find(([g]) => g === t.game) || [])[1] };
 }
 let radioPick = '';
+let radioLiveId = null;  // (the live match the pick was made on: it lasts for that match's sessions; start)
 // floatsis: the music picked on its own, the stage left alone (off: a radio track changes only the music; remembered)
 let radioStageFollow = true;
 try { radioStageFollow = localStorage.getItem('mbaaRadioStage') !== '0'; } catch (e) {}
@@ -1842,6 +1843,7 @@ try { radioStageFollow = localStorage.getItem('mbaaRadioStage') !== '0'; } catch
 })();
 async function radioSet(f) {
   radioPick = f;
+  radioLiveId = f && session && session.liveSrc ? session.liveSrc.id : null;
   const t = radioTrack(f);
   for (const b of document.querySelectorAll('#radiogrid .tile')) b.classList.toggle('on', b.dataset.f === f);
   document.getElementById('radiotog').textContent = `♪ ${t ? t.title : 'match music'}`;
@@ -2356,7 +2358,7 @@ async function liveSwitch(s, p) {
   status('live: on to the next game');
   liveSrc = { id: s.liveSrc.id, info, since: info.game };
   window.__mbaaRepUrl = null;
-  await start(new File([p.rep], `LIVE ${(info.names || []).map(n => (n || '').trim()).join(' vs ')}`), true);
+  await start(new File([p.rep], `LIVE ${(info.names || []).map(n => (n || '').trim()).join(' vs ')}`), true, liveSrc.id);
 }
 // Live: the players' names on the game's versus banner, instead of CHALLENGER (the streak above them, smaller): drawn
 // by the game in its ASCII font (viewer_banner_name: main_browser.cpp banner_draw, a marquee past 20 characters); a
@@ -3461,11 +3463,13 @@ function loading(on) {
     v.hidden = false; v.play().catch(() => {});
   } else if (!v.hidden) { v.hidden = true; v.pause(); }
 }
-async function start(file, quiet = false) {
+async function start(file, quiet = false, liveId = null) {
   nextCardHide();  // (a new session: any next-match card was the old one's)
   if (!quiet) loading(true);  // (quiet: a live switch, the last game's picture stays until the next one draws)
-  // a pick on the radio lasts for its match: the next one (a switch, a playlist's next, a live game) has its own music
-  if (radioPick) radioSet('');
+  // a pick on the radio lasts for its match: a replay's for that replay (a playlist's next, another file has its own
+  // music); a live match's for the whole live match (liveId: its next games on a new session, a fallback start), until
+  // the viewer changes it or goes to another match (user 2026-11-01)
+  if (radioPick && !(liveId && radioLiveId === liveId)) radioSet('');
   if (ensureAudio()) actx.resume();  // (after a drop or file pick: the page has had its gesture)
   const rep = new Uint8Array(await file.arrayBuffer());
   let keys, want;
