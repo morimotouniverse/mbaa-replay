@@ -1,0 +1,1875 @@
+{
+"source": "Melty Blood",
+"fetched": "2026-11-02T02:00:47.686Z",
+"emotes": [
+{
+"name": "smugkoha",
+"file": "smugkoha.webp",
+"w": 46,
+"h": 40,
+"animated": false
+},
+{
+"name": "warakia",
+"file": "warakia.webp",
+"w": 54,
+"h": 38,
+"animated": false
+},
+{
+"name": "aoko",
+"file": "aoko.webp",
+"w": 44,
+"h": 46,
+"animated": false
+},
+{
+"name": "roa",
+"file": "roa.webp",
+"w": 36,
+"h": 36,
+"animated": false
+},
+{
+"name": "wlen",
+"file": "wlen.webp",
+"w": 42,
+"h": 44,
+"animated": false
+},
+{
+"name": "dp",
+"file": "dp.webp",
+"w": 39,
+"h": 48,
+"animated": false
+},
+{
+"name": "nanaya",
+"file": "nanaya.webp",
+"w": 40,
+"h": 38,
+"animated": false
+},
+{
+"name": "nero",
+"file": "nero.webp",
+"w": 34,
+"h": 36,
+"animated": false
+},
+{
+"name": "waruine",
+"file": "waruine.webp",
+"w": 53,
+"h": 48,
+"animated": false
+},
+{
+"name": "kohaku",
+"file": "kohaku.webp",
+"w": 40,
+"h": 38,
+"animated": false
+},
+{
+"name": "warc",
+"file": "warc.webp",
+"w": 46,
+"h": 48,
+"animated": false
+},
+{
+"name": "ciel",
+"file": "ciel.webp",
+"w": 40,
+"h": 40,
+"animated": false
+},
+{
+"name": "hisui",
+"file": "hisui.webp",
+"w": 40,
+"h": 40,
+"animated": false
+},
+{
+"name": "sion",
+"file": "sion.webp",
+"w": 48,
+"h": 48,
+"animated": false
+},
+{
+"name": "mech",
+"file": "mech.webp",
+"w": 38,
+"h": 38,
+"animated": false
+},
+{
+"name": "vsion",
+"file": "vsion.webp",
+"w": 42,
+"h": 40,
+"animated": false
+},
+{
+"name": "tohno",
+"file": "tohno.webp",
+"w": 40,
+"h": 38,
+"animated": false
+},
+{
+"name": "arc",
+"file": "arc.webp",
+"w": 40,
+"h": 38,
+"animated": false
+},
+{
+"name": "satsuki",
+"file": "satsuki.webp",
+"w": 42,
+"h": 40,
+"animated": false
+},
+{
+"name": "nac",
+"file": "nac.webp",
+"w": 49,
+"h": 48,
+"animated": false
+},
+{
+"name": "ries",
+"file": "ries.webp",
+"w": 42,
+"h": 40,
+"animated": false
+},
+{
+"name": "len",
+"file": "len.webp",
+"w": 48,
+"h": 48,
+"animated": false
+},
+{
+"name": "kawaseruka",
+"file": "kawaseruka.webp",
+"w": 65,
+"h": 48,
+"animated": false
+},
+{
+"name": "3pmiyako",
+"file": "3pmiyako.webp",
+"w": 32,
+"h": 31,
+"animated": false
+},
+{
+"name": "3pnecoarc",
+"file": "3pnecoarc.webp",
+"w": 29,
+"h": 22,
+"animated": false
+},
+{
+"name": "3pkohaku",
+"file": "3pkohaku.webp",
+"w": 32,
+"h": 28,
+"animated": false
+},
+{
+"name": "3phisui",
+"file": "3phisui.webp",
+"w": 31,
+"h": 32,
+"animated": false
+},
+{
+"name": "vakiha",
+"file": "vakiha.webp",
+"w": 36,
+"h": 34,
+"animated": false
+},
+{
+"name": "seifuku",
+"file": "seifuku.webp",
+"w": 36,
+"h": 34,
+"animated": false
+},
+{
+"name": "miyako",
+"file": "miyako.webp",
+"w": 40,
+"h": 38,
+"animated": false
+},
+{
+"name": "himegasm",
+"file": "himegasm.webp",
+"w": 48,
+"h": 48,
+"animated": false
+},
+{
+"name": "ryougi",
+"file": "ryougi.webp",
+"w": 48,
+"h": 48,
+"animated": false
+},
+{
+"name": "kouma",
+"file": "kouma.webp",
+"w": 48,
+"h": 48,
+"animated": false
+},
+{
+"name": "90",
+"file": "90.webp",
+"w": 48,
+"h": 48,
+"animated": false
+},
+{
+"name": "nerothinking",
+"file": "nerothinking.webp",
+"w": 25,
+"h": 27,
+"animated": false
+},
+{
+"name": "tucc",
+"file": "tucc.webp",
+"w": 25,
+"h": 27,
+"animated": false
+},
+{
+"name": "SEAL",
+"file": "SEAL.webp",
+"w": 48,
+"h": 48,
+"animated": false
+},
+{
+"name": "LAES",
+"file": "LAES.webp",
+"w": 48,
+"h": 48,
+"animated": false
+},
+{
+"name": "imnew",
+"file": "imnew.webp",
+"w": 38,
+"h": 38,
+"animated": false
+},
+{
+"name": "monopoly",
+"file": "monopoly.webp",
+"w": 32,
+"h": 32,
+"animated": false
+},
+{
+"name": "DontTalkToMe",
+"file": "DontTalkToMe.webp",
+"w": 48,
+"h": 48,
+"animated": false
+},
+{
+"name": "necoarc",
+"file": "necoarc.webp",
+"w": 50,
+"h": 46,
+"animated": false
+},
+{
+"name": "same",
+"file": "same.webp",
+"w": 52,
+"h": 48,
+"animated": false
+},
+{
+"name": "bgs",
+"file": "bgs.webp",
+"w": 34,
+"h": 48,
+"animated": false
+},
+{
+"name": "killthescene",
+"file": "killthescene.webp",
+"w": 48,
+"h": 48,
+"animated": false
+},
+{
+"name": "OMEGALUL",
+"file": "OMEGALUL.webp",
+"w": 46,
+"h": 48,
+"animated": false
+},
+{
+"name": "humiliation",
+"file": "humiliation.webp",
+"w": 71,
+"h": 48,
+"animated": false
+},
+{
+"name": "Necouma",
+"file": "Necouma.webp",
+"w": 32,
+"h": 48,
+"animated": false
+},
+{
+"name": "kohaboa",
+"file": "kohaboa.webp",
+"w": 52,
+"h": 48,
+"animated": false
+},
+{
+"name": "Ciel2",
+"file": "Ciel2.webp",
+"w": 48,
+"h": 48,
+"animated": false
+},
+{
+"name": "Warceyes",
+"file": "Warceyes.webp",
+"w": 52,
+"h": 48,
+"animated": false
+},
+{
+"name": "CrescentMoon",
+"file": "CrescentMoon.webp",
+"w": 48,
+"h": 48,
+"animated": false
+},
+{
+"name": "HalfMoon",
+"file": "HalfMoon.webp",
+"w": 48,
+"h": 48,
+"animated": false
+},
+{
+"name": "FullMoon",
+"file": "FullMoon.webp",
+"w": 48,
+"h": 48,
+"animated": false
+},
+{
+"name": "LenW",
+"file": "LenW.webp",
+"w": 46,
+"h": 48,
+"animated": false
+},
+{
+"name": "Rock",
+"file": "Rock.webp",
+"w": 48,
+"h": 48,
+"animated": false
+},
+{
+"name": "satsukicry",
+"file": "satsukicry.webp",
+"w": 48,
+"h": 48,
+"animated": false
+},
+{
+"name": "Satsukisad",
+"file": "Satsukisad.webp",
+"w": 48,
+"h": 48,
+"animated": false
+},
+{
+"name": "Necoshock",
+"file": "Necoshock.webp",
+"w": 40,
+"h": 48,
+"animated": false
+},
+{
+"name": "LenE",
+"file": "LenE.webp",
+"w": 48,
+"h": 48,
+"animated": false
+},
+{
+"name": "MinimalCognition",
+"file": "MinimalCognition.webp",
+"w": 42,
+"h": 48,
+"animated": false
+},
+{
+"name": "spikeball",
+"file": "spikeball.webp",
+"w": 49,
+"h": 48,
+"animated": false
+},
+{
+"name": "MiyakoDown",
+"file": "MiyakoDown.webp",
+"w": 43,
+"h": 43,
+"animated": false
+},
+{
+"name": "WWWWW",
+"file": "WWWWW.webp",
+"w": 52,
+"h": 48,
+"animated": true
+},
+{
+"name": "PlusIts",
+"file": "PlusIts.webp",
+"w": 96,
+"h": 45,
+"animated": false
+},
+{
+"name": "ItsPlus",
+"file": "ItsPlus.webp",
+"w": 96,
+"h": 45,
+"animated": false
+},
+{
+"name": "Ethernet",
+"file": "Ethernet.webp",
+"w": 48,
+"h": 48,
+"animated": false
+},
+{
+"name": "AokoThink",
+"file": "AokoThink.webp",
+"w": 48,
+"h": 48,
+"animated": false
+},
+{
+"name": "nyackdash",
+"file": "nyackdash.webp",
+"w": 53,
+"h": 48,
+"animated": false
+},
+{
+"name": "sips",
+"file": "sips.webp",
+"w": 48,
+"h": 48,
+"animated": false
+},
+{
+"name": "sionpeek",
+"file": "sionpeek.webp",
+"w": 92,
+"h": 48,
+"animated": false
+},
+{
+"name": "noroute",
+"file": "noroute.webp",
+"w": 48,
+"h": 48,
+"animated": false
+},
+{
+"name": "kohawau",
+"file": "kohawau.webp",
+"w": 48,
+"h": 48,
+"animated": false
+},
+{
+"name": "mechrusrs",
+"file": "mechrusrs.webp",
+"w": 48,
+"h": 48,
+"animated": false
+},
+{
+"name": "Mechgasm",
+"file": "Mechgasm.webp",
+"w": 48,
+"h": 48,
+"animated": false
+},
+{
+"name": "JazzForTheSoul",
+"file": "JazzForTheSoul.webp",
+"w": 48,
+"h": 48,
+"animated": false
+},
+{
+"name": "warabow",
+"file": "warabow.webp",
+"w": 53,
+"h": 48,
+"animated": false
+},
+{
+"name": "nacthink",
+"file": "nacthink.webp",
+"w": 48,
+"h": 48,
+"animated": false
+},
+{
+"name": "Stopaskingmeforthings",
+"file": "Stopaskingmeforthings.webp",
+"w": 70,
+"h": 48,
+"animated": false
+},
+{
+"name": "meltyjesus",
+"file": "meltyjesus.webp",
+"w": 49,
+"h": 48,
+"animated": false
+},
+{
+"name": "hammerlen",
+"file": "hammerlen.webp",
+"w": 46,
+"h": 48,
+"animated": true
+},
+{
+"name": "wlenrun",
+"file": "wlenrun.webp",
+"w": 48,
+"h": 48,
+"animated": true
+},
+{
+"name": "dansui",
+"file": "dansui.webp",
+"w": 44,
+"h": 48,
+"animated": true
+},
+{
+"name": "HeFeltIt",
+"file": "HeFeltIt.webp",
+"w": 61,
+"h": 48,
+"animated": false
+},
+{
+"name": "Rollerchair",
+"file": "Rollerchair.webp",
+"w": 38,
+"h": 48,
+"animated": false
+},
+{
+"name": "Stool",
+"file": "Stool.webp",
+"w": 30,
+"h": 48,
+"animated": false
+},
+{
+"name": "Throne",
+"file": "Throne.webp",
+"w": 26,
+"h": 48,
+"animated": false
+},
+{
+"name": "Tuccsui",
+"file": "Tuccsui.webp",
+"w": 48,
+"h": 48,
+"animated": false
+},
+{
+"name": "Kohadown",
+"file": "Kohadown.webp",
+"w": 68,
+"h": 48,
+"animated": false
+},
+{
+"name": "yup",
+"file": "yup.webp",
+"w": 51,
+"h": 48,
+"animated": false
+},
+{
+"name": "FairCharacter",
+"file": "FairCharacter.webp",
+"w": 43,
+"h": 48,
+"animated": false
+},
+{
+"name": "Lens1",
+"file": "Lens1.webp",
+"w": 48,
+"h": 48,
+"animated": true
+},
+{
+"name": "Lens2",
+"file": "Lens2.webp",
+"w": 48,
+"h": 48,
+"animated": true
+},
+{
+"name": "oceduck",
+"file": "oceduck.webp",
+"w": 38,
+"h": 48,
+"animated": true
+},
+{
+"name": "Necohand",
+"file": "Necohand.webp",
+"w": 54,
+"h": 48,
+"animated": false
+},
+{
+"name": "Kohacomfy",
+"file": "Kohacomfy.webp",
+"w": 48,
+"h": 48,
+"animated": false
+},
+{
+"name": "tuccRoog",
+"file": "tuccRoog.webp",
+"w": 48,
+"h": 48,
+"animated": false
+},
+{
+"name": "akiha1",
+"file": "akiha1.webp",
+"w": 34,
+"h": 34,
+"animated": false
+},
+{
+"name": "akiha2",
+"file": "akiha2.webp",
+"w": 34,
+"h": 34,
+"animated": false
+},
+{
+"name": "akiha3",
+"file": "akiha3.webp",
+"w": 34,
+"h": 34,
+"animated": false
+},
+{
+"name": "hisuiban",
+"file": "hisuiban.webp",
+"w": 58,
+"h": 48,
+"animated": false
+},
+{
+"name": "notlikehisui",
+"file": "notlikehisui.webp",
+"w": 48,
+"h": 48,
+"animated": false
+},
+{
+"name": "2lens",
+"file": "2lens.webp",
+"w": 51,
+"h": 46,
+"animated": false
+},
+{
+"name": "maidbias",
+"file": "maidbias.webp",
+"w": 48,
+"h": 48,
+"animated": false
+},
+{
+"name": "wemove",
+"file": "wemove.webp",
+"w": 48,
+"h": 48,
+"animated": true
+},
+{
+"name": "drip",
+"file": "drip.webp",
+"w": 48,
+"h": 48,
+"animated": false
+},
+{
+"name": "leg1",
+"file": "leg1.webp",
+"w": 39,
+"h": 39,
+"animated": false
+},
+{
+"name": "leg2",
+"file": "leg2.webp",
+"w": 39,
+"h": 39,
+"animated": false
+},
+{
+"name": "leg3",
+"file": "leg3.webp",
+"w": 39,
+"h": 39,
+"animated": false
+},
+{
+"name": "necoPog",
+"file": "necoPog.webp",
+"w": 61,
+"h": 48,
+"animated": false
+},
+{
+"name": "MintShiiKoha",
+"file": "MintShiiKoha.webp",
+"w": 48,
+"h": 48,
+"animated": false
+},
+{
+"name": "thischair",
+"file": "thischair.webp",
+"w": 26,
+"h": 48,
+"animated": false
+},
+{
+"name": "Lewd",
+"file": "Lewd.webp",
+"w": 49,
+"h": 48,
+"animated": false
+},
+{
+"name": "lencry",
+"file": "lencry.webp",
+"w": 48,
+"h": 48,
+"animated": false
+},
+{
+"name": "go",
+"file": "go.webp",
+"w": 48,
+"h": 48,
+"animated": false
+},
+{
+"name": "away",
+"file": "away.webp",
+"w": 48,
+"h": 48,
+"animated": false
+},
+{
+"name": "fufu",
+"file": "fufu.webp",
+"w": 48,
+"h": 48,
+"animated": false
+},
+{
+"name": "YOO",
+"file": "YOO.webp",
+"w": 48,
+"h": 48,
+"animated": false
+},
+{
+"name": "Ceil4",
+"file": "Ceil4.webp",
+"w": 48,
+"h": 48,
+"animated": false
+},
+{
+"name": "VakiBaka",
+"file": "VakiBaka.webp",
+"w": 48,
+"h": 48,
+"animated": false
+},
+{
+"name": "NecoWara",
+"file": "NecoWara.webp",
+"w": 67,
+"h": 48,
+"animated": true
+},
+{
+"name": "BloodHeat",
+"file": "BloodHeat.webp",
+"w": 49,
+"h": 48,
+"animated": false
+},
+{
+"name": "wide",
+"file": "wide.webp",
+"w": 48,
+"h": 48,
+"animated": false
+},
+{
+"name": "sui",
+"file": "sui.webp",
+"w": 48,
+"h": 48,
+"animated": false
+},
+{
+"name": "LenCat",
+"file": "LenCat.webp",
+"w": 48,
+"h": 48,
+"animated": false
+},
+{
+"name": "anrgy",
+"file": "anrgy.webp",
+"w": 48,
+"h": 48,
+"animated": false
+},
+{
+"name": "roogfeet",
+"file": "roogfeet.webp",
+"w": 63,
+"h": 48,
+"animated": false
+},
+{
+"name": "amberdansen",
+"file": "amberdansen.webp",
+"w": 42,
+"h": 48,
+"animated": true
+},
+{
+"name": "akidab1",
+"file": "akidab1.webp",
+"w": 48,
+"h": 48,
+"animated": false
+},
+{
+"name": "akidab2",
+"file": "akidab2.webp",
+"w": 48,
+"h": 48,
+"animated": false
+},
+{
+"name": "anotherone",
+"file": "anotherone.webp",
+"w": 48,
+"h": 48,
+"animated": false
+},
+{
+"name": "miyakolfg",
+"file": "miyakolfg.webp",
+"w": 53,
+"h": 48,
+"animated": false
+},
+{
+"name": "orb",
+"file": "orb.webp",
+"w": 48,
+"h": 48,
+"animated": false
+},
+{
+"name": "ciel5",
+"file": "ciel5.webp",
+"w": 48,
+"h": 48,
+"animated": false
+},
+{
+"name": "SatsuPunch",
+"file": "SatsuPunch.webp",
+"w": 48,
+"h": 48,
+"animated": false
+},
+{
+"name": "AkihaTipsy1",
+"file": "AkihaTipsy1.webp",
+"w": 38,
+"h": 48,
+"animated": false
+},
+{
+"name": "AkihaTipsy2",
+"file": "AkihaTipsy2.webp",
+"w": 38,
+"h": 48,
+"animated": false
+},
+{
+"name": "riespain",
+"file": "riespain.webp",
+"w": 60,
+"h": 48,
+"animated": false
+},
+{
+"name": "KohaHappy",
+"file": "KohaHappy.webp",
+"w": 51,
+"h": 48,
+"animated": false
+},
+{
+"name": "SatsuCry",
+"file": "SatsuCry.webp",
+"w": 48,
+"h": 48,
+"animated": false
+},
+{
+"name": "Roagus",
+"file": "Roagus.webp",
+"w": 30,
+"h": 48,
+"animated": false
+},
+{
+"name": "KohaCat",
+"file": "KohaCat.webp",
+"w": 48,
+"h": 48,
+"animated": false
+},
+{
+"name": "ArcSmug",
+"file": "ArcSmug.webp",
+"w": 45,
+"h": 48,
+"animated": false
+},
+{
+"name": "jammin",
+"file": "jammin.webp",
+"w": 46,
+"h": 48,
+"animated": true
+},
+{
+"name": "tunes",
+"file": "tunes.webp",
+"w": 46,
+"h": 48,
+"animated": true
+},
+{
+"name": "arcWaow",
+"file": "arcWaow.webp",
+"w": 52,
+"h": 48,
+"animated": false
+},
+{
+"name": "Tatari",
+"file": "Tatari.webp",
+"w": 54,
+"h": 38,
+"animated": false
+},
+{
+"name": "OuiLen",
+"file": "OuiLen.webp",
+"w": 47,
+"h": 48,
+"animated": false
+},
+{
+"name": "sacchinheart",
+"file": "sacchinheart.webp",
+"w": 44,
+"h": 48,
+"animated": false
+},
+{
+"name": "sacchin",
+"file": "sacchin.webp",
+"w": 52,
+"h": 44,
+"animated": false
+},
+{
+"name": "Wruh",
+"file": "Wruh.webp",
+"w": 53,
+"h": 48,
+"animated": false
+},
+{
+"name": "puppetmod",
+"file": "puppetmod.webp",
+"w": 48,
+"h": 48,
+"animated": true
+},
+{
+"name": "satsucope",
+"file": "satsucope.webp",
+"w": 48,
+"h": 48,
+"animated": false
+},
+{
+"name": "Kohathumbsup",
+"file": "Kohathumbsup.webp",
+"w": 52,
+"h": 48,
+"animated": false
+},
+{
+"name": "RemakeKoha",
+"file": "RemakeKoha.webp",
+"w": 52,
+"h": 48,
+"animated": false
+},
+{
+"name": "Comfysui",
+"file": "Comfysui.webp",
+"w": 48,
+"h": 48,
+"animated": false
+},
+{
+"name": "noel",
+"file": "noel.webp",
+"w": 48,
+"h": 48,
+"animated": false
+},
+{
+"name": "Miyaconcern",
+"file": "Miyaconcern.webp",
+"w": 56,
+"h": 48,
+"animated": false
+},
+{
+"name": "saber",
+"file": "saber.webp",
+"w": 53,
+"h": 48,
+"animated": false
+},
+{
+"name": "luminew",
+"file": "luminew.webp",
+"w": 48,
+"h": 48,
+"animated": false
+},
+{
+"name": "interesting",
+"file": "interesting.webp",
+"w": 39,
+"h": 39,
+"animated": false
+},
+{
+"name": "kohaDed",
+"file": "kohaDed.webp",
+"w": 48,
+"h": 48,
+"animated": false
+},
+{
+"name": "kohaEvil",
+"file": "kohaEvil.webp",
+"w": 48,
+"h": 48,
+"animated": false
+},
+{
+"name": "kohaScheme",
+"file": "kohaScheme.webp",
+"w": 48,
+"h": 48,
+"animated": false
+},
+{
+"name": "kohaNo",
+"file": "kohaNo.webp",
+"w": 48,
+"h": 48,
+"animated": false
+},
+{
+"name": "noel2",
+"file": "noel2.webp",
+"w": 40,
+"h": 48,
+"animated": false
+},
+{
+"name": "vlol",
+"file": "vlol.webp",
+"w": 51,
+"h": 48,
+"animated": false
+},
+{
+"name": "vlov",
+"file": "vlov.webp",
+"w": 49,
+"h": 48,
+"animated": false
+},
+{
+"name": "bruh",
+"file": "bruh.webp",
+"w": 48,
+"h": 48,
+"animated": false
+},
+{
+"name": "EEK",
+"file": "EEK.webp",
+"w": 48,
+"h": 48,
+"animated": false
+},
+{
+"name": "fvslide1",
+"file": "fvslide1.webp",
+"w": 48,
+"h": 48,
+"animated": false
+},
+{
+"name": "fvslide2",
+"file": "fvslide2.webp",
+"w": 48,
+"h": 48,
+"animated": false
+},
+{
+"name": "sacchinwave",
+"file": "sacchinwave.webp",
+"w": 45,
+"h": 48,
+"animated": false
+},
+{
+"name": "koha3",
+"file": "koha3.webp",
+"w": 55,
+"h": 48,
+"animated": false
+},
+{
+"name": "sacchinDevious",
+"file": "sacchinDevious.webp",
+"w": 48,
+"h": 48,
+"animated": false
+},
+{
+"name": "BAKA",
+"file": "BAKA.webp",
+"w": 54,
+"h": 47,
+"animated": false
+},
+{
+"name": "kohaHow",
+"file": "kohaHow.webp",
+"w": 48,
+"h": 48,
+"animated": false
+},
+{
+"name": "smugkohaHD",
+"file": "smugkohaHD.webp",
+"w": 48,
+"h": 48,
+"animated": false
+},
+{
+"name": "vnoelDEATH",
+"file": "vnoelDEATH.webp",
+"w": 48,
+"h": 48,
+"animated": false
+},
+{
+"name": "aokoPout",
+"file": "aokoPout.webp",
+"w": 48,
+"h": 48,
+"animated": false
+},
+{
+"name": "vlovWhy",
+"file": "vlovWhy.webp",
+"w": 48,
+"h": 48,
+"animated": false
+},
+{
+"name": "vlovDespair",
+"file": "vlovDespair.webp",
+"w": 48,
+"h": 48,
+"animated": false
+},
+{
+"name": "bottom1",
+"file": "bottom1.webp",
+"w": 48,
+"h": 48,
+"animated": false
+},
+{
+"name": "neroMoyai",
+"file": "neroMoyai.webp",
+"w": 48,
+"h": 48,
+"animated": false
+},
+{
+"name": "kohaBoom",
+"file": "kohaBoom.webp",
+"w": 48,
+"h": 48,
+"animated": false
+},
+{
+"name": "cielsensei",
+"file": "cielsensei.webp",
+"w": 48,
+"h": 48,
+"animated": false
+},
+{
+"name": "kohaLove",
+"file": "kohaLove.webp",
+"w": 48,
+"h": 48,
+"animated": false
+},
+{
+"name": "kohaCrabs",
+"file": "kohaCrabs.webp",
+"w": 48,
+"h": 48,
+"animated": false
+},
+{
+"name": "hbomb",
+"file": "hbomb.webp",
+"w": 23,
+"h": 23,
+"animated": false
+},
+{
+"name": "clash",
+"file": "clash.webp",
+"w": 61,
+"h": 48,
+"animated": false
+},
+{
+"name": "kohaTroll",
+"file": "kohaTroll.webp",
+"w": 48,
+"h": 48,
+"animated": false
+},
+{
+"name": "kohaNormal",
+"file": "kohaNormal.webp",
+"w": 46,
+"h": 48,
+"animated": false
+},
+{
+"name": "kohaPleased",
+"file": "kohaPleased.webp",
+"w": 48,
+"h": 48,
+"animated": false
+},
+{
+"name": "acatisfinetoo",
+"file": "acatisfinetoo.webp",
+"w": 48,
+"h": 48,
+"animated": false
+},
+{
+"name": "neutral",
+"file": "neutral.webp",
+"w": 48,
+"h": 48,
+"animated": false
+},
+{
+"name": "aoko2",
+"file": "aoko2.webp",
+"w": 48,
+"h": 48,
+"animated": false
+},
+{
+"name": "warcHappy",
+"file": "warcHappy.webp",
+"w": 48,
+"h": 48,
+"animated": false
+},
+{
+"name": "miyakoDance",
+"file": "miyakoDance.webp",
+"w": 48,
+"h": 48,
+"animated": true
+},
+{
+"name": "miyakoLFG",
+"file": "miyakoLFG_2.webp",
+"w": 48,
+"h": 48,
+"animated": true
+},
+{
+"name": "riesGasm",
+"file": "riesGasm.webp",
+"w": 48,
+"h": 48,
+"animated": false
+},
+{
+"name": "vakiha2",
+"file": "vakiha2.webp",
+"w": 47,
+"h": 47,
+"animated": false
+},
+{
+"name": "wlenSmug",
+"file": "wlenSmug.webp",
+"w": 48,
+"h": 48,
+"animated": false
+},
+{
+"name": "himeSmug",
+"file": "himeSmug.webp",
+"w": 48,
+"h": 48,
+"animated": false
+},
+{
+"name": "fkouma",
+"file": "fkouma.webp",
+"w": 48,
+"h": 48,
+"animated": false
+},
+{
+"name": "vsionConfused",
+"file": "vsionConfused.webp",
+"w": 48,
+"h": 48,
+"animated": false
+},
+{
+"name": "roaSokoDarou",
+"file": "roaSokoDarou.webp",
+"w": 48,
+"h": 48,
+"animated": false
+},
+{
+"name": "froaJBEC",
+"file": "froaJBEC.webp",
+"w": 48,
+"h": 48,
+"animated": false
+},
+{
+"name": "maidsHighFive",
+"file": "maidsHighFive.webp",
+"w": 48,
+"h": 48,
+"animated": false
+},
+{
+"name": "pcielDespair",
+"file": "pcielDespair.webp",
+"w": 73,
+"h": 48,
+"animated": false
+},
+{
+"name": "vakiLooping",
+"file": "vakiLooping.webp",
+"w": 48,
+"h": 48,
+"animated": false
+},
+{
+"name": "fseiRing",
+"file": "fseiRing.webp",
+"w": 48,
+"h": 48,
+"animated": false
+},
+{
+"name": "nacCry",
+"file": "nacCry.webp",
+"w": 48,
+"h": 48,
+"animated": false
+},
+{
+"name": "nackDash",
+"file": "nackDash.webp",
+"w": 47,
+"h": 48,
+"animated": false
+},
+{
+"name": "mechRPG2",
+"file": "mechRPG2.webp",
+"w": 57,
+"h": 48,
+"animated": false
+},
+{
+"name": "mechRPG1",
+"file": "mechRPG1.webp",
+"w": 57,
+"h": 48,
+"animated": false
+},
+{
+"name": "vakiJC",
+"file": "vakiJC.webp",
+"w": 50,
+"h": 48,
+"animated": false
+},
+{
+"name": "maids",
+"file": "maids.webp",
+"w": 48,
+"h": 48,
+"animated": false
+},
+{
+"name": "aokoSmile",
+"file": "aokoSmile.webp",
+"w": 48,
+"h": 48,
+"animated": false
+},
+{
+"name": "neroEvil",
+"file": "neroEvil.webp",
+"w": 48,
+"h": 48,
+"animated": false
+},
+{
+"name": "sionMad",
+"file": "sionMad.webp",
+"w": 48,
+"h": 48,
+"animated": false
+},
+{
+"name": "ushiSad",
+"file": "ushiSad.webp",
+"w": 48,
+"h": 48,
+"animated": false
+},
+{
+"name": "necoGun",
+"file": "necoGun.webp",
+"w": 57,
+"h": 48,
+"animated": false
+},
+{
+"name": "neroFair",
+"file": "neroFair.webp",
+"w": 48,
+"h": 48,
+"animated": false
+},
+{
+"name": "himeItsOver",
+"file": "himeItsOver.webp",
+"w": 48,
+"h": 48,
+"animated": false
+},
+{
+"name": "himeGeySir",
+"file": "himeGeySir.webp",
+"w": 45,
+"h": 48,
+"animated": false
+},
+{
+"name": "himeGGS",
+"file": "himeGGS.webp",
+"w": 59,
+"h": 48,
+"animated": false
+},
+{
+"name": "roaHappy",
+"file": "roaHappy.webp",
+"w": 48,
+"h": 48,
+"animated": false
+},
+{
+"name": "roaCrazy",
+"file": "roaCrazy.webp",
+"w": 48,
+"h": 48,
+"animated": false
+},
+{
+"name": "riesHappy",
+"file": "riesHappy.webp",
+"w": 49,
+"h": 48,
+"animated": false
+},
+{
+"name": "vsionMad",
+"file": "vsionMad.webp",
+"w": 49,
+"h": 48,
+"animated": false
+},
+{
+"name": "warcLaugh",
+"file": "warcLaugh.webp",
+"w": 48,
+"h": 48,
+"animated": false
+},
+{
+"name": "wlenHappy",
+"file": "wlenHappy.webp",
+"w": 48,
+"h": 48,
+"animated": false
+},
+{
+"name": "neroWink",
+"file": "neroWink.webp",
+"w": 50,
+"h": 48,
+"animated": false
+},
+{
+"name": "miyakoReading2",
+"file": "miyakoReading2.webp",
+"w": 48,
+"h": 48,
+"animated": false
+},
+{
+"name": "miyakoReading1",
+"file": "miyakoReading1.webp",
+"w": 48,
+"h": 48,
+"animated": false
+},
+{
+"name": "nacWtf",
+"file": "nacWtf.webp",
+"w": 48,
+"h": 48,
+"animated": false
+},
+{
+"name": "koumaKishima",
+"file": "koumaKishima.webp",
+"w": 48,
+"h": 48,
+"animated": false
+},
+{
+"name": "sionThink",
+"file": "sionThink.webp",
+"w": 48,
+"h": 48,
+"animated": false
+},
+{
+"name": "kohaCrabsWlen",
+"file": "kohaCrabsWlen.webp",
+"w": 42,
+"h": 44,
+"animated": false
+},
+{
+"name": "IDEPTG",
+"file": "IDEPTG.webp",
+"w": 48,
+"h": 48,
+"animated": false
+},
+{
+"name": "naruhodoko",
+"file": "naruhodoko.webp",
+"w": 48,
+"h": 48,
+"animated": false
+},
+{
+"name": "AokoDrip",
+"file": "AokoDrip.webp",
+"w": 48,
+"h": 48,
+"animated": false
+},
+{
+"name": "aokopog",
+"file": "aokopog.webp",
+"w": 48,
+"h": 48,
+"animated": false
+},
+{
+"name": "AokoPanic",
+"file": "AokoPanic.webp",
+"w": 48,
+"h": 48,
+"animated": true
+},
+{
+"name": "wlenrun2",
+"file": "wlenrun2.webp",
+"w": 48,
+"h": 48,
+"animated": true
+},
+{
+"name": "lenPls",
+"file": "lenPls.webp",
+"w": 48,
+"h": 48,
+"animated": true
+},
+{
+"name": "waraPensive",
+"file": "waraPensive.webp",
+"w": 37,
+"h": 48,
+"animated": false
+},
+{
+"name": "yumiduker",
+"file": "yumiduker.webp",
+"w": 49,
+"h": 48,
+"animated": false
+},
+{
+"name": "elesiaSmug",
+"file": "elesiaSmug.webp",
+"w": 48,
+"h": 48,
+"animated": false
+},
+{
+"name": "soyhaku",
+"file": "soyhaku.webp",
+"w": 48,
+"h": 48,
+"animated": false
+},
+{
+"name": "waracap",
+"file": "waracap.webp",
+"w": 48,
+"h": 48,
+"animated": false
+},
+{
+"name": "oaagh",
+"file": "oaagh.webp",
+"w": 48,
+"h": 48,
+"animated": false
+},
+{
+"name": "walla",
+"file": "walla.webp",
+"w": 48,
+"h": 48,
+"animated": false
+},
+{
+"name": "waramech",
+"file": "waramech.webp",
+"w": 49,
+"h": 48,
+"animated": false
+},
+{
+"name": "random",
+"file": "random.webp",
+"w": 34,
+"h": 34,
+"animated": false
+},
+{
+"name": "gs",
+"file": "gs.webp",
+"w": 48,
+"h": 48,
+"animated": false
+},
+{
+"name": "warcJ2C",
+"file": "warcJ2C.webp",
+"w": 45,
+"h": 48,
+"animated": true
+},
+{
+"name": "transpoland",
+"file": "transpoland.webp",
+"w": 77,
+"h": 48,
+"animated": false
+},
+{
+"name": "jokernac",
+"file": "jokernac.webp",
+"w": 49,
+"h": 48,
+"animated": false
+},
+{
+"name": "BANLENS",
+"file": "BANLENS.webp",
+"w": 48,
+"h": 48,
+"animated": false
+},
+{
+"name": "whimsy",
+"file": "whimsy.webp",
+"w": 48,
+"h": 48,
+"animated": false
+},
+{
+"name": "nowhimsy",
+"file": "nowhimsy.webp",
+"w": 48,
+"h": 48,
+"animated": false
+},
+{
+"name": "vsionBlood",
+"file": "vsionBlood.webp",
+"w": 48,
+"h": 48,
+"animated": false
+},
+{
+"name": "pleasebepatient",
+"file": "pleasebepatient.webp",
+"w": 48,
+"h": 48,
+"animated": false
+},
+{
+"name": "lenShake",
+"file": "lenShake.webp",
+"w": 48,
+"h": 48,
+"animated": true
+},
+{
+"name": "ExtraWhimsy",
+"file": "ExtraWhimsy.webp",
+"w": 48,
+"h": 48,
+"animated": false
+},
+{
+"name": "necomech",
+"file": "necomech.webp",
+"w": 48,
+"h": 48,
+"animated": false
+}
+]
+}
