@@ -191,7 +191,8 @@
   #chatsec details[open] summary::after { content: 'close ✕'; color: #fff; background: var(--accent); border-color: var(--accent); }
   #chatsec details .pdone { justify-content: flex-end; margin-top: 6px; }
   #chatsec details .pacct { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; padding-bottom: 6px; margin-bottom: 4px; border-bottom: 1px solid var(--line); }
-  #chatsec details .pacct[hidden] { display: none; }
+  #chatsec details .pacct[hidden], #chatsec details .postyle[hidden] { display: none; }
+  #chatsec details .postylebtn { border: 1px solid var(--line); border-radius: 999px; padding: 3px 10px; background: linear-gradient(90deg, #ff4fd822, #7a8cff22, #40e0ff22); }
   #chatsec details .pacct .pwho { font-size: 11px; color: var(--muted); flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   #chatsec details .pacct .pbtns { display: flex; gap: 6px; flex: none; }
   #chatsec details .pdonebtn { background: var(--accent); color: #fff; padding: 4px 16px; border-radius: 999px; }
@@ -698,6 +699,7 @@
       <div class="prow">nick <input id="chatnick" type="text" maxlength="24" spellcheck="false"></div>
       <div class="prow"><label><input id="chattags" type="checkbox"> show #tags (Name#1234)</label></div>
       <div class="prow">colour <span class="sws"></span><button type="button" id="chatcolor" class="cpk" title="pick any colour for your name" aria-label="your colour: pick any colour"><i class="cpk-sw"></i>custom…</button></div>
+      <div class="prow postyle" hidden><button type="button" class="txt postylebtn" title="your name's glow and animated gradient, and the ~wave~ text, as every viewer sees them (the site owner only)">🖌 glow · gradient · ~wave~</button></div>
       <div class="prow phint" hidden>pick your moon and character (none set yet)</div>
       <div class="prow">moon <span class="moons"></span></div>
       <div class="cgrid"></div>
@@ -876,6 +878,7 @@
     $('.cspread').hidden = !(op && ownerMe());
     const pos = $('.cseg[data-k="pos"]'); if (pos) pos.hidden = !op;
     const ob = $('.costyle'); if (ob) ob.hidden = !ownerMe();
+    const pb = $('.postyle'); if (pb) pb.hidden = !ownerMe();  // (also in the profile, by the name colour: where it was looked for)
   };
   // ---- the site owner's style ----
   // One account, the bot's SITE_OWNER (tools/chat/meltybot.mjs: the owner named "Armontina-<tag>"; the name lives there
@@ -1241,7 +1244,8 @@
         const jw = document.createElement('span'); jw.className = 'jw'; jw.textContent = `· ${who.slice(0, 2).join(', ')}${who.length > 2 ? ` +${who.length - 2}` : ''}`;
         jw.title = who.join(', '); j.append(jw);
       }
-      if (canSpeak() && l.text.length <= MAXLEN) {
+      // (join in once: not when this viewer already sent one in this combo, user 2026-11-01)
+      if (canSpeak() && l.text.length <= MAXLEN && !all.some(x => x.self)) {
         j.classList.add('join'); j.title = 'join in: send it too'; j.setAttribute('role', 'button'); j.tabIndex = 0;
         const go = e => { e.stopPropagation(); if (c && key(c.name) !== key(shown)) return; say(l.text.trim()); };
         j.onclick = go; j.onkeydown = e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); go(e); } };
@@ -1974,7 +1978,7 @@
   const REACT_QUICK = ['👍', '😂', '🔥', '❤️', '😮', '😢', '👏'];
   const REACT_OK = e => typeof e === 'string' && e.length <= 24 && !/[\s\x00-\x1f\x7f;\\]/.test(e) && !/[A-Za-z0-9]/.test(e);
   const myWho = () => key(irc.account || irc.nick);
-  const REACT_STACK = 9;  // (the most of one emoji one user stacks on a line)
+  const REACT_STACK = 1;  // (one of each emoji per person on a line: a click adds yours, a second takes it back; no stacking, user 2026-11-01)
   const canSpeak = () => !!irc.account && irc.registered && !formEl.hidden;
   function reactApply(c, msgid, e, who, name, add) {
     let r = c.reacts.get(msgid);
@@ -1996,19 +2000,15 @@
     const r = c.reacts.get(msgid);
     if (!r || !r.size) { if (box) box.remove(); return; }
     if (!box) { box = document.createElement('span'); box.className = 'creacts'; body.append(box); }
-    // (on your own line, a click on your chip stacks one more (2x, 3x ...); right-click / long-press takes one back.
-    // On others' lines a click toggles yours as before)
-    const ln = c.lines.find(x => x.msgid === msgid), own = !!(ln && ln.self);
+    // (a click toggles yours: one per person)
     box.replaceChildren(...[...r].map(([e, s]) => {
       const b = document.createElement('button'), me = s.get(myWho()), mine = !!me, es = document.createElement('span');
       b.type = 'button'; b.className = mine ? 'mine' : ''; es.className = 'e'; es.textContent = e;
       b.append(es, String([...s.values()].reduce((a, w) => a + w.n, 0)));
       const who = [...s.values()].map(w => w.n > 1 ? `${disp(w.name)} ×${w.n}` : disp(w.name));
-      const stack = own && mine && me.n < REACT_STACK;
-      b.title = `${who.slice(0, 8).join(', ')}${who.length > 8 ? ` and ${who.length - 8} more` : ''} reacted with ${e}${canSpeak() ? (stack ? ' (click to add one more, right-click or long-press to take one back)' : mine ? ' (click to take yours back)' : ' (click to add yours)') : ''}`;
+      b.title = `${who.slice(0, 8).join(', ')}${who.length > 8 ? ` and ${who.length - 8} more` : ''} reacted with ${e}${canSpeak() ? (mine ? ' (click to take yours back)' : ' (click to add yours)') : ''}`;
       b.setAttribute('aria-pressed', String(mine)); b.disabled = !canSpeak();
-      b.onclick = ev => { ev.stopPropagation(); if (own && mine) { if (stack) react(c, msgid, e, true); } else react(c, msgid, e, !mine); };
-      if (own && mine) b.oncontextmenu = ev => { ev.preventDefault(); ev.stopPropagation(); react(c, msgid, e, false); };
+      b.onclick = ev => { ev.stopPropagation(); react(c, msgid, e, !mine); };
       return b;
     }));
   }
@@ -2290,6 +2290,7 @@
     popPlace(oPan, 560);
   }
   oBtn.onclick = () => oOpen(true);
+  $('.postylebtn').onclick = e => { e.stopPropagation(); oOpen(true); };
   oPan.querySelector('.oclose').onclick = () => oOpen(false);
   oPan.querySelector('.ox').onclick = () => oOpen(false);
   oPan.querySelector('.osave').onclick = () => {
