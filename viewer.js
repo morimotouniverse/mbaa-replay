@@ -1986,7 +1986,7 @@ try { radioStageFollow = localStorage.getItem('mbaaRadioStage') !== '0'; } catch
     if (ui.paused && session && session.tl) requestSeek(curFrame());  // (paused: the frame drawn again, with its stage)
   };
 })();
-async function radioSet(f) {
+async function radioSet(f, stageOnly = 0) {
   radioPick = f;
   radioLiveId = f && session && session.liveSrc ? session.liveSrc.id : null;
   const t = radioTrack(f);
@@ -1995,12 +1995,73 @@ async function radioSet(f) {
   if (t) await fetchAll(man, t.fetch, '', true);
   if (radioPick !== f) return;  // (picked again meanwhile)
   radio = t ? { path: `/game/${t.key}`, loopPos: t.loopPos, file: f, title: t.title, tile: t.tile, tileUrl: t.tileUrl, stageName: t.stageName,
-                game: t.game, dat: t.dat && cache.has(t.dat) ? t.dat : '', lights: t.lights, stages: t.stages || null } : null;
+                game: t.game, dat: t.dat && cache.has(t.dat) ? t.dat : '', lights: t.lights,
+                stages: stageOnly ? [stageOnly] : t.stages || null } : null;  // (a chat ^stage chip: that stage, not the track's first)
   if (session && session.radioChanged) session.radioChanged();
   stageKey = '';
   xfStagePending = true;
   radioStageSync(session);
   if (ui.paused && session && session.tl) requestSeek(curFrame());  // (paused: the frame drawn again, with its stage)
+}
+// Chat mentions (chat.js: "!song" and "^stage" chips, tap to apply on your own picture only): the music list (musicOpts)
+// and the radio's stages (MBAACC's, named from their plates; the older games' stage tracks), and the panel's own picks.
+const STAGE_NAMES = { 1: 'Artificial Eden', 2: 'Classic home.Evening party', 3: 'Classic home.Invade', 4: 'Shade Town Mad Parade',
+  5: 'Tohno’s mansion.Main gate', 6: 'Night of Walpurgis', 7: 'sabbath', 8: 'Midnight Park', 9: 'Magical Kohaku Prison', 10: 'Back alley',
+  12: 'School rush!', 13: 'Iron Maiden', 16: 'Hologram Summer', 17: 'Starlight crossing', 18: 'Witch on the Holy night',
+  19: 'Through the Looking-Glass', 20: 'Classic', 21: 'Temple the Seventh Heaven', 22: 'Doctor Kohaku Garage', 23: 'Great Cats Village',
+  24: 'Tohno’s mansion.Central garden', 25: 'Huge library', 26: 'Forest of king Cruel', 27: 'Battle field', 28: 'narvous stray vanguard',
+  29: 'red moon scherzo', 30: 'lost world’s Biography', 31: 'NECO no you may.', 32: 'Loser Cats Company', 34: 'phantom of the opera',
+  35: 'carry back,old village', 36: 'Temple the Seventh Heaven', 37: 'stranger', 38: 'in the park', 39: 'on the park', 40: 'spiral uroboros',
+  41: 'cherry blossom', 42: 'desert town', 43: 'Coating earth,Black Land Texture', 44: 'Emerald Table,Melty Blood Texture',
+  45: 'Sleeping Forest', 46: 'Farewell town', 47: 'fateful show down', 48: 'the crossing crossing', 49: 'Magical Kohaku Prison',
+  50: 'No Control Red', 51: 'NECO Burst Camp', 52: 'stranger', 53: 'Arima’s Chinese kempo home', 54: 'sayonara Dear Friend',
+  55: '...and nothing heart', 56: 'ONE LIFE,ONE DEATE', 57: 'G TABLE', 58: 'G TABLE', 59: 'good morning,anima mundi' };
+let mentCat = null;
+function mentionCatalog() {
+  const v = `${!!stagePanel}/${!!oldRadio}`;
+  if (mentCat && mentCat.v === v) return mentCat;
+  const songs = [], stages = [], seen = new Set();
+  if (stagePanel) {
+    for (const [f, x] of Object.entries(stagePanel.tracks)) if (x.loop) songs.push({ f, title: x.title, game: 'MBAACC' });
+    for (const [id, st] of Object.entries(stagePanel.stages)) {
+      const name = STAGE_NAMES[id];
+      if (!name || !st.track || seen.has(name)) continue;  // (a stage plays its track's stage pick; a repeated plate: the first)
+      seen.add(name);
+      stages.push({ key: String(id), name, game: 'MBAACC', f: st.track, thumb: st.art.includes('view') ? `web/stage/view_${String(id).padStart(2, '0')}.png` : '' });
+    }
+  }
+  if (oldRadio) for (const g of oldRadio.games) {
+    const game = (RADIO_GAMES.find(([id]) => id === g.id) || [])[1] || g.id;
+    for (const t of g.tracks) {
+      songs.push({ f: `${g.id}:${t.id}`, title: t.title, game });
+      if (t.dat && t.stageName) stages.push({ key: `${g.id}:${t.id}`, name: t.stageName, game, f: `${g.id}:${t.id}`, thumb: t.tileUrl || t.tile || '' });
+    }
+  }
+  return (mentCat = { v, songs, stages });
+}
+const mentThumbs = new Map();  // path -> Promise<url>
+function mentionThumb(p) {
+  if (!p) return Promise.resolve('');
+  if (/^https?:/.test(p)) return Promise.resolve(p);
+  if (!mentThumbs.has(p)) mentThumbs.set(p, fetchAll(man, [p], '', true).then(() => {
+    const d = cache.get(p);
+    return d ? URL.createObjectURL(new Blob([d], { type: /\.jpg$/.test(p) ? 'image/jpeg' : 'image/png' })) : '';
+  }).catch(() => ''));
+  return mentThumbs.get(p);
+}
+// the radio panel opened at a track's tile (a chip tapped with no match playing)
+async function radioPanelAt(f) {
+  const grid = document.getElementById('radiogrid');
+  if (!grid || !stagePanel) return;
+  if (grid.hidden) document.getElementById('radiotog').onclick();
+  await radioShowGame(f.includes(':') ? f.split(':')[0] : 'aacc');
+  const b = [...grid.querySelectorAll('.tile')].find(x => x.dataset.f === f);
+  if (b) { b.scrollIntoView({ block: 'nearest', behavior: 'smooth' }); b.classList.add('flash'); setTimeout(() => b.classList.remove('flash'), 1600); b.focus({ preventScroll: true }); }
+}
+function mentionApply(kind, it) {
+  if (!session) return radioPanelAt(it.f);
+  if (kind === 'song') return musicSet(it.f);
+  return radioSet(it.f, it.key.includes(':') ? 0 : +it.key);
 }
 // The stage: the pick's stage file into MEMFS (sharing the fetched buffer; a stage file MBAACC also ships is bg/bgNN.dat,
 // whose MEMFS copy may be the 1-byte probe placeholder) and sent to the game, which swaps stages between frames. Sent
@@ -3230,7 +3291,11 @@ window.mbaaChatApi = { art: playersArt, iconCell, chara: CHARA, liveId: () => se
   // chat's clickable timestamps and link cards: the picture's frame and the last seekable one (null: no timeline yet),
   // a seek (a live match goes to watching back, as any seek), the live list (the feed's /live/list)
   frame: () => session && session.tl ? curFrame() : null, seekMax: () => session && session.tl ? tlMax(session.tl) : null,
-  seek: f => requestSeek(f), lives: () => liveList() };
+  seek: f => requestSeek(f), lives: () => liveList(),
+  // chat's !song / ^stage mentions: the catalog (v changes as the lists load), a thumbnail's url, a tap's pick, the older
+  // games' lists loaded (their names join the catalog)
+  mentions: () => mentionCatalog(), mentionThumb, mentionApply: (kind, it) => mentionApply(kind, it).catch(e => console.warn('chat mention:', e)),
+  mentionsMore: () => radioOldLoad().catch(() => null) };
 if (document.querySelector('meta[name="mbaa-chat"]') || (/^(127\.0\.0\.1|localhost)$/.test(location.hostname) && Q.has('chat'))) {
   document.body.classList.add('haschat');  // (the chat layout from the start: fitStage)
   const el = document.createElement('script');

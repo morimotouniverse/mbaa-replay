@@ -124,6 +124,80 @@
   }
   // text nodes with the known :name:s as images
   const emoteNodes = t => emoteSplit(t).map(x => typeof x === 'string' ? document.createTextNode(x) : emoteImg(x.emote));
+  // ---- !song / ^stage mentions (user 2026-11-02): "!sunset-avenue" a song of the viewer's music list, "^g-table" a radio
+  // stage. A sent one is a chip; a tap puts it on the tapper's own picture only (viewer.js mentionApply: the radio panel's
+  // own picks). Slugs: ASCII, from the names (a clash: the game's name after it). Unknown slugs stay text.
+  const mentSlug = t => String(t).normalize('NFKD').replace(/[̀-ͯ]/g, '').replace(/['‘’`]/g, '').toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 48);
+  let mentC = null;
+  function mentCat() {
+    const A = window.mbaaChatApi, c = A && A.mentions ? A.mentions() : null;
+    if (!c) return null;
+    if (mentC && mentC.v === c.v) return mentC;
+    const mk = (list, nameOf) => {
+      const by = new Map();
+      for (const it of list) {
+        const base = mentSlug(nameOf(it));
+        if (!base) continue;
+        let sl = base, n = 2;
+        if (by.has(sl)) sl = `${base}-${mentSlug(it.game)}`;
+        while (by.has(sl)) sl = `${base}-${n++}`;
+        by.set(sl, { ...it, slug: sl, name: nameOf(it) });
+      }
+      return by;
+    };
+    return (mentC = { v: c.v, song: mk(c.songs, x => x.title), stage: mk(c.stages, x => x.name) });
+  }
+  // (a "!" or "^" after a space, an opening bracket or the start; not inside a word, a URL, :emote: or ~wave~)
+  const MENT_RE = /(^|[\s(\[{"'])([!^])([a-z0-9]+(?:-[a-z0-9]+)*)(?![\p{L}\p{N}_-])/giu;
+  function mentSplit(t) {
+    if (t.indexOf('!') < 0 && t.indexOf('^') < 0) return [t];
+    const cat = mentCat();
+    if (!cat) return [t];
+    const out = [];
+    let i = 0;
+    for (const m of t.matchAll(MENT_RE)) {
+      const kind = m[2] === '!' ? 'song' : 'stage', it = cat[kind].get(m[3].toLowerCase());
+      if (!it) continue;
+      const at = m.index + m[1].length;
+      if (at > i) out.push(t.slice(i, at));
+      out.push({ kind, it, code: m[2] + m[3] }); i = at + 1 + m[3].length;
+    }
+    if (i < t.length) out.push(t.slice(i));
+    return out;
+  }
+  const mentLabel = x => x.kind === 'song' ? `♪ ${x.it.name}` : x.it.name;
+  // the picture's (and a plain copy's) text: chips as their names
+  const mentPlain = t => mentSplit(t).map(x => typeof x === 'string' ? x : mentLabel(x)).join('');
+  function mentChip(x) {
+    const s = document.createElement('span');
+    s.className = `cmn ${x.kind}`; s.dataset.k = x.kind; s.dataset.s = x.it.slug; s.tabIndex = 0; s.setAttribute('role', 'button');
+    s.title = `${x.kind}: ${x.it.name}${x.it.game ? ` (${x.it.game})` : ''}, tap to ${x.kind === 'song' ? 'play it' : 'see it'} on your picture`;
+    if (x.kind === 'stage' && x.it.thumb) {
+      const im = document.createElement('img'); im.alt = ''; s.append(im);
+      const A = window.mbaaChatApi;
+      if (A && A.mentionThumb) A.mentionThumb(x.it.thumb).then(u => { if (u) im.src = u; });
+    }
+    s.append(mentLabel(x));
+    return s;
+  }
+  // a text's chips, and its other pieces as emotes (log lines) or plain text (reply quotes)
+  const mentionNodes = (t, plain) => mentSplit(t).flatMap(x => typeof x !== 'string' ? [mentChip(x)] : plain ? [document.createTextNode(x)] : emoteNodes(x));
+  function mentTap(el) {
+    const cat = mentCat(), it = cat && cat[el.dataset.k] && cat[el.dataset.k].get(el.dataset.s), A = window.mbaaChatApi;
+    if (it && A && A.mentionApply) A.mentionApply(el.dataset.k, it);
+  }
+  // (the lists load after the chat: lines drawn before as text are drawn again once their names are known)
+  let mentV = '';
+  setInterval(() => {
+    const A = window.mbaaChatApi, c = A && A.mentions ? A.mentions() : null;
+    if (!c || c.v === mentV) return;
+    mentV = c.v;
+    try { if (chan(shown).lines.some(l => /(^|[\s(\[{"'])[!^][a-z0-9]/i.test(l.text || ''))) render(); } catch (e) {}
+  }, 1000);
+  // (capture: before the line's own click (its actions on a touch screen, a reply quote's jump))
+  document.addEventListener('click', e => { const el = e.target.closest && e.target.closest('#chatsec .cmn'); if (!el) return; e.preventDefault(); e.stopPropagation(); mentTap(el); }, true);
+  document.addEventListener('keydown', e => { if ((e.key === 'Enter' || e.key === ' ') && e.target.classList && e.target.classList.contains('cmn')) { e.preventDefault(); mentTap(e.target); } });
   // a line of emotes only (and Unicode emoji, spaces): its emotes show big (Discord's jumbo)
   const emoteOnly = t => { const p = emoteSplit(t); return p.some(x => typeof x !== 'string') && p.every(x => typeof x !== 'string' || !x.trim() || graphemes(x).every(g => /^\s$/.test(g) || isEmo(g))); };
   // the picture's copy of an emote (the renderer's tile is drawn from it once loaded: emoteReady)
@@ -729,6 +803,17 @@
   .crpop button img.cemote, #chatsec .mpop .me img.cemote { height: 22px; width: auto; vertical-align: middle; }
   #chatsec .etabs button img.cemote { height: 20px; width: auto; vertical-align: middle; margin: 0; }
   #chatsec .epop .egrid button img.cemote { height: 26px; width: auto; max-width: 100%; vertical-align: middle; object-fit: contain; }
+  /* !song / ^stage mentions (a chip: tap to put that song or stage on your own picture) */
+  #chatsec .cmn { display: inline-flex; align-items: center; gap: 4px; max-width: 100%; width: max-content; flex: none; align-self: flex-start; justify-self: start; padding: 0 7px; margin: 0 1px; border-radius: 9px;
+    background: #8ab4ff26; color: var(--fg); cursor: pointer; line-height: 1.45; vertical-align: baseline; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  #chatsec .cmn:hover { background: #8ab4ff40; }
+  #chatsec .cmn.stage { background: #e0b04a26; }
+  #chatsec .cmn.stage:hover { background: #e0b04a40; }
+  #chatsec .cmn img { height: 1.15em; width: auto; border-radius: 2px; }
+  #chatsec .cmn img:not([src]) { display: none; }
+  #chatsec .mpop .mi .mth { width: 36px; height: 22px; object-fit: cover; border-radius: 3px; flex: none; }
+  #chatsec .mpop .mi .mnote { font-size: 15px; width: 22px; text-align: center; flex: none; }
+  #radiogrid .tile.flash { border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent); }
   /* Discord-style formatting in a line (render only; the IRC text stays plain) */
   #chatlog .cmd-h { font-weight: 700; color: var(--fg, #fff); line-height: 1.25; }
   #chatlog .cmd-h1 { font-size: 15px; }
@@ -843,7 +928,7 @@
     <div class="cauth" hidden></div>
     <div class="creply" hidden><span></span><button type="button" title="cancel the reply" aria-label="cancel the reply">✕</button></div>
     <form class="cform" autocomplete="off"><input id="chatcmd" type="text" maxlength="60" spellcheck="false" placeholder="commands"
-      title="Niconico commands for your comments on the picture, e.g. ue / shita (top / bottom, 3 s), big / small, a colour (red, pink, orange, yellow, green, cyan, blue, purple, white, black, white2, red2, …, or #rrggbb). Empty: scrolls, medium, your colour."><span class="cinw"><input id="chatin" type="text" maxlength="${MAXLEN}" placeholder="say something…" enterkeyhint="send" aria-autocomplete="list"><button type="button" class="cemo" title="emoji" aria-label="emoji" aria-haspopup="dialog" aria-expanded="false"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><circle cx="12" cy="12" r="9"/><path d="M8.5 14.5a4.5 4.5 0 0 0 7 0"/><circle cx="9" cy="10" r=".6" fill="currentColor"/><circle cx="15" cy="10" r=".6" fill="currentColor"/></svg></button><button type="button" class="cnico" title="how your comments look on the picture (position, size, font, colour)" aria-label="comment style" aria-haspopup="dialog" aria-expanded="false">Aa</button></span>
+      title="Niconico commands for your comments on the picture, e.g. ue / shita (top / bottom, 3 s), big / small, a colour (red, pink, orange, yellow, green, cyan, blue, purple, white, black, white2, red2, …, or #rrggbb). Empty: scrolls, medium, your colour."><span class="cinw"><input id="chatin" type="text" maxlength="${MAXLEN}" placeholder="say something…  (!song ^stage)" title="say something: :emoji, @name, !song (e.g. !sunset) or ^stage (e.g. ^gtable): a song or stage shows as a chip anyone can tap to play it on their own picture" enterkeyhint="send" aria-autocomplete="list"><button type="button" class="cemo" title="emoji" aria-label="emoji" aria-haspopup="dialog" aria-expanded="false"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><circle cx="12" cy="12" r="9"/><path d="M8.5 14.5a4.5 4.5 0 0 0 7 0"/><circle cx="9" cy="10" r=".6" fill="currentColor"/><circle cx="15" cy="10" r=".6" fill="currentColor"/></svg></button><button type="button" class="cnico" title="how your comments look on the picture (position, size, font, colour)" aria-label="comment style" aria-haspopup="dialog" aria-expanded="false">Aa</button></span>
       <button type="submit" class="txt">send</button>
       <div class="epop" hidden role="dialog" aria-label="emoji"></div><div class="mpop" hidden role="listbox" aria-label="mention someone"></div></form>
     <details><summary><canvas class="me" width="42" height="56"></canvas><span class="mynick"></span><span class="cstate"></span></summary>
@@ -1439,7 +1524,7 @@
     const body = document.createElement('span'); body.className = 'cbody';
     if (l.reply) {  // a reply: "↪ Name: snippet" (a click goes to the original while it is loaded)
       const q = document.createElement('span'); q.className = 'crq';
-      if (orig) { const b = document.createElement('b'); b.textContent = disp(orig.nick); q.append('↪ ', b, `: ${atText(mdPlain(ownLine(orig) ? unwave(orig.text) : orig.text), c).slice(0, 80)}`)  /* (an owner's ~wave~ without its marks) */; q.title = 'go to the message'; }
+      if (orig) { const b = document.createElement('b'); b.textContent = disp(orig.nick); q.append('↪ ', b, ': ', ...mentionNodes(atText(mdPlain(lineStyle(orig) ? unwave(orig.text) : orig.text), c).slice(0, 80), true))  /* (an owner's ~wave~ without its marks) */; q.title = 'go to the message'; }
       else { q.textContent = '↪ a reply to an earlier message'; q.style.cursor = 'default'; }
       q.onclick = () => flashLine(l.reply);
       body.append(q);
@@ -1513,13 +1598,13 @@
       if (mm.index > 0 && /[\p{L}\p{N}_]/u.test(text[mm.index - 1])) continue;  // (an e-mail address, not a mention)
       // (a name has a letter or digit: "@_@", "@-@", "@^@" are faces, not mentions; was a pill "@_" + "@")
       if (!/[\p{L}\p{N}]/u.test(mm[1])) continue;
-      if (mm.index > i) out.push(...emoteNodes(text.slice(i, mm.index)));
+      if (mm.index > i) out.push(...mentionNodes(text.slice(i, mm.index)));
       const s = document.createElement('span'); s.className = 'cat';
       s.textContent = '@' + atName(mm[1]); s.title = mm[1];
       if (myNames().includes(mm[1].toLowerCase())) s.classList.add('me');
       out.push(s); i = mm.index + mm[0].length;
     }
-    if (i < text.length) out.push(...emoteNodes(text.slice(i)));
+    if (i < text.length) out.push(...mentionNodes(text.slice(i)));
     return out;
   }
   // a mentioned nick as the lines show names (an account's "Name-1234": its display name, the #tag per the setting);
@@ -2619,7 +2704,7 @@
   // a comment's look and timing; t: when it enters, in seconds on its stage's clock
   // the overlay's text of a line: a reply's or a mention's leading "@nick" (and a ':' or ',' after it) left out
   function dmText(l) { return dmTextOf(l, l.pic != null ? l.pic : l.text); }
-  function dmTextOf(l, t) { t = String(t || ''); return emoThin(atNames(l.action ? t : t.replace(/^(@\S+[:,]?\s*)+/, '').trim())); }
+  function dmTextOf(l, t) { t = mentPlain(String(t || '')); return emoThin(atNames(l.action ? t : t.replace(/^(@\S+[:,]?\s*)+/, '').trim())); }
   // a comment's code points and, for a styler's ~wave~ (textW: the text with each segment between U+E000 / U+E001),
   // each code point's place in its segment + 1 (0: not waving), for viewer_ov_style
   function dmCps(text, textW, face) {
@@ -3965,6 +4050,7 @@
   // click pick; Esc closes.
   const mpop = $('.mpop');
   let ment = null;  // {start, items: [nick], i}
+  let mentMore = false;  // (the older games' music and stages asked for: the first "!" / "^")
   const foldName = t => String(t).normalize('NFKD').replace(/[̀-ͯ]/g, '').toLowerCase();
   function nameOf(nick, c) {
     for (let i = c.lines.length - 1; i >= 0; i--) if (c.lines[i].irc && key(c.lines[i].irc) === key(nick)) return c.lines[i].nick;
@@ -3977,6 +4063,24 @@
     // a finished :code: becomes its emoji as it's typed
     const done = /:([a-z0-9_+-]{1,40}):$/i.exec(before), dch = done && !EMOTES.has(done[1]) && emoCodes.get(done[1].toLowerCase());
     if (dch && document.activeElement === input) { input.setRangeText(dch, pos - done[0].length, pos, 'end'); mentionClose(); return; }
+    // "!sun" / "^gta" (a letter or more after a space / the start) offers the matching songs / stages (fuzzy: the slug's
+    // start, a word's start, inside it, then its letters in order)
+    const sm = /(^|\s)([!^])([^\s!^]{1,40})$/u.exec(before);
+    if (sm && document.activeElement === input) {
+      const A = window.mbaaChatApi;
+      if (A && A.mentionsMore && !mentMore) { mentMore = true; A.mentionsMore().then(() => { if (document.activeElement === input) mentionScan(); }); }
+      const cat = mentCat(), q = mentSlug(sm[3]).replace(/-/g, ''), kind = sm[2] === '!' ? 'song' : 'stage';
+      if (cat && q) {
+        const all = [...cat[kind].values()], k = x => x.slug.replace(/-/g, '');
+        const words = x => x.slug.split('-').some(w => w.startsWith(q));
+        const sub = x => { let j = 0; for (const ch of k(x)) if (ch === q[j]) j++; return j === q.length; };
+        const items = [...all.filter(x => k(x).startsWith(q)), ...all.filter(x => !k(x).startsWith(q) && words(x)),
+          ...all.filter(x => !k(x).startsWith(q) && !words(x) && k(x).includes(q)),
+          ...(q.length >= 3 ? all.filter(x => !k(x).includes(q) && !words(x) && sub(x)) : [])].slice(0, 8);
+        if (items.length) { ment = { kind, pre: sm[2], start: pos - sm[3].length - 1, end: pos, items, i: 0 }; return mentionDraw(); }
+      }
+      return mentionClose();
+    }
     // ":jo…" (two letters or more after a space / the start) offers the matching :codes:
     const em = /(^|\s):([a-z0-9_+-]{2,40})$/i.exec(before);
     if (em && document.activeElement === input) {
@@ -4008,10 +4112,16 @@
   function mentionDraw() {
     mpop.replaceChildren();
     const emoK = ment.kind === 'emo';
-    const h = document.createElement('div'); h.className = 'mh'; h.textContent = emoK ? 'emoji' : 'mention'; mpop.append(h);
+    const smK = ment.kind === 'song' || ment.kind === 'stage';
+    const h = document.createElement('div'); h.className = 'mh'; h.textContent = emoK ? 'emoji' : smK ? `${ment.kind} (a chip anyone can tap)` : 'mention'; mpop.append(h);
     ment.items.forEach((x, i) => {
       const d = document.createElement('div'); d.className = 'mi' + (i === ment.i ? ' on' : ''); d.id = `cment${i}`; d.setAttribute('role', 'option');
-      if (emoK) { const e = document.createElement('span'); e.className = 'me'; if (x.emote) e.append(emoteImg(x.emote)); else e.textContent = x.ch; const b = document.createElement('b'); b.textContent = `:${x.code}:`; d.append(e, b); if (x.emote) { d.classList.add('srv'); const sm = document.createElement('small'); sm.textContent = 'server'; d.append(sm); } }
+      if (smK) {
+        if (ment.kind === 'stage' && x.thumb) { const im = document.createElement('img'); im.className = 'mth'; im.alt = ''; d.append(im); window.mbaaChatApi.mentionThumb(x.thumb).then(u => { if (u) im.src = u; }); }
+        else { const e = document.createElement('span'); e.className = 'mnote'; e.textContent = ment.kind === 'song' ? '♪' : '▣'; d.append(e); }
+        const b = document.createElement('b'); b.textContent = x.name; const sm = document.createElement('small'); sm.textContent = `${ment.pre}${x.slug}${x.game && x.game !== 'MBAACC' ? ` · ${x.game}` : ''}`; d.append(b, sm);
+      }
+      else if (emoK) { const e = document.createElement('span'); e.className = 'me'; if (x.emote) e.append(emoteImg(x.emote)); else e.textContent = x.ch; const b = document.createElement('b'); b.textContent = `:${x.code}:`; d.append(e, b); if (x.emote) { d.classList.add('srv'); const sm = document.createElement('small'); sm.textContent = 'server'; d.append(sm); } }
       else {
         const b = document.createElement('b'); b.textContent = x.name; d.append(b);
         if (x.name.toLowerCase() !== x.nick.toLowerCase()) { const s = document.createElement('small'); s.textContent = x.nick; d.append(s); }
@@ -4028,7 +4138,7 @@
   }
   function mentionPick() {
     if (!ment || mpop.hidden) return false;
-    const x = ment.items[ment.i], ins = ment.kind === 'emo' ? (x.emote ? `${x.ch} ` : x.ch) : `@${x.nick} `;
+    const x = ment.items[ment.i], ins = ment.pre ? `${ment.pre}${x.slug} ` : ment.kind === 'emo' ? (x.emote ? `${x.ch} ` : x.ch) : `@${x.nick} `;
     const v = input.value.slice(0, ment.start) + ins + input.value.slice(ment.end);
     if (v.length <= MAXLEN) { input.value = v; input.setSelectionRange(ment.start + ins.length, ment.start + ins.length); }
     mentionClose(); input.focus();
@@ -4043,10 +4153,10 @@
     // (Enter picks only once a name is being typed: "@" or "@_" then Enter sends the text as typed; Tab always picks)
     // (Enter on an emoji name typed in full (":wlen" and the highlighted one is wlen): picked and sent at once; it took
     // a second Enter, so "the first :wlen: didn't send", user 2026-11-01. A partial name only picks)
-    else if (e.key === 'Enter' && ment.kind === 'emo' && ment.items[ment.i] && input.value.slice(ment.start + 1, ment.end).toLowerCase() === String(ment.items[ment.i].code).toLowerCase()) {
+    else if (e.key === 'Enter' && ment.items[ment.i] && input.value.slice(ment.start + 1, ment.end).toLowerCase() === String(ment.kind === 'emo' ? ment.items[ment.i].code : ment.pre ? ment.items[ment.i].slug : '\0').toLowerCase()) {
       e.preventDefault(); mentionPick(); say(emoCodesIn(input.value)); input.value = ''; mentionClose();
     }
-    else if (e.key === 'Tab' || (e.key === 'Enter' && (ment.kind === 'emo' || /[\p{L}\p{N}]/u.test(input.value.slice(ment.start + 1, ment.end))))) { e.preventDefault(); mentionPick(); }
+    else if (e.key === 'Tab' || (e.key === 'Enter' && (ment.kind === 'emo' || ment.pre || /[\p{L}\p{N}]/u.test(input.value.slice(ment.start + 1, ment.end))))) { e.preventDefault(); mentionPick(); }
     else if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); mentionClose(); }
   });
 
@@ -4058,7 +4168,7 @@
     replyTo = { msgid: l.msgid, irc: l.irc || null, nick: l.nick, text: l.text, chan: l.chan || shown };
     const sp = replyBar.querySelector('span'), b = document.createElement('b');
     b.textContent = disp(l.nick);
-    sp.replaceChildren('replying to ', b, `: ${atText(mdPlain(ownLine(l) ? unwave(l.text) : l.text), chans.get(key(l.chan || shown))).slice(0, 120)}`);
+    sp.replaceChildren('replying to ', b, ': ', ...mentionNodes(atText(mdPlain(lineStyle(l) ? unwave(l.text) : l.text), chans.get(key(l.chan || shown))).slice(0, 120), true));
     replyBar.hidden = false;
     input.focus();
   }
@@ -4201,6 +4311,6 @@
 
   tabs(); render();
   start();
-  window.mbaaChat = { nicoMax: n => { NICO_ON_SCREEN = n; }, emotes: () => [...EMOTES.keys()], emoteReady: n => !!(EMOTES.get(n) && emoteReady(EMOTES.get(n))), swellMap: swells, ovReset: () => { dmClear(nico); swellClear(); }, ovRestored: () => { swellClear(); glovReady(); }, irc, auth, nameOk, chans, prof, danmaku, say, nico, tl, clockPos, localOf, posOf, nowOf, feed: raw => on(parse(raw)), spread: () => spread, owner: () => ({ acct: ownAcct, spec: styleSpec(ownStyle) }), styles: () => Object.fromEntries([...styles.values()].map(x => [x.acct, styleSpec(x.st)])), mayStyle: () => mayStyle(), picSet, md: mdPlain, mirc: t => mircNodes(t).map(n => n.outerHTML || n.textContent).join(''),
+  window.mbaaChat = { nicoMax: n => { NICO_ON_SCREEN = n; }, dmText: t => dmTextOf({}, t), emotes: () => [...EMOTES.keys()], emoteReady: n => !!(EMOTES.get(n) && emoteReady(EMOTES.get(n))), swellMap: swells, ovReset: () => { dmClear(nico); swellClear(); }, ovRestored: () => { swellClear(); glovReady(); }, irc, auth, nameOk, chans, prof, danmaku, say, nico, tl, clockPos, localOf, posOf, nowOf, feed: raw => on(parse(raw)), spread: () => spread, owner: () => ({ acct: ownAcct, spec: styleSpec(ownStyle) }), styles: () => Object.fromEntries([...styles.values()].map(x => [x.acct, styleSpec(x.st)])), mayStyle: () => mayStyle(), picSet, md: mdPlain, mirc: t => mircNodes(t).map(n => n.outerHTML || n.textContent).join(''),
     idle: ms => { idleMs = ms; }, swells: () => [...swells.values()].filter(x => x.el).map(x => ({ e: x.e, n: x.count, size: parseFloat(x.em.style.fontSize), op: x.el.style.opacity })), typingTimes: { TYPE_EVERY, TYPE_TTL }, show: name => { chan(name); shown = name; tabs(); render(); }, status: () => ({ connected: irc.registered, nick: irc.nick, caps: [...irc.caps], shown, matchChan }) };  // (tests)
 })();
