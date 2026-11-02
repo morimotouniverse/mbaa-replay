@@ -1418,8 +1418,15 @@ async function liveList() {
 }
 async function startLive(id) {
   let info;
-  try { info = (await liveList()).find(m => m.id === id); } catch (e) { status(`live feed unreachable: ${e.message}`); return liveRetry(id); }
-  if (!info) { status('that match is not live any more'); return liveNet.recent() ? liveRetry(id) : undefined; }
+  let all;
+  try { all = await liveList(); info = all.find(m => m.id === id); } catch (e) { status(`live feed unreachable: ${e.message}`); return liveRetry(id); }
+  if (!info) {
+    status('that match is not live any more');
+    // (a page opened on a match that has ended (a reload after an update, an old link): the next-match card, its
+    // countdown to the next live one or a wait for one; was a black picture, user 2026-11-01)
+    if (!session) { liveSrc = { id, info: { names: [] }, since: 0 }; if (nextCardShow(null, all, 'That match has ended')) return; }
+    return liveNet.recent() ? liveRetry(id) : undefined;
+  }
   // the same match again (a fallback start): the streaks go on from the session's where the bridge has none for the game
   // (its game over: not mid-battle of an older one)
   const prev = session;
@@ -2662,10 +2669,10 @@ function liveGo(id) {
 }
 // list: the live list as just read (the watched match may be in it). title: what happened ("Match over", ...)
 function nextCardShow(s, list, title) {
-  if (session !== s || nextCard.stay === s) return false;
+  if (session !== s || (s && nextCard.stay === s)) return false;  // (s null: a page with no match yet)
   const el = document.getElementById('nextcard');
   if (!el) return false;
-  const live = list.filter(m => m.id !== (s.liveSrc && s.liveSrc.id) && !liveGone(m));
+  const live = list.filter(m => m.id !== (s && s.liveSrc && s.liveSrc.id) && !liveGone(m));
   const next = liveNextMatch(live);
   el.querySelector('.nc-t').textContent = title;
   const row = (m, cls) => {  // (the live list's row: icons, moons, names, watchers)
@@ -2700,7 +2707,7 @@ function nextCardShow(s, list, title) {
       if (session !== s || nextCard.s !== s || nextCard.id) return;
       const l = await liveList().catch(() => null);
       if (session !== s || nextCard.s !== s) return;
-      if (l && l.some(m => m.id !== (s.liveSrc && s.liveSrc.id) && !liveGone(m))) nextCardShow(s, l, title);
+      if (l && l.some(m => m.id !== (s && s.liveSrc && s.liveSrc.id) && !liveGone(m))) nextCardShow(s, l, title);
       else nextCard.timer = setTimeout(wait, 10000);
     };
     nextCard.timer = setTimeout(wait, 10000);
@@ -2724,7 +2731,7 @@ function nextCardShow(s, list, title) {
 }
 // after a match leaves the list: one with either of its players (a new set of theirs), else the most watched
 function liveNextMatch(l) {
-  const L = liveSrc, names = new Set((L.info.names || []).map(n => (n || '').trim().toLowerCase()).filter(Boolean));
+  const L = liveSrc || { id: null, info: {} }, names = new Set((L.info.names || []).map(n => (n || '').trim().toLowerCase()).filter(Boolean));
   const others = l.filter(m => m.id !== L.id && !liveGone(m));
   return others.find(m => (m.names || []).some(n => names.has((n || '').trim().toLowerCase())))
       || others.sort((a, b) => (b.viewers || 0) - (a.viewers || 0))[0] || null;

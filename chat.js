@@ -356,7 +356,9 @@
   #chatlog .crq { display: block; font-size: 10.5px; color: var(--faint); cursor: pointer; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; margin-bottom: 1px; }
   #chatlog .crq:hover { color: var(--muted); }
   #chatlog .crq b { color: var(--muted); font-weight: 600; }
-  #chatlog li .cact { margin-left: auto; flex: none; display: inline-flex; gap: 1px; opacity: 0; }
+  #chatlog li .cact { margin-left: auto; flex: none; display: inline-flex; gap: 1px; opacity: 0; user-select: none; -webkit-user-select: none; }
+  /* (the line's controls, the time and the avatar are never part of a text selection or a copy: user 2026-11-01) */
+  #chatlog li :is(.cact, .ctime, .cico, .creacts button) { user-select: none; -webkit-user-select: none; }
   #chatlog li:hover .cact, #chatlog li.act .cact, #chatlog li .cact:focus-within { opacity: 1; }
   #chatlog li .cact button { background: none; border: none; color: var(--faint); cursor: pointer; font-size: 12px; line-height: 1; padding: 1px 3px; border-radius: 4px; }
   #chatlog li .cact button:hover { color: var(--fg); background: #ffffff14; }
