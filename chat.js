@@ -320,8 +320,9 @@
   if (!validChara(prof.chara)) prof.chara = -1;
   if (![0, 1, 2].includes(prof.moon)) prof.moon = -1;
   // a name's / comment's colour: exactly the one picked (user 2026-11-01: dark picks were lifted before, gaku's dark
-  // purple showed light magenta); a dark one (luminance < 0.35) is kept readable by a light halo instead: .cdk in the
-  // chat (a subtle white text-shadow), a light outline on the picture (Niconico's white stroke for its black comments)
+  // purple showed light magenta); in the chat a plain solid colour (user 2026-11-02: the dark-colour halo read as a glow,
+  // and glow is the site owner's alone); on the picture a dark one keeps a light outline (Niconico's white stroke for its
+  // black comments)
   const exactHex = hex => COLOR_RE.test(hex || '') ? hex.toLowerCase() : '#c8c8d8';
   const darkHex = hex => {
     if (!COLOR_RE.test(hex || '')) return false;
@@ -329,7 +330,7 @@
     return (0.2126 * r + 0.7152 * g + 0.0722 * b) / 255 < 0.35;
   };
   // (an element's text in that colour, with the halo when dark)
-  function inkSet(el, hex) { el.style.color = exactHex(hex); el.classList.toggle('cdk', darkHex(exactHex(hex))); }
+  function inkSet(el, hex) { el.style.color = exactHex(hex); }
 
   // ---- icon art (the player block's: grp/c_sel_aa icons 48x64, large row set from row 4; moons 56x56 at y 288) ----
   let art = null;
@@ -881,7 +882,6 @@
   #chatsec .ostyle .osws .sw { width: 22px; height: 22px; padding: 0; border-radius: 50%; border: 2px solid transparent; cursor: pointer; }
   #chatsec .ostyle .osws .sw.on { border-color: var(--fg); }
   /* a dark name / comment colour, kept exact, with a light halo so it reads on the dark panel (inkSet) */
-  .cdk { text-shadow: 0 0 1px #ffffffe0, 0 0 3px #ffffffa0; }
   #chatsec .ostyle .ostat.ok { color: #8fe0ad; }  #chatsec .ostyle .ostat.dirty { color: var(--accent2, #ffb84a); }
   body.mob #chatsec .ostyle { font-size: 13px; }
   body.mob #chatsec .ostyle button.cpk.bare .cpk-sw { width: 40px; height: 30px; }
@@ -1140,8 +1140,8 @@
     $('.cspread').hidden = !(op && ownerMe());
     const pos = $('.cseg[data-k="pos"]'); if (pos) pos.hidden = !op;
     const may = mayStyle();
-    const ob = $('.costyle'); if (ob) { ob.hidden = false; ob.textContent = may ? '🖌 my name: colour · glow · gradient · ~wave~' : '🎨 my name colour'; }
-    const pb = $('.postylebtn'); if (pb) pb.textContent = may ? '🖌 style…' : '🎨 more…';
+    const ob = $('.costyle'); if (ob) { ob.hidden = false; ob.textContent = may ? (glowMe() ? '🖌 my name: colour · glow · gradient · ~wave~' : '🖌 my name: colour · gradient · ~wave~') : '🎨 my name colour'; }
+    const pb = $('.postylebtn'); if (pb) { pb.textContent = '🖌 style…'; pb.hidden = !may; }  // (a normal user: the colour row already has everything; user 2026-11-02)
     styleAdmin();
     myNameStyle();
   };
@@ -1174,7 +1174,18 @@
   // who may style (the bot's mayStyle decides; this shows the panel's style part): the site owner and the mods, who are
   // channel operators (the bot makes them +o)
   const mayStyle = () => !!irc.account && (ownerMe() || [...chans.values()].some(c => c.joined && c.ops.has(key(irc.nick))));
-  const styleOf = a => { const x = a && styles.get(key(a)); return x ? x.st : null; };
+  // (glow: the site owner and the accounts the bot names in +mbaa/glow, user 2026-11-02: the owner and gaku; the other
+  // mods the gradient and the wave; the bot strips it from the rest too)
+  let glowAccts = new Set();
+  const ownerAcct = a => !!(a && ((ownAcct && key(a) === key(ownAcct)) || glowAccts.has(key(a))));
+  const glowMe = () => ownerMe() || !!(irc.account && glowAccts.has(key(irc.account)));
+  const styleOf = a => {
+    const x = a && styles.get(key(a));
+    if (!x) return null;
+    if (!x.st.glow || ownerAcct(a)) return x.st;
+    const { glow, ...rest } = x.st;
+    return rest;
+  };
   const lineStyle = l => (l && l.acct ? styleOf(l.acct) : null);
   const clampI = (v, a, b) => Math.max(a, Math.min(b, Math.round(+v || 0)));
   const ACCT_RE = /^[\p{L}\p{M}\p{N}_-]{1,40}$/u;
@@ -1598,6 +1609,8 @@
       if (mm.index > 0 && /[\p{L}\p{N}_]/u.test(text[mm.index - 1])) continue;  // (an e-mail address, not a mention)
       // (a name has a letter or digit: "@_@", "@-@", "@^@" are faces, not mentions; was a pill "@_" + "@")
       if (!/[\p{L}\p{N}]/u.test(mm[1])) continue;
+      // (only someone real: in the channel, or who wrote in it, or me; "@everyone", "@anything" stay text, user 2026-11-02)
+      if (!atKnown(mm[1])) continue;
       if (mm.index > i) out.push(...mentionNodes(text.slice(i, mm.index)));
       const s = document.createElement('span'); s.className = 'cat';
       s.textContent = '@' + atName(mm[1]); s.title = mm[1];
@@ -1606,6 +1619,23 @@
     }
     if (i < text.length) out.push(...mentionNodes(text.slice(i)));
     return out;
+  }
+  // the names an "@" may pill in the shown channel: its people (nicks), who wrote there (nick, account, display name), each
+  // also without its "-1234" tag; cached until the channel's lines or names change
+  const tagless = n => n.replace(/-\d{4}[a-z]?$/, '').replace(/#\d{4}$/, '');
+  let atCache = { c: null, n: -1, m: -1, set: null };
+  function atKnown(n) {
+    const k = key(n);
+    if (myNames().includes(n.toLowerCase())) return true;
+    const c = chans.get(key(shown));
+    if (!c) return false;
+    if (atCache.c !== c || atCache.n !== c.lines.length || atCache.m !== c.names.size) {
+      const set = new Set(), add = x => { if (x) { set.add(key(String(x))); set.add(key(tagless(String(x)))); } };
+      for (const x of c.names) add(x);
+      for (const l of c.lines) { add(l.irc); add(l.acct); add(l.nick); }
+      atCache = { c, n: c.lines.length, m: c.names.size, set };
+    }
+    return atCache.set.has(k) || atCache.set.has(key(tagless(n)));
   }
   // a mentioned nick as the lines show names (an account's "Name-1234": its display name, the #tag per the setting);
   // rendering only, the text sent keeps the IRC nick
@@ -2605,7 +2635,7 @@
   function oRead() {
     if (!mayStyle()) return {};
     const col = k => COLOR_RE.test(oIn(k).value) ? oIn(k).value.toLowerCase() : '#ffffff', st = {};
-    if (oIn('glow').checked) st.glow = { c: col('gc'), r: clampI(oIn('gr').value, 1, 12) };
+    if (glowMe() && oIn('glow').checked) st.glow = { c: col('gc'), r: clampI(oIn('gr').value, 1, 12) };
     if (oIn('grad').checked) st.grad = { cs: [col('c1'), col('c2'), ...(oIn('c3on').checked ? [col('c3')] : [])], s: clampI(oIn('gs').value, 1, 10) };
     st.wave = { a: clampI(oIn('wa').value, 1, 10), s: clampI(oIn('ws').value, 1, 10) };
     return styleParse(styleSpec(st)) || {};
@@ -2620,7 +2650,11 @@
     sv.disabled = same && !sending;
   }
   // (the style part shown to who may style; the colour to everyone)
-  styleAdmin = () => { const may = mayStyle(); oPan.querySelectorAll('.osty').forEach(e => { e.hidden = !may; }); };
+  styleAdmin = () => {
+    const may = mayStyle();
+    oPan.querySelectorAll('.osty').forEach(e => { e.hidden = !may; });
+    oPan.querySelector('[data-s="glow"]').hidden = !(may && glowMe());
+  };
   function oPreview() {
     const pv = oPan.querySelector('.oprev'), st = oRead();
     styleApply(pv, st);
@@ -3805,6 +3839,11 @@
         // (the site owner's account and style, sent with the spread)
         const os = m.tags['+mbaa/style'];
         if (os != null && fromBot) ownSet(os);
+        const gl = m.tags['+mbaa/glow'];
+        if (gl != null && fromBot) {
+          glowAccts = new Set(String(gl).split(',').filter(a => ACCT_RE.test(a)).map(key));
+          stylesChanged(); spreadAdmin();
+        }
         // (every styler's account and spec, in parts when long)
         const ss = m.tags['+mbaa/styles'];
         if (ss != null && fromBot) stylesSet(ss, m.tags['+mbaa/stylesn']);
