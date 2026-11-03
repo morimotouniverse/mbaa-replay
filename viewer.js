@@ -501,10 +501,17 @@ function audioHooks(Module, s) {
   const log = ev => { const k = Module._viewer_frame(); if (!s.tl || k >= s.tl.simMax) s.bgmLog.push([k, ...ev]); };
   // Melty radio (radio, set from the panel): its track replaces the match's music (a replay: until its end; a live match: its later games too, start), straight
   // through the game's track changes, stops and seeks, at a steady volume (radioLevel: the music's own level, without its fades)
-  const radioOn = () => !!musicNow() && !HASH;  // (the radio's music: the pick's, or the music chosen on its own)
+  // (a live extension's music, liveExt.music, is not radio: it takes the match's own music's place and follows the game's
+  // starts, stops and seeks (round to round, the results screen, a seek), at the game's volume; extSub below)
+  const radioOn = () => !liveExt.music && !!musicNow() && !HASH;  // (the radio's music: the pick's, or the music chosen on its own)
   const play = (path, loop, loopPos, offset) => {
     // (the "...and nothing heart" stage's music: off unless the viewer turned it on; songSub)
-    const sub = !radioOn() && songSub(path, Module.HEAP32[STAGE_ID >> 2]);
+    const ext = !HASH && liveExt.music;
+    if (ext && path) {   // (the extension's track where the game's would play: same start, same position, looped at its own point)
+      if (!cache.has(ext.key)) { halt(); return; }
+      path = ext.path; loop = true; loopPos = ext.loopPos;
+    }
+    const sub = !ext && !radioOn() && songSub(path, Module.HEAP32[STAGE_ID >> 2]);
     if (sub) {
       if (!cache.has(sub.key)) {  // (fetched on first use: then played from where the game's track would be)
         const t0 = actx ? actx.currentTime : 0;
@@ -1532,6 +1539,61 @@ async function liveFetch(url, opt) {
   liveNoticeShow();
   return r;
 }
+// A live match's extension: the feed's answers about a match may carry X-Live-Ext, a path on this site naming an ES
+// module (tools/web/cc_live.mjs; set by the site owner only, tools/web/live_ext.mjs). The page imports it and calls its
+// default export with liveExtApi; what it returns (a function) is called when the feed stops naming it, or the page goes to
+// another match or a replay. The same value again does nothing; a late joiner gets it with its first answer.
+const liveExt = { id: null, v: '', off: null, seq: 0, music: null, stage: null, stageN: 0 };
+const liveExtApi = {
+  module: () => session && session.M,          // the game's Module (a new one per session: read it each time)
+  liveId: () => (session && session.liveSrc ? session.liveSrc.id : null),
+  current: () => liveExt.v,
+  // a local test page's own (the secret test page: the same module, on whatever this page plays; kept across replays)
+  setLocal: (v) => liveExtSet('local', v),
+  // music in place of the match's (and of a radio pick) while set: {key, data: Ogg Opus bytes, loopPos (s), title} | null
+  // (returns a token; music(null, token) clears it only while it is still that one: an extension taken off after the next
+  // one went on leaves the next one's)
+  music(o, tok) {
+    if (!o && tok && (!liveExt.music || liveExt.music.key !== tok)) return null;
+    if (liveExt.music) cache.delete(liveExt.music.key);
+    liveExt.music = o && o.data ? { key: `x/${o.key}.opus`, path: `/game/x/${o.key}.opus`, loopPos: +o.loopPos || 0, file: `x:${o.key}`, title: String(o.title || ''), yt: /^https:\/\/www\.youtube\.com\/watch\?v=[\w-]+$/.test(o.yt || '') ? o.yt : '', ext: true } : null;
+    if (liveExt.music) cache.set(liveExt.music.key, o.data);
+    if (session && session.radioChanged) session.radioChanged();
+    return liveExt.music ? liveExt.music.key : null;
+  },
+  // the match card's stage in place of the match's while set: {name, view: image Blob | null, plate: image Blob | null} |
+  // null (stageShow: the picture, the name plate, the name as its tooltip; the radio panel's "Match music" tile)
+  stage(o, tok) {   // (a token as music's)
+    if (!o && tok && (!liveExt.stage || liveExt.stage.n !== tok)) return null;
+    liveExt.stage = o ? { n: ++liveExt.stageN, name: String(o.name || ''), view: o.view instanceof Blob ? o.view : null,
+                          plate: o.plate instanceof Blob ? o.plate : null } : null;
+    stageKey = '';
+    stageShow(session).catch(() => {});
+    radioExtTile();
+    return liveExt.stage ? liveExt.stage.n : null;
+  },
+};
+window.__mbaaExt = liveExtApi;
+async function liveExtSet(id, v) {
+  try { v = decodeURIComponent(v || ''); } catch (e) { v = ''; }
+  if (v === liveExt.v && (id === liveExt.id || !v)) return;
+  const seq = ++liveExt.seq;
+  liveExt.v = v; liveExt.id = v ? id : null;
+  const offNow = async () => { const f = liveExt.off; liveExt.off = null; if (f) { try { await f(); } catch (e) { console.warn('live ext off:', e); } } };
+  if (!v) return offNow();
+  let u;
+  try { u = new URL(v, location.origin); } catch (e) { return offNow(); }
+  if (u.origin !== location.origin) return offNow();
+  try {
+    const m = await import(u.href);
+    if (seq !== liveExt.seq) return;
+    const r = await m.default(liveExtApi, () => seq === liveExt.seq);
+    if (seq !== liveExt.seq) { if (typeof r === 'function') await r(); return; }
+    // (the one before stays on until this one is ready, then goes: one stage to the next with no MBAA stage between)
+    await offNow();
+    if (typeof r === 'function') liveExt.off = r;
+  } catch (e) { console.warn('live ext:', e); if (seq === liveExt.seq) await offNow(); }
+}
 // the live match last asked for (startLive): a retry, or a start still waiting on the network, of another one does
 // nothing (was: a pending retry of the match the page had just left started it again: the page went back to it)
 let liveWant = null;
@@ -1604,6 +1666,7 @@ async function startLive(id, match = null) {
   if (!info.streak && prev && prev.M && liveOurs(info, prev.liveSrc) && prev.streakKnown && prev.M.HEAP32[0x54EEE8 >> 2] !== 1)
     info.streak = STREAK.map(a => prev.M.HEAP32[a >> 2]);
   const r = await liveFetch(`${LIVE}/live/${id}/boot.rep?game=${info.game}`).catch(() => null);
+  if (r && r.ok) liveExtSet(id, r.headers.get('X-Live-Ext'));
   if (liveWant !== id) return;
   if (!r || !r.ok) { status(`live match: ${r ? `HTTP ${r.status}` : 'unreachable'}`); return !r || r.status >= 500 ? liveRetry(id, match) : undefined; }
   liveSrc = { id, info, since: info.game };
@@ -2074,6 +2137,16 @@ async function radioShowGame(g) {
   radioArtDone = false;
   if (!grid.hidden) radioArt();
   radioLinks();
+  radioExtTile();
+}
+// the "Match music" tile while a live match's extension has its own stage on (liveExtApi.stage): that stage's picture
+let radioExtUrl = '';
+function radioExtTile() {
+  const a = document.querySelector('#radiogrid .tile[data-f=""] .art'), X = liveExt.stage;
+  if (radioExtUrl) { URL.revokeObjectURL(radioExtUrl); radioExtUrl = ''; }
+  if (!a) return;
+  if (X && X.view) { radioExtUrl = URL.createObjectURL(X.view); a.style.backgroundImage = `url(${radioExtUrl})`; a.textContent = ''; a.parentNode.title = X.name; }
+  else if (!a.dataset.src) { a.style.backgroundImage = ''; a.textContent = '♪'; a.parentNode.title = 'Match music'; }
 }
 // the tiles' pictures, fetched when the picker is open
 let radioArtDone = false;
@@ -2112,7 +2185,8 @@ let xfStagePending = false;  // (a pick's stage swap to crossfade: radioStageSyn
 // match's own), 'match' the match's own whatever the pick, or a track (as radioTrack). Kept like the pick: a replay's
 // for that replay, a live match's for its whole live match (musicLiveId; start).
 let musicPick = '', musicLiveId = null, musicSel = null;
-const musicNow = () => musicPick === 'match' ? null : musicPick ? musicSel : radio;
+// (a live match's extension may bring its own music: liveExt below; it comes first while it is on)
+const musicNow = () => liveExt.music || (musicPick === 'match' ? null : musicPick ? musicSel : radio);
 async function musicSet(f) {
   musicPick = f;
   musicLiveId = f && session && session.liveSrc ? session.liveSrc.id : null;
@@ -2299,7 +2373,12 @@ function radioFilesIn(s, id) {
 function radioStageSync(s) {
   const M = s && s.M;
   if (!M || !M._viewer_radio_stage_id || s.glLost) return;
-  const st = radio && radio.dat && !HASH && radioStageFollow ? radio : null;
+  // a private page's own stage file (window.mbaaStageOverride() -> {dat, lights, data}: a bgmake file the page holds,
+  // put into MEMFS at /game/<dat>); it takes the radio's place while it returns one
+  let ov = null;
+  try { ov = window.mbaaStageOverride ? window.mbaaStageOverride(s) : null; } catch (e) {}
+  if (ov && ov.data && memfsSize(M, ov.dat) !== ov.data.length) fsPut(M.FS, '/game/' + ov.dat, ov.data);
+  const st = ov && ov.data ? ov : radio && radio.dat && !HASH && radioStageFollow ? radio : null;
   // an MBAACC track: its stage (the match's own when it is one of the track's: nothing to swap)
   let stage = 0;
   if (!st && radio && radioStageFollow && radio.stages && radio.stages.length && !HASH && M._viewer_radio_stage_want_stage) {
@@ -2317,7 +2396,7 @@ function radioStageSync(s) {
   // which would fade the fighters and HUD too; the page fade stays only for the all-at-once reference, mbaaRadioDefer 0)
   const fade = () => { if (xfStagePending) { xfStagePending = false; if (M.HEAP32[0x54EEE8 >> 2] === 1 && !(M._viewer_radio_stage_phase && M.mbaaRadioDefer !== 0)) xfGrab(() => M._viewer_radio_stage_in() === want); } };
   if (stage) { if (radioFilesIn(s, stage)) { fade(); M._viewer_radio_stage_want_stage(stage, want); } return; }
-  if (st && !radioPut(s, st.dat)) return;
+  if (st && !st.data && !radioPut(s, st.dat)) return;
   fade();
   if (st) st.lights.forEach(([pos, power], i) => M._viewer_radio_stage_light(i, pos, power));
   M.ccall('viewer_radio_stage_want', null, ['string', 'number', 'number'], [st ? st.dat : '', want, st ? st.lights.length : 0]);
@@ -2371,11 +2450,29 @@ async function stageShow(s) {
   if (!stagePanel || !s || !s.M) { box.hidden = true; return; }
   const id = radio && radio.stageNow ? radio.stageNow : s.M.HEAP32[STAGE_ID >> 2], st = stagePanel.stages[id];  // (an MBAACC pick's stage)
   const mu = musicNow(), own = musicPick === 'match' ? s.bgmNow : null;
-  const f = mu ? mu.file : trackOf(own || s.bgmNow) || (st && st.track), key = `${id}/${f}/${+radioStageFollow}/${radio ? radio.file : ''}/${musicPick}`;
+  const f = mu ? mu.file : trackOf(own || s.bgmNow) || (st && st.track), key = `${id}/${f}/${+radioStageFollow}/${radio ? radio.file : ''}/${musicPick}/${liveExt.stage ? liveExt.stage.n : ''}`;
   if (key === stageKey) return;
   stageKey = key;
   const tr = mu ? mu : stagePanel.tracks[f];
-  document.getElementById('trk').textContent = tr ? tr.title + (mu ? ` (radio${mu.game ? `, ${mu.game}` : ''})` : '') : '';
+  document.getElementById('trk').textContent = tr ? tr.title + (mu && !mu.ext ? ` (radio${mu.game ? `, ${mu.game}` : ''})` : '') : '';
+  if (mu && mu.ext && mu.yt) {  // (a live match's extension's track: Raito's upload of it, as the radio tiles link)
+    const a = document.createElement('a');
+    a.className = 'yt'; a.href = mu.yt; a.target = '_blank'; a.rel = 'noopener'; a.textContent = ' ▶';
+    a.title = 'Raito’s upload of this song on YouTube'; a.setAttribute('aria-label', a.title);
+    document.getElementById('trk').append(a);
+  }
+  if (liveExt.stage) {  // a live match's extension's stage (liveExtApi.stage): its picture and plate over the match's
+    const X = liveExt.stage;
+    for (const k of ['view', 'name']) {
+      const img = box.querySelector('.' + k), b = k === 'view' ? X.view : X.plate, old = img.dataset.src || '';
+      img.dataset.src = b ? URL.createObjectURL(b) : '';
+      xfadeSrc(img, img.dataset.src, old); img.hidden = !b;
+    }
+    box.querySelector('.view').title = X.name; box.querySelector('.name').alt = X.name;
+    if (box.hidden) requestAnimationFrame(() => marquee(document.getElementById('players')));
+    box.hidden = false;
+    return;
+  }
   if (radio && radioStageFollow && (radio.tile || radio.tileUrl)) {  // an older game's stage: its picture, its name for the plate
     const view = box.querySelector('.view'), name = box.querySelector('.name'), d = radio.tile && cache.get(radio.tile);
     const old = view.dataset.src && view.dataset.src.startsWith('blob:') ? view.dataset.src : '';
@@ -3006,6 +3103,7 @@ function liveBegin(s) {  // play(): after viewer_play
       const r = L.moved ? { ok: false, status: 404 } : await liveFetch(`${LIVE}/live/${L.id}/rec?from=${L.info.game}&since=${L.since}&v=${VIEWER}` +
         (L.info.match ? `&match=${encodeURIComponent(L.info.match)}` : ''),
         AbortSignal.timeout ? { signal: AbortSignal.timeout(5000) } : undefined);
+      if (r.ok && session === s) liveExtSet(L.id, r.headers.get('X-Live-Ext'));
       // (a 404 is the bridge saying the capture or game is not there: its capture closed (the match over) or the host's
       // id is on another match now: no data, so the stream reads as quiet, not an outage. Was: every 404 restarted the
       // quiet clock, so a session whose match had left the bridge never read as dry and sat frozen)
@@ -4048,6 +4146,7 @@ async function start(file, quiet = false, liveId = null) {
   // music); a live match's for the whole live match (liveId: its next games on a new session, a fallback start), until
   // the viewer changes it or goes to another match (user 2026-11-01)
   if (radioPick && !(liveId && radioLiveId === liveId)) radioSet('');
+  if (liveExt.id && liveExt.id !== 'local' && liveExt.id !== liveId) liveExtSet(null, '');  // (a match's extension is that match's only)
   if (musicPick && !(liveId && musicLiveId === liveId)) musicSet('');
   xfStagePending = false;  // (the session's start has its own fade)
   if (ensureAudio()) actx.resume();  // (after a drop or file pick: the page has had its gesture)

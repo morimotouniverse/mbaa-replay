@@ -3851,11 +3851,25 @@
   // token (saslRetried), then a guest with "try signing in again" (never a dead link: the Discord sign-in URL as its href)
   const auth = { state: 'unknown', token: null, name: null, provider: null, signin: null, suggest: '', err: '', saslErr: '', saslRetried: false };
   const authEl = $('.cauth'), formEl = $('.cform');
+  // signed in: the server may give this account an extra script (<page dir>/x/me -> {src}; tools/web/live_ext.mjs; any
+  // other answer: nothing), asked once per page
+  let extAsked = false;
+  async function extProbe() {
+    if (extAsked) return;
+    extAsked = true;
+    try {
+      const r = await fetch(`${AUTH_URL.replace(/\/auth$/, '')}/x/me`, { cache: 'no-store', credentials: 'same-origin' });
+      const j = r.status === 200 ? await r.json() : null;
+      if (j && typeof j.src === 'string' && j.src.startsWith('/') && !j.src.startsWith('//')) {
+        const sc = document.createElement('script'); sc.src = j.src; document.head.append(sc);
+      }
+    } catch (e) {}
+  }
   async function authFetch() {
     try {
       const r = await fetch(`${AUTH_URL}/token`, { cache: 'no-store', credentials: 'same-origin' });
       const j = [200, 401, 403, 409].includes(r.status) ? await r.json().catch(() => ({})) : null;
-      if (r.status === 200 && j && j.token) Object.assign(auth, { state: 'signed', token: j.token, name: j.name || null, provider: j.provider || null });
+      if (r.status === 200 && j && j.token) { Object.assign(auth, { state: 'signed', token: j.token, name: j.name || null, provider: j.provider || null }); extProbe(); }
       else if (r.status === 401 && j && j.signin) Object.assign(auth, { state: 'guest', token: null, signin: j.signin, provider: j.provider || null });
       else if (r.status === 409 && j && j.need === 'name') Object.assign(auth, { state: 'name', token: null, suggest: j.suggest || '' });
       else if (r.status === 403 && j && j.denied) Object.assign(auth, { state: 'denied', token: null });
