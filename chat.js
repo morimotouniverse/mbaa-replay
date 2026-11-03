@@ -896,6 +896,18 @@
   #chatsec button.cmembtn[aria-expanded=true] { color: #fff; background: #ffffff14; }
   #chatsec button.cmodlog { color: var(--accent2, #8ab4ff); display: inline-flex; align-items: center; gap: 3px; }
   #chatsec button.cmodlog[hidden] { display: none; }
+  /* host / join a match from the site (host_links.mjs; user 2026-11-03) */
+  #chatsec button.chost { color: var(--accent, #e8435a); font-weight: 700; }
+  #chatsec button.chost[hidden] { display: none; }
+  #chatsec .chostp { background: #00000055; border: 1px solid #ffffff22; border-radius: 10px; padding: 10px 12px; margin: 4px 0 6px; font-size: 13px; }
+  #chatsec .chostp[hidden] { display: none; }
+  #chatsec .chostp .row { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; margin: 6px 0; }
+  #chatsec .chostp button, #chatsec .chostp a.b { padding: 5px 12px; border-radius: 999px; border: 1px solid #ffffff33; background: #ffffff10; color: #fff; font: inherit; cursor: pointer; text-decoration: none; }
+  #chatsec .chostp button.on { border-color: var(--accent, #e8435a); background: #e8435a33; }
+  #chatsec .chostp button.go { background: var(--accent, #e8435a); border-color: var(--accent, #e8435a); font-weight: 700; }
+  #chatsec .chostp input { width: 5.5em; padding: 5px 8px; border-radius: 8px; border: 1px solid #ffffff33; background: #0008; color: #fff; font: inherit; letter-spacing: .1em; }
+  #chatsec .chostp .code { font-size: 34px; font-weight: 900; letter-spacing: .12em; font-variant-numeric: tabular-nums; }
+  #chatsec .chostp .dim { color: var(--faint, #aaa); font-size: 12px; }
   #chatsec .cmemb { max-height: 160px; overflow-y: auto; background: #00000033; border-radius: 8px; padding: 4px; font-size: 12px; overscroll-behavior: contain; }
   #chatsec .cmemb[hidden], #chatsec .ctopic[hidden], #chatsec .cments[hidden] { display: none; }
   #chatsec .cmemb .mh { font-size: 10px; color: var(--faint); padding: 2px 4px; }
@@ -1103,9 +1115,11 @@
     <div class="chead"><span class="lbl">chat</span><span class="ctabs"></span>
       <button type="button" class="cmembtn" aria-expanded="false" aria-controls="chatmemb" title="who is here">people</button>
       <button type="button" class="cmembtn cmodlog" hidden aria-haspopup="dialog" aria-expanded="false" title="mod log: who did what (deletes, strikes, mutes, kicks, bans, mods, MOTD) and who is muted / banned now; the owner and admins only"><svg width="11" height="12" viewBox="0 0 24 26" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linejoin="round" aria-hidden="true"><path d="M12 2 3 5.5v7c0 6 4 9.6 9 11.5 5-1.9 9-5.5 9-11.5v-7z"/></svg> mod log</button>
+      <button type="button" class="cmembtn chost" aria-expanded="false" aria-controls="chostp" title="play: host a match (your game opens hosting, you get a 4-digit code to share) or join one with a code">play</button>
       <label class="tog" title="new comments cross the game picture (Nico Nico style)"><input id="chatover_on" type="checkbox"> on picture</label>
       <label class="cspread" hidden title="spread, for everyone (the site owner only): how long a comment keeps its row on the picture after it would have freed it, so comments a little apart still fan out to new rows (0: Niconico's own). Moving it previews here; letting go sets it on every viewer's page">spread <input id="chatspread" type="range" min="0" max="6" step="0.1" value="1" aria-label="comment spread for everyone, seconds"><output>1.0 s</output></label></div>
     <div class="cmemb" id="chatmemb" hidden></div>
+    <div class="chostp" id="chostp" hidden></div>
     <div class="ctopic" hidden></div>
     <div class="cments" hidden role="status"></div>
     <ol id="chatlog" aria-live="polite"></ol>
@@ -4136,7 +4150,10 @@
         return;
       case '001':
         irc.registered = true; irc.retry = 0; irc.nick = p[0]; irc.away.clear(); idleSet = false; if (hiddenNow()) idleStart();
-        if (irc.nick !== prof.nick) sys(`connected as ${irc.nick}`);
+        // (said once a page and when the name changes: a phone drops the socket each time the page is left, and every
+        // reconnect printed it again; user 2026-11-03 "I keep getting logged out")
+        if (irc.nick !== prof.nick && irc.nick !== irc.saidAs) sys(`connected as ${irc.nick}`);
+        irc.saidAs = irc.nick;
         state(''); authShow();
         join(GENERAL); if (matchChan) join(matchChan);
         return;
@@ -4816,6 +4833,88 @@
   let mlogList = null;
   const mlogBtn = $('.cmodlog');
   mlogBtn.onclick = e => { e.stopPropagation(); if (modFor === 'modlog' && !modm.hidden) modClose(); else modlogOpen(mlogBtn); };
+  // ---- play: host a match from the site, or join one by code (user rulings 2026-11-03; tools/web/host_links.mjs) ----
+  // Host: the Worker gives a signed-in viewer a one-time token; <app>:host/<token> opens their game hosting; the game
+  // registers its code with the token and this panel shows it (claim), with the share link /j/NNNN. Join is free.
+  // "Open in" (PovertyCaster / CCCaster) is remembered ('hc.app', the share page's key too).
+  {
+    const HC_URL = location.pathname.replace(/\/[^/]*$/, '') + '/hc';
+    const btn = $('.chost'), pop = $('#chostp');
+    // (off until the owner turns it on, user 2026-11-03: "do not flip on the hosting from the page yet"; a test
+    // browser shows it with localStorage.hcPlay = '1')
+    let playOn = false; try { playOn = localStorage.getItem('hcPlay') === '1'; } catch (e) {}
+    btn.hidden = !playOn;
+    let app = null; try { app = localStorage.getItem('hc.app'); } catch (e) {}
+    const appNow = () => app || (auth.state === 'signed' ? 'pc' : 'cc');
+    const scheme = () => appNow() === 'pc' ? 'povertycaster' : 'cccaster';
+    const open = href => { location.href = href; };
+    let hosting = null;  // {tok, code?, t0, timer}
+    const el = (tag, cls, text) => { const e = document.createElement(tag); if (cls) e.className = cls; if (text != null) e.textContent = text; return e; };
+    function draw() {
+      pop.replaceChildren();
+      const apps = el('div', 'row'); apps.append(el('span', 'dim', 'Open in'));
+      for (const [k, n] of [['pc', 'PovertyCaster'], ['cc', 'CCCaster']]) {
+        const b = el('button', appNow() === k ? 'on' : '', n); b.type = 'button';
+        b.onclick = () => { app = k; try { localStorage.setItem('hc.app', k); } catch (e) {} draw(); };
+        apps.append(b);
+      }
+      pop.append(apps);
+      if (hosting && hosting.code) {
+        const link = `${location.origin}/j/${hosting.code}`;
+        pop.append(el('div', 'dim', 'Hosting. Your code:'), el('div', 'code', hosting.code));
+        const r = el('div', 'row');
+        const cl = el('button', 'go', 'Copy link'); cl.type = 'button';
+        cl.onclick = () => navigator.clipboard.writeText(link).then(() => { cl.textContent = 'Link copied'; }, () => {});
+        const cc = el('button', '', 'Copy code'); cc.type = 'button';
+        cc.onclick = () => navigator.clipboard.writeText(hosting.code).then(() => { cc.textContent = 'Code copied'; }, () => {});
+        r.append(cl, cc); pop.append(r, el('div', 'dim', `${link} · the code lasts while your game hosts; anyone who joins once you are playing spectates`));
+      } else if (hosting) {
+        pop.append(el('div', '', 'Waiting for your game to start hosting…'),
+                   el('div', 'dim', 'Nothing opened? Make sure you have a CCCaster or PovertyCaster with host codes, then try again.'));
+        const again = el('button', '', 'Open it again'); again.type = 'button'; again.onclick = () => open(`${scheme()}:host/${hosting.tok}`);
+        const r = el('div', 'row'); r.append(again); pop.append(r);
+      } else {
+        const r = el('div', 'row');
+        if (auth.state === 'signed') {
+          const h = el('button', 'go', 'Host a match'); h.type = 'button'; h.onclick = hostStart; r.append(h);
+        } else {
+          const a = el('a', 'b', 'Sign in to host'), ret = location.pathname + location.search, via = auth.signin || `${AUTH_URL}/discord`;
+          a.href = via + (via.includes('?') ? '&' : '?') + 'return=' + encodeURIComponent(ret); r.append(a);
+        }
+        pop.append(r);
+      }
+      const j = el('div', 'row'); j.append(el('span', 'dim', 'Join with a code'));
+      const inp = el('input'); inp.inputMode = 'numeric'; inp.maxLength = 4; inp.placeholder = '4821'; inp.setAttribute('aria-label', 'host code');
+      const go = el('button', '', 'Join'); go.type = 'button';
+      const join = () => { const c = inp.value.trim(); if (/^[1-9]\d{3}$/.test(c)) open(`${scheme()}:join/${c}`); else inp.focus(); };
+      go.onclick = join; inp.onkeydown = e => { if (e.key === 'Enter') join(); };
+      j.append(inp, go); pop.append(j);
+    }
+    async function hostStart() {
+      try {
+        const r = await fetch(`${HC_URL}/host`, { method: 'POST', credentials: 'same-origin' });
+        const j = await r.json().catch(() => ({}));
+        if (!r.ok || !j.tok) { sys(r.status === 401 ? 'sign in to host a match' : 'hosting is not available right now'); return; }
+        hosting = { tok: j.tok, t0: Date.now() };
+        open(`${scheme()}:host/${j.tok}`);
+        draw(); poll();
+      } catch (e) { sys('hosting is not available right now'); }
+    }
+    async function poll() {
+      const h = hosting;
+      if (!h || h.code) return;
+      if (Date.now() - h.t0 > 5 * 60_000) { hosting = null; draw(); return; }
+      try {
+        const r = await fetch(`${HC_URL}/claim?tok=${h.tok}`, { credentials: 'same-origin' });
+        const j = await r.json().catch(() => ({}));
+        if (hosting !== h) return;
+        if (r.status === 404) { hosting = null; draw(); return; }
+        if (j.code) { h.code = j.code; draw(); return; }
+      } catch (e) {}
+      h.timer = setTimeout(poll, 1500);
+    }
+    btn.onclick = () => { pop.hidden = !pop.hidden; btn.setAttribute('aria-expanded', String(!pop.hidden)); if (!pop.hidden) draw(); btn.blur(); };
+  }
   function modlogOpen(anchor, who) {
     modFor = 'modlog'; mlogBtn.setAttribute('aria-expanded', 'true');
     const el = (tag, cls, text) => { const e = document.createElement(tag); if (cls) e.className = cls; if (text != null) e.textContent = text; return e; };
