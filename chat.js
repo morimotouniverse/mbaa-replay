@@ -445,10 +445,18 @@
     if (SUB.some(r => r.test(letters))) return false;
     return ![letters, ...f.split(/[^a-z]+/)].some(w => w && WORD.some(r => r.test(w)));
   }
+  // (a copy of name_filter.mjs stripRolePrefix / roleNameOk: a name never starts with a role symbol ~ & @ % +, a look-alike
+  // or an invisible character in front of one; user 2026-11-03: a non-mod "@Juda" read as a moderator)
+  const ROLE_LEAD = /^[\p{Cf}\p{Cc}\p{Z}\s\u034F\u115F\u1160\u17B4\u17B5\u180B-\u180F\u2800\u3164\uFFA0@~&%+\uFF20\uFE6B\u02DC\u223C\u2053\u301C\uFF5E\uFF06\uFE60\uFF05\uFE6A\u2052\uFF0B\uFE62\u207A\u208A\u2795\u271A]+/u;
+  const stripRolePrefix = name => String(name ?? '').replace(ROLE_LEAD, '');
+  const roleNameOk = name => { const s = String(name ?? '').trim(); return !!s && stripRolePrefix(s) === s; };
 
   // ---- profile ----
   const NICK_RE = /^[A-Za-z_\[\]\\^{}|`][A-Za-z0-9_\-\[\]\\^{}|`]{0,23}$/;
   const randNick = () => 'viewer' + Math.floor(1000 + Math.random() * 9000);
+  // (a guest still on the random name: the light "set a name" prompt, user 2026-11-03 "viewer2237 / viewer4381 in the
+  // user list"; dismissed once, kept)
+  const unnamed = () => /^viewer\d{4}$/.test(prof.nick) && !prof.named;
   const COLOR_RE = /^#[0-9a-fA-F]{6}$/;
   const PRESETS = ['#e04a5a', '#ff9a3c', '#ffd84a', '#7ee05a', '#40c0ff', '#7a8cff', '#c878e6', '#ff7ac8', '#e8e8f0'];
   const prof = Object.assign({ nick: randNick(), color: PRESETS[Math.floor(Math.random() * PRESETS.length)], chara: -1, moon: -1 },
@@ -759,6 +767,11 @@
   .cmodm .mr > span { flex: 1 1 auto; padding-left: 6px; color: var(--muted); }
   .cmodm button { font: inherit; font-size: 12px; color: var(--fg); background: none; border: 1px solid transparent; border-radius: 6px; padding: 4px 6px; cursor: pointer; }
   .cmodm .mr > button.w { flex: 1 1 auto; text-align: left; }
+  .cmodm .mlogp { width: min(560px, calc(100vw - 28px)); }
+  .cmodm .mlogp input { flex: 1 1 auto; min-width: 0; font: inherit; font-size: 12px; color: var(--fg); background: var(--bg, #111); border: 1px solid var(--line); border-radius: 6px; padding: 3px 6px; }
+  .cmodm ol.mlog { list-style: none; margin: 4px 0 0; padding: 0; max-height: min(50vh, 420px); overflow: auto; font-size: 11px; line-height: 1.4; }
+  .cmodm ol.mlog li { padding: 2px 4px; border-bottom: 1px solid #ffffff0d; overflow-wrap: anywhere; }
+  .cmodm ol.mlog li.mlh, .cmodm ol.mlog li.mlw { color: var(--muted); }
   .cmodm button.mchip { border-color: var(--line); padding: 3px 7px; font-size: 11px; }
   .cmodm button:hover { background: #ffffff14; }
   .cmodm button.danger { color: #ff8080; }
@@ -1330,6 +1343,8 @@
     const pb = $('.postylebtn'); if (pb) { pb.textContent = '🖌 style…'; pb.hidden = !may; }  // (a normal user: the colour row already has everything; user 2026-11-02)
     styleAdmin();
     myNameStyle();
+    // (an admin's "mod log" in the profile panel: drawn again when that status changes)
+    try { const a = adminMe(); if (a !== spreadAdmin.wasAdmin) { spreadAdmin.wasAdmin = a; authShow(); } } catch (e) {}
   };
   // (my own name under the chat: the same glow / gradient everyone sees on my lines)
   function myNameStyle() {
@@ -1379,6 +1394,10 @@
     if (membOpen) membersShow(); };
   const ownerAcct = a => !!(a && ((ownAcct && key(a) === key(ownAcct)) || glowAccts.has(key(a))));
   const glowMe = () => ownerMe() || !!(irc.account && glowAccts.has(key(irc.account)));
+  // admins (owner rulings 2026-11-03): the site owner and the & rank (gaku): make / remove mods and read the mod log, besides
+  // the moderator's menu every operator has. (The bot decides: meltybot.mjs isAdmin; this only shows the buttons.)
+  const adminMe = () => !!irc.account && (ownerMe() || glowMe() ||
+    [...chans.values()].some(c => c.joined && [...(c.modes.get(key(irc.nick)) || [])].some(x => x === 'q' || x === 'a')));
   const styleOf = a => {
     const x = a && styles.get(key(a));
     if (!x) return null;
@@ -1658,12 +1677,19 @@
   window.mbaaPicker = { open: pickOpen, close: pickClose, el: pick };  // (the checks)
 
   // profile editor
+  // (the name this viewer shows as: signed in, the account's display name; else the guest nick. Called before the IRC
+  // state exists too, the first profShow: then the guest nick)
+  function myShown() {
+    try { return irc.account ? shownNick(irc.account, irc.account, auth.name) : prof.nick; } catch (e) { return prof.nick; }
+  }
   function profShow() {
     drawIcon($('.me'), prof.chara, prof.moon);
     $('.me').classList.toggle('unset', !validChara(prof.chara));
     $('.phint').hidden = validChara(prof.chara) && prof.moon >= 0;
-    const n = $('.mynick'); n.textContent = prof.nick; inkSet(n, prof.color);
-    $('#chatnick').value = prof.nick; $('#chatcolor').value = prof.color;
+    // (signed in, the name is the account's, never this device's guest nick: a colour / moon / character change drew
+    // "viewer1234" here, users 2026-11-03 "your name gets changed to viewer-####")
+    const n = $('.mynick'), mine = myShown(); n.textContent = mine === prof.nick ? mine : disp(mine); n.title = mine; inkSet(n, prof.color);
+    $('#chatnick').value = mine === prof.nick ? prof.nick : disp(mine); $('#chatcolor').value = prof.color;
     $('#chatcolor').classList.toggle('on', !PRESETS.some(c => c.toLowerCase() === String(prof.color).toLowerCase()));
     sec.querySelectorAll('.sw').forEach(b => b.classList.toggle('on', b.dataset.c.toLowerCase() === prof.color.toLowerCase()));
     sec.querySelectorAll('.moons canvas').forEach((c, m) => c.classList.toggle('on', m === prof.moon));
@@ -1697,8 +1723,9 @@
     if (irc.account) { e.target.value = disp(shownNick(irc.account, irc.account, auth.name)); sys('signed in: your name is your account (change it with "change name")'); return; }
     if (!NICK_RE.test(n)) { e.target.value = prof.nick; sys('nick: letters, digits, _ - [ ] { } | ^ ` (not starting with a digit or -), up to 24'); return; }
     if (!nameOk(n)) { e.target.value = prof.nick; sys('that nick is not allowed'); return; }
-    prof.nick = n; store.set('mbaa-chat-profile', prof); profShow();
+    prof.nick = n; prof.named = 1; store.set('mbaa-chat-profile', prof); profShow();
     if (irc.registered && n !== irc.nick) irc.send(`NICK ${n}`);
+    try { authShow(); } catch (e2) {}  // (the "set a name" prompt goes)
   };
   profShow();
 
@@ -3803,8 +3830,10 @@
   function shownNick(nick, account, tagName) {
     const mm = account && key(account) === key(nick) ? /^(.+)-(\d{4})[a-z]?$/.exec(nick) : null;
     if (!mm) return nick;
-    const t = /^(.{1,64})#(\d{4})$/.exec(tagName || '');
-    return t && t[2] === mm[2] && lookFold(safeName(t[1])) === lookFold(mm[1]) ? tagName : `${mm[1]}#${mm[2]}`;
+    // (the tag's name without a leading role symbol: "@OWNER_JUDA#8388" shows "OWNER_JUDA#8388"; the rank prefix is
+    // drawn from the channel modes alone)
+    const tn = stripRolePrefix(tagName || ''), t = /^(.{1,64})#(\d{4})$/.exec(tn);
+    return t && t[2] === mm[2] && lookFold(safeName(t[1])) === lookFold(mm[1]) ? tn : `${mm[1]}#${mm[2]}`;
   }
 
   // ---- the account's look on every device (signed in) ----
@@ -3889,7 +3918,7 @@
         Object.assign(auth, { state: 'unknown', token: null });
         if (irc.ws) irc.ws.close();  // (reconnects as a guest)
       };
-      menuFill([['edit profile', profEdit], ['change name', () => { auth.renaming = true; authShow(); }], ['sign out', signOut]],
+      menuFill([['edit profile', profEdit], ...(adminMe() ? [['mod log', () => modlogOpen($('.pbtns'))]] : []), ['change name', () => { auth.renaming = true; authShow(); }], ['sign out', signOut]],
         `signed in as ${rankPre(chan(GENERAL), irc.nick)}${disp(shownNick(irc.account, irc.account, auth.name))}${auth.provider ? ` (with ${auth.provider})` : ''}`);
       if (auth.renaming) nameForm('name', irc.account.replace(/-\d{4}[a-z]?$/, ''), 'rename');
     } else if (auth.state === 'name') {
@@ -3915,13 +3944,24 @@
       sign.append(a);
     }
     if (!signedIn) menuFill([['edit profile', profEdit]]);
+    // a guest on the random name: a light, dismissible prompt (the people list shows everyone's nick)
+    if (!signedIn && unnamed() && !prof.namePromptOff && auth.state !== 'denied' && auth.state !== 'name') {
+      const t = document.createElement('span'); t.className = 'cnamep';
+      const set = document.createElement('a'); set.href = '#'; set.textContent = 'set a name';
+      set.onclick = e => { e.preventDefault(); profEdit(); const i = $('#chatnick'); i.focus(); i.select(); };
+      const x = document.createElement('button'); x.type = 'button'; x.className = 'txt'; x.textContent = '✕'; x.title = 'keep this name'; x.setAttribute('aria-label', 'dismiss');
+      x.onclick = () => { prof.namePromptOff = 1; store.set('mbaa-chat-profile', prof); authShow(); };
+      t.append(`others see you as ${prof.nick} · `, set, auth.state === 'guest' ? ' (sign in to chat)' : '', ' ', x);
+      authEl.append(t);
+    }
     if (auth.err) { const e = document.createElement('span'); e.className = 'cerr'; e.textContent = auth.err; authEl.append(e); }
     authEl.hidden = !authEl.childElementCount;
     // a guest on a server with sign-in: no input (channels are +M); without sign-in (auth 'none'): as before
     formEl.hidden = !signedIn && auth.state !== 'none' && auth.state !== 'unknown';
     $('#chatnick').disabled = signedIn;
-    // (signed in, the name is the account: "change name" above renames it; a guest on a sign-in server cannot speak)
-    $('#chatnick').closest('.prow').hidden = signedIn || formEl.hidden;
+    // (signed in, the name is the account: "change name" above renames it; a guest names the nick the people list shows,
+    // speaking or not)
+    $('#chatnick').closest('.prow').hidden = signedIn;
     if (signedIn) {  // (the nick box shows the name, not the IRC nick "Name-1234"; renaming is "change name")
       const full = shownNick(irc.account, irc.account, auth.name);
       $('.mynick').textContent = disp(full); $('.mynick').title = full; $('#chatnick').value = disp(full);
@@ -3944,6 +3984,7 @@
       const name = i.value.trim();
       if (!name) return;
       if (!nameOk(name)) { auth.err = 'that name is not allowed'; authShow(); return; }
+      if (!roleNameOk(name)) { auth.err = 'a name cannot start with @ ~ & % + (they mark moderators) or an invisible character'; authShow(); return; }
       b.disabled = true;
       let r = null, j = {};
       try { r = await fetch(`${AUTH_URL}/${what}`, { method: 'POST', credentials: 'same-origin', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name }) }); j = await r.json().catch(() => ({})); } catch (e2) {}
@@ -4138,8 +4179,11 @@
           if (ch === '+' || ch === '-') { add = ch === '+'; continue; }
           if ('qaohv'.includes(ch)) {
             const nk = p[ai++] || '';
-            if ('qaoh'.includes(ch)) { if (add) c.ops.add(key(nk)); else c.ops.delete(key(nk)); if (key(nk) === key(irc.nick)) mine = true; }
-            { let md = c.modes.get(key(nk)); if (add) { if (!md) c.modes.set(key(nk), md = new Set()); md.add(ch); } else if (md) md.delete(ch); preRefresh(c, nk); }
+            let md = c.modes.get(key(nk)); if (add) { if (!md) c.modes.set(key(nk), md = new Set()); md.add(ch); } else if (md) md.delete(ch);
+            // (operator status: any of q / a / o / h still held. An admin's (gaku's) "+a" followed by the bot's "-o" (it keeps
+            // each rank to its one mode) took the menu away when "-o" cleared the flag alone, 2026-11-03)
+            if ('qaoh'.includes(ch)) { if (md && [...md].some(x => 'qaoh'.includes(x))) c.ops.add(key(nk)); else c.ops.delete(key(nk)); if (key(nk) === key(irc.nick)) mine = true; }
+            preRefresh(c, nk);
           } else if ('beIkf'.includes(ch) || (ch === 'l' && add)) ai++;
         }
         if (mine) spreadAdmin();
@@ -4255,6 +4299,8 @@
           if (key(m.nick) === key(BOT)) {  // (the bot: "opened #chan" -> join it now; anything else is for us to read)
             const o = /^opened (#\S+)$/.exec(text0);
             if (o) { const c = chans.get(key(o[1])); if (c && !c.joined) irc.send(`JOIN ${c.name}`); return; }
+            // (the mod log's lines go to its panel while it is open)
+            if (m.cmd === 'NOTICE' && text0.startsWith('modlog: ') && modlogTake(text0.slice(8))) return;
             // (the bot's answers to a moderator's commands, whois included: a private notice, shown to this viewer only)
             if (m.cmd === 'NOTICE') addLine(shown, { sys: true, bot: true, text: clean(text0), time: new Date() });
             return;
@@ -4299,9 +4345,11 @@
       case '404': case '473': case '474': case '475': case '477': case '482': sys(clean(p[p.length - 1] || 'refused')); return;
     }
   }
+  let namedHint = false;
   function say(text) {
     text = text.replace(/[\r\n]+/g, ' ').trim().slice(0, MAXLEN);
     if (!text) return;
+    if (!irc.account && unnamed() && !namedHint && !text.startsWith('/')) { namedHint = true; sys(`you are chatting as ${prof.nick}: pick a name with /nick <name> or in profile ▾`); }
     if (text.startsWith('/')) {
       const [cmd, ...rest] = text.slice(1).split(' '), arg = rest.join(' ').trim();
       if (/^me$/i.test(cmd) && arg) text = `\x01ACTION ${arg}\x01`;  // (CTCP ACTION: "* Name does something")
@@ -4691,13 +4739,15 @@
       row(button('kick from this channel', 'w', () => done(`kick ${who} ${c.name}`)));
       row(el('span', '', 'ban'), ...[['1d', '1 day'], ['1w', '1 week'], ['perm', 'permanently']].map(([d, t]) => button(d, 'mchip danger', () => confirmBan(d, t), `ban ${t}`)));
       row(button('whois (only you see it)', 'w', () => done(`whois ${who}`)));
-      // (the site owner: make / unmake a mod from here, the bot's "mod add|del <account>"; signed-in accounts only)
-      if (ownerMe() && l.acct) {
+      // (the site owner and admins: make / unmake a mod from here, the bot's "mod add|del <account>"; signed-in accounts
+      // only; the bot refuses it from a plain mod)
+      if (adminMe() && l.acct) {
         const isMod = c && c.ops.has(key(l.irc));
         row(isMod ? button('remove as mod', 'w', () => done(`mod del ${l.acct}`), 'no longer a moderator (every channel)')
                   : button('make mod', 'w', () => done(`mod add ${l.acct}`), 'a moderator: delete, mute, kick, ban, links that embed (every channel)'));
       }
       if (chan(GENERAL).ops.has(key(irc.nick))) row(button('edit the MOTD…', 'w', () => motdEdit(anchor), 'the #melty topic: the banner everyone sees'));
+      if (adminMe()) row(button(`mod log: ${name}…`, 'w', () => modlogOpen(anchor, l.acct || who), 'who did what to this user (owner and admins)'));
     }
     function confirmBan(d, t) {
       modm.replaceChildren();
@@ -4720,6 +4770,37 @@
     place();
   }
   function modClose() { modm.hidden = true; modFor = null; }
+  // the moderation log (owner and admins): "modlog <n> [name]" to the bot; its "modlog: ..." notices fill this panel
+  // (meltybot.mjs: deletes, filter strikes, mutes, kicks, bans, mod add / del, MOTD changes; who, whom, when)
+  let mlogList = null;
+  function modlogOpen(anchor, who) {
+    modFor = 'modlog';
+    const el = (tag, cls, text) => { const e = document.createElement(tag); if (cls) e.className = cls; if (text != null) e.textContent = text; return e; };
+    const box = el('div', 'mlogp');
+    const h = el('div', 'mh'); h.append(el('b', '', 'mod log'), el('small', '', 'who did what, newest last (UTC); the owner and admins only')); box.append(h);
+    const f = el('form', 'mr'), q = el('input'); q.type = 'text'; q.placeholder = 'name (empty: everyone)'; q.value = who || ''; q.spellcheck = false;
+    const go = el('button', 'mchip', 'show'); go.type = 'submit';
+    const cl = el('button', 'mchip', 'close'); cl.type = 'button'; cl.onclick = e => { e.stopPropagation(); modClose(); };
+    f.append(q, go, cl); box.append(f);
+    mlogList = el('ol', 'mlog'); box.append(mlogList);
+    const ask = () => { mlogList.replaceChildren(el('li', 'mlw', 'asking MeltyBot…')); const w = q.value.trim().replace(/^[~&@%+]+/, '').split(/\s+/)[0] || ''; toBot(`modlog 50${w ? ` ${w}` : ''}`); };
+    f.onsubmit = e => { e.preventDefault(); ask(); };
+    modm.replaceChildren(box);
+    modm.hidden = false;
+    const a = anchor.getBoundingClientRect(), m = modm.getBoundingClientRect();
+    modm.style.left = `${Math.max(8, Math.min(innerWidth - m.width - 8, a.right - m.width))}px`;
+    modm.style.top = `${a.bottom + 4 + m.height <= innerHeight - 8 ? a.bottom + 4 : Math.max(8, a.top - 4 - m.height)}px`;
+    ask();
+  }
+  function modlogTake(t) {
+    if (modFor !== 'modlog' || modm.hidden || !mlogList) return false;
+    const w = mlogList.querySelector('.mlw'); if (w) w.remove();
+    if (t === 'end') return true;
+    const li = document.createElement('li'); li.textContent = clean(t);
+    if (!/^\d{4}-/.test(t)) li.className = 'mlh';
+    mlogList.append(li); mlogList.scrollTop = mlogList.scrollHeight;
+    return true;
+  }
   // the MOTD editor: #melty's topic with bold / colours (mIRC codes, shown here as {b} {c4} … tokens), previewed; "set"
   // sends TOPIC (channel operators may: +t; Ergo keeps a registered channel's topic)
   function motdEdit(anchor) {
