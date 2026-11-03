@@ -1677,6 +1677,8 @@ async function startLive(id, match = null) {
   }
   // the same match again (a fallback start): the streaks go on from the session's where the bridge has none for the game
   // (its game over: not mid-battle of an older one)
+  // (on its first character select: no game to play yet; waits on the list until the first game loads)
+  if (info.css) { status('on character select: the match starts with its first game'); return liveRetry(id, match); }
   const prev = session;
   // (the same match: the host's next match on the same id has its own streaks)
   if (!info.streak && prev && prev.M && liveOurs(info, prev.liveSrc) && prev.streakKnown && prev.M.HEAP32[0x54EEE8 >> 2] !== 1)
@@ -2596,9 +2598,9 @@ async function liveListShow() {
     .map(m => [m, liveIdle(m) ? 1 : 0]).sort((a, b) => a[1] - b[1] || (b[0].viewers || 0) - (a[0].viewers || 0) || at(a[0]) - at(b[0])).map(x => x[0]);
   // FLIP: each kept row's place before the reorder, to slide it from there to its new place
   const before = new Map([...ol.children].map(li => [li, li.getBoundingClientRect().top]));
-  const idleTip = m => liveIdle(m) ? `idle: nothing played for ${Math.round(m.age / 60)} min (the host is still open)` : '';
+  const idleTip = m => liveIdle(m) ? `idle: nothing played for ${Math.round(m.age / 60)} min (the host is still open)` : m.css ? 'on character select' : '';
   const rows = l.map(m => {
-    const key = JSON.stringify([m.id, m.names, m.chara, m.moon, !!plArt]);
+    const key = JSON.stringify([m.id, m.names, m.chara, m.moon, !!plArt, !!m.css]);
     let li = old.get(key);
     if (li) {
       badge(li.querySelector('.lview'), m.viewers);
@@ -3376,7 +3378,7 @@ function nextCardShow(s, list, title) {
   if (!el) return false;
   // (the others: every live match but ours; the host's next match on our id is another match, and the likeliest next:
   // it has one of our players)
-  const L0 = s ? s.liveSrc : liveSrc, live = list.filter(m => !liveOurs(m, L0) && !liveGone(m));
+  const L0 = s ? s.liveSrc : liveSrc, live = list.filter(m => !liveOurs(m, L0) && !liveGone(m) && !m.css);
   const next = liveNextMatch(live, L0);
   // jump to live off: the card to pick from, no countdown (the page never moves to another match by itself)
   const auto = liveJump();
@@ -3413,7 +3415,7 @@ function nextCardShow(s, list, title) {
       if (session !== s || nextCard.s !== s || nextCard.id) return;
       const l = await liveList().catch(() => null);
       if (session !== s || nextCard.s !== s) return;
-      if (l && l.some(m => !liveOurs(m, L0) && !liveGone(m))) nextCardShow(s, l, title);
+      if (l && l.some(m => !liveOurs(m, L0) && !liveGone(m) && !m.css)) nextCardShow(s, l, title);
       else nextCard.timer = setTimeout(wait, 10000);
     };
     nextCard.timer = setTimeout(wait, 10000);
