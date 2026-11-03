@@ -2277,6 +2277,8 @@
     // the replay already playing: a seek (and the clip's range), no reload
     const same = sl.kind === 'rep' && ((sl.r && sl.r === Q.get('r')) || (sl.rep && sl.rep === Q.get('rep')));
     if (same && api.seek && api.frame && api.frame() != null) { api.seek(Math.max(1, sl.t || 1)); return; }
+    // a live match: the viewer switches in place (no reload: the sidebar and chat stay)
+    if (sl.kind === 'live' && api.liveGo && api.liveGo(sl.live)) return;
     location.assign(openUrl(sl));
   }
   // ---- link cards: the matchup (select icons, moons, names) and the clip; metadata fetched once per link, when its

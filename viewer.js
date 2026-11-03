@@ -3746,6 +3746,8 @@ window.__mbaaMisses = () => [...misses];  // tests (freed files the game opened 
 // live chat (web/shell/chat.js), only on the chat page: the Worker adds <meta name="mbaa-chat"> to it (a local test page:
 // ?chat=1 on 127.0.0.1 / localhost); chat.js draws its icons with the player block's art and follows the watched match
 window.mbaaChatApi = { art: playersArt, iconCell, chara: CHARA, liveId: () => session && session.liveSrc ? session.liveSrc.id : null,
+  // a chat link to a live match: switch in place (chat, radio and the engine stay), a history entry for Back
+  liveGo: id => { if (!/^[A-Za-z0-9_]{4,64}$/.test(id || '')) return false; if (session && session.liveSrc && session.liveSrc.id === id) return true; liveGo(id, true); return true; },
   // the watched live match for chat.js's per-match channel and comment timeline: the list entry (id, match key), the feed's
   // base, following live or not, the records fed (index -> .ccs record) and the stream frames still ahead of the picture
   // (ahead null: not fed yet, or mid-seek; null: no live match)
