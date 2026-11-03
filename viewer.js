@@ -431,7 +431,7 @@ function audioHooks(Module, s) {
   const running = () => !!actx && actx.state === 'running';
   const live = () => !HASH && running() && session === s && !s.mute;
   const seBuf = new Map();  // bundle path -> decode promise
-  const se = window.mbaaSeStats = { registered: 0, calls: 0, played: 0, decodeFailed: 0, stops: 0, params: 0, ctx: () => actx.state };
+  const se = window.mbaaSeStats = { registered: 0, ann: 0, calls: 0, played: 0, decodeFailed: 0, stops: 0, params: 0, ctx: () => actx.state };
   const voices = new Map();  // channel -> chain
   const chain = ch => { let v = voices.get(ch); if (!v) { v = dsVoiceChain(master); voices.set(ch, v); } return v; };
   const cut = v => { if (v.src) { try { v.src.stop(); } catch (e) {} v.src.disconnect(); v.src = null; } };
@@ -442,7 +442,12 @@ function audioHooks(Module, s) {
     const v = chain(ch);
     cut(v); apply(v, vol, pan);
     if (!live()) return;
-    let b = seBuf.get(path);
+    // (an announcer set from liveExtApi.announcer: its own line for this SE id, decoded once per set)
+    const am = liveExt.ann && /normal_se[\\/]se(\d{3})\.(wav|opus|ogg)$/i.exec(path), ab = am && liveExt.ann.files.get(+am[1]);
+    const key = ab ? `ann${liveExt.ann.n}:${am[1]}` : path;
+    let b = seBuf.get(key);
+    if (!b && ab) { b = actx.decodeAudioData(ab.slice().buffer); seBuf.set(key, b); }
+    if (ab) se.ann++;
     if (!b) {
       let bytes;
       try { bytes = Module.FS.readFile(path); } catch (e) { return; }
@@ -1545,7 +1550,7 @@ async function liveFetch(url, opt) {
 // module (tools/web/cc_live.mjs; set by the site owner only, tools/web/live_ext.mjs). The page imports it and calls its
 // default export with liveExtApi; what it returns (a function) is called when the feed stops naming it, or the page goes to
 // another match or a replay. The same value again does nothing; a late joiner gets it with its first answer.
-const liveExt = { id: null, v: '', off: null, seq: 0, music: null, stage: null, stageN: 0 };
+const liveExt = { id: null, v: '', off: null, seq: 0, music: null, stage: null, stageN: 0, ann: null, annN: 0 };
 const liveExtApi = {
   module: () => session && session.M,          // the game's Module (a new one per session: read it each time)
   liveId: () => (session && session.liveSrc ? session.liveSrc.id : null),
@@ -1565,6 +1570,15 @@ const liveExtApi = {
   },
   // the match card's stage in place of the match's while set: {name, view: image Blob | null, plate: image Blob | null} |
   // null (stageShow: the picture, the name plate, the name as its tooltip; the radio panel's "Match music" tile)
+  // announcer lines in place of the game's while set: {files: {seId: WAV bytes}} | null (only se/normal_se/SE<id>.wav that
+  // the set has; every other sound stays the game's); a token as music's
+  announcer(o, tok) {
+    if (!o && tok && (!liveExt.ann || liveExt.ann.n !== tok)) return null;
+    const files = new Map();
+    if (o && o.files) for (const [k, v] of Object.entries(o.files)) if (/^\d{1,3}$/.test(k) && v instanceof Uint8Array) files.set(+k, v);
+    liveExt.ann = files.size ? { n: ++liveExt.annN, files } : null;
+    return liveExt.ann ? liveExt.ann.n : null;
+  },
   stage(o, tok) {   // (a token as music's)
     if (!o && tok && (!liveExt.stage || liveExt.stage.n !== tok)) return null;
     liveExt.stage = o ? { n: ++liveExt.stageN, name: String(o.name || ''), view: o.view instanceof Blob ? o.view : null,
