@@ -1785,6 +1785,12 @@
     membersShow();
   }
   const clean = t => String(t).replace(/\x03\d{0,2}(,\d{1,2})?/g, '').replace(/[\x00-\x1f\x7f]/g, '');
+  // 4chan-style word filter (user 2026-11-03): "cuck" reads "neco" for everyone, the sender too ("hello fellow necos",
+  // "neco melty"); the server, the bot and the mod log keep what was typed. The root only (cucks -> necos, cucked ->
+  // necoed), case kept (CUCK -> NECO, Cuck -> Neco); look-alike letters and a spelled-out c u c k / c.u.c.k caught too.
+  const WF_ROOT = /c+[uúùûüμυ]+c*k+/giu, WF_SPACED = /\bc[\s._*-]+[uúùûüμυ][\s._*-]+c[\s._*-]+k\b/giu;
+  const wfCase = (m, w) => m === m.toUpperCase() && /[A-Z]/.test(m) ? w.toUpperCase() : /^[A-Z]/.test(m) ? w[0].toUpperCase() + w.slice(1) : w;
+  const wordFilter = t => String(t).replace(WF_SPACED, m => wfCase(m.replace(/[^A-Za-z]/g, ''), 'neco')).replace(WF_ROOT, m => wfCase(m, 'neco'));
   // at most MARKS_MAX combining marks in a row (real scripts stack 2 - 4; a Zalgo stack of dozens ran over the lines
   // round it and cost the layout; the picture's overlay keeps as many: glovCps)
   const MARKS_MAX = 5, marksCap = t => String(t).replace(/(\p{M}{5})\p{M}+/gu, '$1');
@@ -4341,6 +4347,7 @@
           if (!ac || !ac[1].trim()) return;
           action = true; text = ac[1];
         }
+        text = wordFilter(text);
         const t = m.tags, hist = !!(bt && /chathistory/.test(bt.type));
         if (!hist) typingGone(m.nick);
         const at = /^\d{1,9}\.\d{1,7}$/.test(t['+mbaa/at'] || '') ? t['+mbaa/at'].split('.').map(Number) : null;
@@ -4409,7 +4416,7 @@
     clearTimeout(typPauseT); typSent.state = 'done';  // (a message ends typing: receivers clear it on the line)
     if (!irc.caps.has('echo-message')) {
       const action = text.startsWith('\x01ACTION ');
-      addLine(shown, { nick: shownNick(irc.nick, irc.account, auth.name), irc: irc.nick, acct: irc.account, reply: rp ? rp.msgid : null, text: action ? text.slice(8, -1) : text, action, self: true, time: new Date(),
+      addLine(shown, { nick: shownNick(irc.nick, irc.account, auth.name), irc: irc.nick, acct: irc.account, reply: rp ? rp.msgid : null, text: wordFilter(action ? text.slice(8, -1) : text), action, self: true, time: new Date(),
                        color: prof.color, chara: prof.chara, moon: prof.moon, cmd, at });
     }
   }
