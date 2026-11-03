@@ -1788,7 +1788,11 @@
   // 4chan-style word filter (user 2026-11-03): "cuck" reads "neco" for everyone, the sender too ("hello fellow necos",
   // "neco melty"); the server, the bot and the mod log keep what was typed. The root only (cucks -> necos, cucked ->
   // necoed), case kept (CUCK -> NECO, Cuck -> Neco); look-alike letters and a spelled-out c u c k / c.u.c.k caught too.
-  const WF_ROOT = /c+[uúùûüμυ]+c*k+/giu, WF_SPACED = /\bc[\s._*-]+[uúùûüμυ][\s._*-]+c[\s._*-]+k\b/giu;
+  // (spelled with anything between its letters, "c u ck", "c.u.c.k", "cu-ck", zero-width marks: from a word start only,
+  // so "magic uk" stays; run together, anywhere. User 2026-11-03: "they're getting around the word filter")
+  const WF_C = '[cçćč]', WF_U = '[uúùûüūμυ]', WF_SEP = '[\\W_]*';
+  const WF_ROOT = new RegExp(`${WF_C}+${WF_U}+${WF_C}*k+`, 'giu');
+  const WF_SPACED = new RegExp(`(?<![\\p{L}\\p{N}])${WF_C}${WF_SEP}${WF_U}+${WF_SEP}${WF_C}${WF_SEP}k+`, 'giu');  // (spaced: the second c needed, "c u k" (see you, k) stays)
   const wfCase = (m, w) => m === m.toUpperCase() && /[A-Z]/.test(m) ? w.toUpperCase() : /^[A-Z]/.test(m) ? w[0].toUpperCase() + w.slice(1) : w;
   const wordFilter = t => String(t).replace(WF_SPACED, m => wfCase(m.replace(/[^A-Za-z]/g, ''), 'neco')).replace(WF_ROOT, m => wfCase(m, 'neco'));
   // at most MARKS_MAX combining marks in a row (real scripts stack 2 - 4; a Zalgo stack of dozens ran over the lines
