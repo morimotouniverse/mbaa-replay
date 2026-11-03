@@ -3946,8 +3946,8 @@
     try {
       const r = await fetch(`${AUTH_URL}/token`, { cache: 'no-store', credentials: 'same-origin' });
       const j = [200, 401, 403, 409].includes(r.status) ? await r.json().catch(() => ({})) : null;
-      if (r.status === 200 && j && j.token) { Object.assign(auth, { state: 'signed', token: j.token, name: j.name || null, provider: j.provider || null }); extProbe(); }
-      else if (r.status === 401 && j && j.signin) Object.assign(auth, { state: 'guest', token: null, signin: j.signin, provider: j.provider || null });
+      if (r.status === 200 && j && j.token) { Object.assign(auth, { state: 'signed', token: j.token, name: j.name || null, provider: j.provider || null, wasSigned: true }); extProbe(); }
+      else if (r.status === 401 && j && j.signin) Object.assign(auth, { state: 'guest', token: null, signin: j.signin, provider: j.provider || null, wasSigned: false });
       else if (r.status === 409 && j && j.need === 'name') Object.assign(auth, { state: 'name', token: null, suggest: j.suggest || '' });
       else if (r.status === 403 && j && j.denied) Object.assign(auth, { state: 'denied', token: null });
       else Object.assign(auth, { state: 'none', token: null });
@@ -3963,7 +3963,7 @@
       // (the profile line's ▾ menu: edit profile, change name, sign out)
       const signOut = async () => {
         try { await fetch(`${AUTH_URL}/logout`, { method: 'POST', credentials: 'same-origin' }); } catch (e) {}
-        Object.assign(auth, { state: 'unknown', token: null });
+        Object.assign(auth, { state: 'unknown', token: null, wasSigned: false });
         if (irc.ws) irc.ws.close();  // (reconnects as a guest)
       };
       menuFill([['edit profile', profEdit], ...(adminMe() ? [['mod log', () => modlogOpen($('.pbtns'))]] : []), ['change name', () => { auth.renaming = true; authShow(); }], ['sign out', signOut]],
@@ -4094,7 +4094,13 @@
   }
   function later() { const d = Math.min(30000, 1500 * 2 ** irc.retry++); setTimeout(start, d + Math.random() * 1000); }
   // each connection: a fresh sign-in token first (short-lived), then the socket
-  async function start() { await authFetch(); connect(); }
+  // (a signed-in viewer whose token request failed, the network not back yet after a phone left the page or the site
+  // busy, waits and asks again: it connected as a guest before, "it unregistered me", user 2026-11-03)
+  async function start() {
+    await authFetch();
+    if (auth.state === 'none' && auth.wasSigned) { state('reconnecting'); return later(); }
+    connect();
+  }
   // a channel's latest lines (as many as one request returns; histFill pages back for HISTORY real ones)
   function histLatest(c) { c.fill = { real: 0, pages: 0 }; irc.send(`CHATHISTORY LATEST ${c.name} * ${PAGE}`); }
   function join(name) { const c = chan(name); if (irc.registered && !c.joined) irc.send(`JOIN ${name}`); }

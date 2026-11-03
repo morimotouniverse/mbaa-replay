@@ -348,7 +348,7 @@ function fsPut(FS, path, d) {
 }
 
 // ---- audio (WebAudio, shared by sessions) ----
-let actx, master, outGain, musicGain;
+let actx, master, outGain, musicGain, sfxGain;
 // Browsers start an AudioContext only after the page got a click or key press (one made earlier stays suspended, with a
 // console warning); a replay opened from a link has had neither. So the context is made on the first gesture: until then
 // the page shows #sound, the sessions keep the game's BGM requests (s.bgmLog) and play nothing, and once audio runs the
@@ -365,7 +365,8 @@ function ensureAudio(inGesture = false) {
   actx = new AudioContext();
   master = actx.createGain();  // the game's mix at CE level; video export records from here
   outGain = actx.createGain(); outGain.gain.value = volGain();
-  musicGain = actx.createGain(); musicGain.gain.value = ui.music ? 1 : 0; musicGain.connect(master);  // the BGM (music toggle)
+  musicGain = actx.createGain(); musicGain.gain.value = musicLevel(); musicGain.connect(master);  // the BGM and the radio (music toggle, music level)
+  sfxGain = actx.createGain(); sfxGain.gain.value = sfxLevel(); sfxGain.connect(master);  // the game's sounds: hits, voices, announcer (effects level)
   master.connect(outGain); outGain.connect(actx.destination);
   const btn = document.getElementById('sound');
   const show = () => { btn.hidden = actx.state === 'running'; };
@@ -448,7 +449,7 @@ function audioHooks(Module, s) {
   };
   const seDrop = k => { const x = seBuf.get(k); if (x) { seBuf.delete(k); se.bytes -= x.bytes; } };
   const voices = new Map();  // channel -> chain
-  const chain = ch => { let v = voices.get(ch); if (!v) { v = dsVoiceChain(master); voices.set(ch, v); } return v; };
+  const chain = ch => { let v = voices.get(ch); if (!v) { v = dsVoiceChain(sfxGain); voices.set(ch, v); } return v; };
   const cut = v => { if (v.src) { try { v.src.stop(); } catch (e) {} v.src.disconnect(); v.src = null; } };
   const apply = (v, vol, pan) => { v.vol = vol; v.pan = pan; v.g.gain.value = dsGain(vol); dsSetPan(v, pan); };
   Module.mbaaVoicePlay = (ch, path, vol, pan) => {
@@ -4021,7 +4022,7 @@ function controls() {
   musicEl.onchange = () => {
     ui.music = musicEl.checked; musicEl.blur();
     try { localStorage.setItem('mbaaMusic', ui.music ? '1' : '0'); } catch (e) {}
-    if (musicGain) musicGain.gain.value = ui.music ? 1 : 0;
+    if (musicGain) musicGain.gain.value = musicLevel();
   };
   const namesEl = document.getElementById('names');
   namesEl.checked = ui.names;
@@ -4451,6 +4452,51 @@ function toggleLoop() {
   if (s && s.clip) status(loopOn ? `looping ${fmtTime(s.clip.a)} – ${fmtTime(s.clip.b)}` : 'playing');
 }
 let unmuted = 100;
+// Music and effects levels (user 2026-11-03: "change sfx/music independently ... really use it as melty radio"): two
+// sliders in a popover by the volume (#mixb), under the main volume; remembered. Music = the game's BGM and the radio,
+// effects = every game sound (hits, voices, the announcer). "music only" = effects 0, music 100.
+const mix = { music: 100, sfx: 100 };
+try { const m = JSON.parse(localStorage.getItem('mbaaMix') || 'null'); if (m) { mix.music = +m.music; mix.sfx = +m.sfx; } } catch (e) {}
+for (const k of ['music', 'sfx']) if (!(mix[k] >= 0 && mix[k] <= 100)) mix[k] = 100;
+const lv = n => Math.pow(n / 100, 2);
+function musicLevel() { return ui.music ? lv(mix.music) : 0; }
+function sfxLevel() { return lv(mix.sfx); }
+function mixInit() {
+  const b = document.getElementById('mixb'), pop = document.getElementById('mixpop');
+  if (!b || !pop) return;
+  const mu = document.getElementById('mixmusic'), sx = document.getElementById('mixsfx'), radio = document.getElementById('mixradio');
+  const show = () => {
+    mu.value = mix.music; sx.value = mix.sfx;
+    document.getElementById('mixmusicv').textContent = mix.music; document.getElementById('mixsfxv').textContent = mix.sfx;
+    for (const r of [mu, sx]) r.style.setProperty('--p', `${r.value}%`);
+    radio.classList.toggle('on', mix.sfx === 0 && mix.music > 0);
+    if (musicGain) musicGain.gain.value = musicLevel();
+    if (sfxGain) sfxGain.gain.value = sfxLevel();
+    try { localStorage.setItem('mbaaMix', JSON.stringify(mix)); } catch (e) {}
+  };
+  mu.oninput = () => { mix.music = +mu.value; show(); };
+  sx.oninput = () => { mix.sfx = +sx.value; show(); };
+  radio.onclick = e => {
+    e.stopPropagation();
+    mix.sfx = 0; if (!mix.music) mix.music = 100;
+    // (the music chip off would leave nothing: on with it)
+    const me = document.getElementById('music'); if (me && !me.checked) { me.checked = true; me.dispatchEvent(new Event('change')); }
+    show();
+  };
+  document.getElementById('mixreset').onclick = e => { e.stopPropagation(); mix.music = 100; mix.sfx = 100; show(); };
+  const place = () => {
+    const r = b.getBoundingClientRect(), w = pop.offsetWidth || 240, h = pop.offsetHeight || 120;
+    pop.style.left = `${Math.max(8, Math.min(innerWidth - w - 8, r.right - w))}px`;
+    pop.style.top = `${r.top - h - 8 >= 8 ? r.top - h - 8 : r.bottom + 8}px`;
+  };
+  const open = on => { pop.hidden = !on; b.setAttribute('aria-expanded', String(on)); if (on) place(); };
+  b.onclick = e => { e.stopPropagation(); b.blur(); open(pop.hidden); };
+  pop.addEventListener('click', e => e.stopPropagation());
+  document.addEventListener('click', () => { if (!pop.hidden) open(false); });
+  addEventListener('resize', () => { if (!pop.hidden) place(); });
+  addEventListener('keydown', e => { if (e.key === 'Escape' && !pop.hidden) open(false); });
+  show();
+}
 function toggleMute() {
   const vol = document.getElementById('vol');
   if (+vol.value > 0) { unmuted = +vol.value; vol.value = 0; } else vol.value = unmuted || 100;
@@ -5276,7 +5322,7 @@ function placeControls(mob) {
     }
     sizeRow.append(segL, seg);
     pop.append(sizeRow);
-    for (const [el, to, before] of [[byId('mute'), tr, setb], [byId('vol'), tr, setb], [byId('speed'), tr, setb],
+    for (const [el, to, before] of [[byId('mute'), tr, setb], [byId('vol'), tr, setb], [byId('mixb'), tr, setb], [byId('speed'), tr, setb],
                                     [byId('pip'), tr, null], [byId('full'), tr, null], [byId('helpb'), tr, null],
                                     [chips, pop, sizeRow], [byId('scale'), sizeRow, null], [byId('clipgrp'), tclip, null]]) {
       if (!el) continue;
@@ -5291,7 +5337,7 @@ function placeControls(mob) {
   // (#mvolgrp, before fullscreen), not only in the menu
   const mvg = document.getElementById('mvolgrp');
   for (const m of MOVED) {
-    if (mob && mvg && (m.el.id === 'mute' || m.el.id === 'vol')) { if (m.el.parentNode !== mvg) mvg.append(m.el); }
+    if (mob && mvg && (m.el.id === 'mute' || m.el.id === 'vol' || m.el.id === 'mixb')) { if (m.el.parentNode !== mvg) mvg.append(m.el); }
     else if (mob) { if (m.el.previousSibling !== m.mark) m.mark.after(m.el); }
     else if (m.el.parentNode !== m.to) m.before ? m.to.insertBefore(m.el, m.before) : m.to.append(m.el);
   }
@@ -5435,7 +5481,7 @@ async function main() {
   };
   document.body.ondragover = e => e.preventDefault();
   document.body.ondrop = e => { e.preventDefault(); loadPlaylist(repFiles(e.dataTransfer.files)); };
-  controls(); volInit();
+  controls(); volInit(); mixInit();
   for (const key of ['boxes', 'inputs']) if (Q.get(key) === '1') { const el = document.getElementById(key); el.checked = true; el.onchange(); }
   // ?r=<id>: a shared replay in the replay store (tools/web/replay_worker.js); ?rep=<url>: any replay URL
   const rq = Q.get('r') || '';
