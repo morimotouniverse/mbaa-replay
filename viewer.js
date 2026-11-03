@@ -2201,6 +2201,7 @@ function radioTrack(f) {
 let radioPick = '';
 let radioLiveId = null;  // (the live match the pick was made on: it lasts for that match's sessions; start)
 let xfStagePending = false;  // (a pick's stage swap to crossfade: radioStageSync)
+let xfYieldPending = false;  // (a pick's or a clear's swap with a live extension's page-drawn stage, to fade: radioStageSync)
 // floatsis (user 2026-11-01): the music chosen apart from the stage. '' the stage's (the radio pick's track, else the
 // match's own), 'match' the match's own whatever the pick, or a track (as radioTrack). Kept like the pick: a replay's
 // for that replay, a live match's for its whole live match (musicLiveId; start).
@@ -2255,7 +2256,7 @@ try { radioStageFollow = localStorage.getItem('mbaaRadioStage') !== '0'; } catch
     radioStageFollow = cb.checked;
     try { localStorage.setItem('mbaaRadioStage', radioStageFollow ? '1' : '0'); } catch (e) {}
     stageKey = '';
-    xfStagePending = true;
+    xfStagePending = xfYieldPending = true;
     radioStageSync(session);
     if (ui.paused && session && session.tl) requestSeek(curFrame());  // (paused: the frame drawn again, with its stage)
   };
@@ -2273,7 +2274,7 @@ async function radioSet(f, stageOnly = 0) {
                 stages: stageOnly ? [stageOnly] : t.stages || null } : null;  // (a chat ^stage chip: that stage, not the track's first)
   if (session && session.radioChanged) session.radioChanged();
   stageKey = '';
-  xfStagePending = true;
+  xfStagePending = xfYieldPending = true;
   radioStageSync(session);
   if (ui.paused && session && session.tl) requestSeek(curFrame());  // (paused: the frame drawn again, with its stage)
 }
@@ -2390,13 +2391,21 @@ function radioFilesIn(s, id) {
   for (const p of files) radioPut(s, p);
   return true;
 }
+// (the viewer's own radio pick names a stage: an older game's stage track, or an MBAACC track's stage, the match's own
+// included)
+const radioPickHasStage = () => !!(radio && radioStageFollow && !HASH && (radio.dat || (radio.stages && radio.stages.length)));
 function radioStageSync(s) {
   const M = s && s.M;
   if (!M || !M._viewer_radio_stage_id || s.glLost) return;
-  // a private page's own stage file (window.mbaaStageOverride() -> {dat, lights, data}: a bgmake file the page holds,
-  // put into MEMFS at /game/<dat>); it takes the radio's place while it returns one
+  // this viewer's own stage pick on the radio (a track with a stage, the stage following it) wins on this screen over a
+  // live match's extension's stage (user 2026-11-03: a pick under a forced 3D stage showed the match's real stage, not
+  // the pick): an override told so (its second argument, {own: true}) returns none, and a page-drawn stage gives way
+  // (Module.__bgExtYield, below); cleared, the extension's stage is back
+  const own = radioPickHasStage();
+  // a private page's own stage file (window.mbaaStageOverride(s, {own}) -> {dat, lights, data}: a bgmake file the page
+  // holds, put into MEMFS at /game/<dat>); it takes the radio's place while it returns one
   let ov = null;
-  try { ov = window.mbaaStageOverride ? window.mbaaStageOverride(s) : null; } catch (e) {}
+  try { ov = window.mbaaStageOverride ? window.mbaaStageOverride(s, { own }) : null; } catch (e) {}
   if (ov && ov.data && memfsSize(M, ov.dat) !== ov.data.length) fsPut(M.FS, '/game/' + ov.dat, ov.data);
   const st = ov && ov.data ? ov : radio && radio.dat && !HASH && radioStageFollow ? radio : null;
   // an MBAACC track: its stage (the match's own when it is one of the track's: nothing to swap)
@@ -2407,6 +2416,19 @@ function radioStageSync(s) {
   }
   if (radio) radio.stageNow = stage;
   const want = st ? radioDatId(st.dat) : stage ? radioDatId(`stage:${stage}`) : 0;
+  // (the page-drawn stage (Module.__bgExt, d3d9_gl.cpp) gives way once the pick's stage is in the game and its swap's
+  // crossfade is over, so the stage the pick replaced, hidden under the page's until then, never shows between; back at
+  // once when the pick is cleared. The cut is the page's picture faded, as a stage swap's with no draw slot of its own)
+  const ph = M._viewer_radio_stage_phase ? Math.floor(M._viewer_radio_stage_phase() / 10000) : 0;
+  const yld = own && M._viewer_radio_stage_in() === want && ph !== 1 && ph !== 2 ? 1 : 0;
+  // (faded only for a pick or a clear made just now, xfYieldPending: a keyframe restore swapping the pick's stage in again
+  // cuts as it would without an extension)
+  if ((M.__bgExtYield | 0) !== yld) {
+    if (xfYieldPending && M.__bgExt && M.__bgExtOn && M.HEAP32[0x54EEE8 >> 2] === 1) xfGrab(() => true);
+    M.__bgExtYield = yld;
+  }
+  if (M.__bgExtYield === undefined) M.__bgExtYield = 0;
+  if (M._viewer_radio_stage_id() === want && (M.__bgExtYield | 0) === yld && (!own || yld)) xfYieldPending = false;
   if (!want && M._viewer_radio_stage_in()) radioOwnStage(s);
   if (M._viewer_radio_stage_id() === want) { xfStagePending = false; return; }
   // (a pick's stage swap: crossfaded once it is sent; a keyframe restore sending it again is not)
@@ -2481,7 +2503,8 @@ async function stageShow(s) {
     a.title = 'Raito’s upload of this song on YouTube'; a.setAttribute('aria-label', a.title);
     document.getElementById('trk').append(a);
   }
-  if (liveExt.stage) {  // a live match's extension's stage (liveExtApi.stage): its picture and plate over the match's
+  if (liveExt.stage && !radioPickHasStage()) {  // a live match's extension's stage (liveExtApi.stage): its picture and plate over the match's
+    // (not while this viewer's own radio stage pick is on: that stage is the one on screen, radioStageSync)
     const X = liveExt.stage;
     for (const k of ['view', 'name']) {
       const img = box.querySelector('.' + k), b = k === 'view' ? X.view : X.plate, old = img.dataset.src || '';
@@ -4168,7 +4191,7 @@ async function start(file, quiet = false, liveId = null) {
   if (radioPick && !(liveId && radioLiveId === liveId)) radioSet('');
   if (liveExt.id && liveExt.id !== 'local' && liveExt.id !== liveId) liveExtSet(null, '');  // (a match's extension is that match's only)
   if (musicPick && !(liveId && musicLiveId === liveId)) musicSet('');
-  xfStagePending = false;  // (the session's start has its own fade)
+  xfStagePending = xfYieldPending = false;  // (the session's start has its own fade)
   if (ensureAudio()) actx.resume();  // (after a drop or file pick: the page has had its gesture)
   const rep = new Uint8Array(await file.arrayBuffer());
   let keys, want;
