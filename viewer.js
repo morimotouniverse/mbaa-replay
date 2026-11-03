@@ -1614,7 +1614,7 @@ async function liveExtSet(id, v) {
 }
 // the live match last asked for (startLive): a retry, or a start still waiting on the network, of another one does
 // nothing (was: a pending retry of the match the page had just left started it again: the page went back to it)
-let liveWant = null;
+let liveWant = null, liveCss = null;
 function liveRetry(id, match) {  // startLive could not reach the feed: again, unless a replay or another match was opened meanwhile
   if (session && !session.liveSrc) return;
   setTimeout(() => { if ((!session || session.liveSrc) && liveWant === id) startLive(id, match); }, Math.max(2000, liveNet.delay()));
@@ -1680,7 +1680,10 @@ async function startLive(id, match = null) {
   // the same match again (a fallback start): the streaks go on from the session's where the bridge has none for the game
   // (its game over: not mid-battle of an older one)
   // (on its first character select: no game to play yet; waits on the list until the first game loads)
-  if (info.css) { status('on character select: the match starts with its first game'); return liveRetry(id, match); }
+  // (liveCss: the match key on its character select, for chat's channel: the session still on screen is the host's match
+  // before, and its key showed that match's old chat, user 2026-11-03)
+  if (info.css) { liveCss = { id, match: info.match || null }; status('on character select: the match starts with its first game'); return liveRetry(id, match); }
+  liveCss = null;
   const prev = session;
   // (the same match: the host's next match on the same id has its own streaks)
   if (!info.streak && prev && prev.M && liveOurs(info, prev.liveSrc) && prev.streakKnown && prev.M.HEAP32[0x54EEE8 >> 2] !== 1)
@@ -3649,6 +3652,8 @@ window.mbaaChatApi = { art: playersArt, iconCell, chara: CHARA, liveId: () => se
   // the watched live match for chat.js's per-match channel and comment timeline: the list entry (id, match key), the feed's
   // base, following live or not, the records fed (index -> .ccs record) and the stream frames still ahead of the picture
   // (ahead null: not fed yet, or mid-seek; null: no live match)
+  // (a match on its first character select: {id, match} while the page waits on it; null otherwise)
+  liveCss: () => (liveCss && liveCss.id === liveWant ? liveCss : null),
   live: () => { const s = session, L = s && s.liveSrc;
     return L && s.M ? { info: L.info, base: LIVE, follow: !!s.liveFollow, recs: L.recs || null,
                         ahead: L.recs && !s.seeking ? call(s, 'viewer_spectate_buffered') : null } : null; },

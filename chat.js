@@ -4895,15 +4895,19 @@
   let matchPer = false, noneSince = 0;  // matchPer: the channel is the session's own (its history is the match's)
   setInterval(() => {
     const lv = api.live ? api.live() : null, info = lv && lv.info;
-    const id = info ? info.id : api.liveId();
-    const want = info && info.match ? `#m-${safe(info.match)}` : id ? `#m-${safe(id)}` : null;
+    // (the match on its character select first: the session on screen is still the host's match before; and never the
+    // live id's own channel: the id is the host's, kept across its matches, and that channel held old matches' lines,
+    // user 2026-11-03)
+    const css = api.liveCss ? api.liveCss() : null;
+    const mk = css ? css.match : info && info.match;
+    const want = mk ? `#m-${safe(mk)}` : null;
     if (!want && matchChan) { if (!noneSince) noneSince = Date.now(); if (Date.now() - noneSince < LEAVE_MS) return; }
     noneSince = 0;
     if (want === matchChan) return;
     const onMatch = !!matchChan && key(shown) === key(matchChan);
     if (matchChan && irc.registered) { irc.send(`PART ${matchChan}`); chan(matchChan).joined = false; }
     if (matchChan) chans.delete(key(matchChan));
-    matchChan = want; matchPer = !!(info && info.match);
+    matchChan = want; matchPer = !!want;
     tlReset(want);
     // (#melty is never touched: its lines stay, and a viewer on it stays on it; the match tab follows the match)
     if (want) { join(want); if (onMatch || tabPref === 'match') shown = want; } else shown = GENERAL;
