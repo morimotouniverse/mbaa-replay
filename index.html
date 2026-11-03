@@ -469,6 +469,12 @@
     box-sizing: border-box; padding: 16px 22px 14px; border-radius: 14px; background: #0d0b16ee; border: 2px solid var(--accent);
     color: #fff; text-align: center; pointer-events: none; box-shadow: 0 10px 40px #000c; }
   #catchup[hidden], #ffbadge[hidden] { display: none; }
+  /* picture in picture open: the page's own picture covered (the window plays the match; viewer.js pipCover) */
+  #pipcover { position: absolute; inset: 0; z-index: 8; display: flex; flex-direction: column; align-items: center; justify-content: center;
+    gap: 14px; background: #0d0b16; color: #fff; text-align: center; }
+  #pipcover[hidden] { display: none; }
+  #pipcover .pc-t { font-size: 20px; font-weight: 800; letter-spacing: .02em; }
+  #pipcover button { padding: 8px 16px; border-radius: 999px; border: 1px solid var(--accent); background: #ffffff10; color: #fff; font: inherit; cursor: pointer; }
   /* the next live match after this one ends (viewer.js nextCard): its countdown, Go now / Stay, the other live matches */
   #nextcard { position: absolute; left: 50%; bottom: 6%; transform: translateX(-50%); z-index: 7; width: min(460px, 90%);
     box-sizing: border-box; padding: 12px 14px; border-radius: 14px; background: linear-gradient(#17131fef, #0d0b16f4);
@@ -686,6 +692,7 @@
   <div class="banner" id="banner0" hidden><span></span></div><div class="banner" id="banner1" hidden><span></span></div>
   <div id="livenotice" role="status" aria-live="polite" hidden></div>
   <div id="catchup" role="status" hidden><div class="cu-t">Catching up to live</div><div class="cu-s"></div><div class="cu-bar"><i></i></div></div>
+  <div id="pipcover" hidden><div class="pc-t"><i class="i i-pip"></i> Playing in picture-in-picture</div><button id="pipback">Bring it back here</button></div>
   <div id="ffbadge" hidden>&#9193; 2&times; catching up</div>
   <button id="fsoffer" hidden>&#x26F6; Fullscreen</button>
   <div id="nextcard" role="dialog" aria-label="Next live match" hidden>
@@ -877,6 +884,6 @@
 </div>
 <script src="mbaa.js?v=358a34752237"></script>
 <script src="bgm_stream.js?v=407ac29e5c89"></script>
-<script src="viewer.js?v=c23c62dc2abd"></script>
+<script src="viewer.js?v=2c00b8171104"></script>
 </body>
 </html>

@@ -430,8 +430,23 @@ function audioHooks(Module, s) {
   ensureAudio();
   const running = () => !!actx && actx.state === 'running';
   const live = () => !HASH && running() && session === s && !s.mute;
-  const seBuf = new Map();  // bundle path -> decode promise
-  const se = window.mbaaSeStats = { registered: 0, ann: 0, calls: 0, played: 0, decodeFailed: 0, stops: 0, params: 0, ctx: () => actx.state };
+  // bundle path (an announcer's line: ann<set>:<id>) -> {p: decode promise, bytes}, least recently played first. Decoded
+  // sounds are PCM (48 kHz float: ~0.4 MB a second of a stereo line), and a live session lasts a whole set: every voice line
+  // of every character it saw stayed decoded (and every announcer set's lines). Kept to SE_BUDGET bytes; one evicted is
+  // decoded again when it plays next (a few ms, off the game's thread)
+  const seBuf = new Map();
+  const SE_BUDGET = (LOWMEM ? 24 : 96) * 1e6;
+  let seAnnN = 0;
+  const se = window.mbaaSeStats = { registered: 0, ann: 0, calls: 0, played: 0, decodeFailed: 0, stops: 0, params: 0, bytes: 0, evicted: 0, ctx: () => actx.state };
+  const seKeep = (key, e) => {  // (a decode settled: its bytes counted, the oldest dropped past the budget)
+    if (seBuf.get(key) !== e) return;
+    se.bytes += e.bytes;
+    for (const [k, x] of seBuf) {
+      if (se.bytes <= SE_BUDGET || k === key) break;
+      seBuf.delete(k); se.bytes -= x.bytes; se.evicted++;
+    }
+  };
+  const seDrop = k => { const x = seBuf.get(k); if (x) { seBuf.delete(k); se.bytes -= x.bytes; } };
   const voices = new Map();  // channel -> chain
   const chain = ch => { let v = voices.get(ch); if (!v) { v = dsVoiceChain(master); voices.set(ch, v); } return v; };
   const cut = v => { if (v.src) { try { v.src.stop(); } catch (e) {} v.src.disconnect(); v.src = null; } };
@@ -443,17 +458,24 @@ function audioHooks(Module, s) {
     cut(v); apply(v, vol, pan);
     if (!live()) return;
     // (an announcer set from liveExtApi.announcer: its own line for this SE id, decoded once per set)
-    const am = liveExt.ann && /normal_se[\\/]se(\d{3})\.(wav|opus|ogg)$/i.exec(path), ab = am && liveExt.ann.files.get(+am[1]);
-    const key = ab ? `ann${liveExt.ann.n}:${am[1]}` : path;
-    let b = seBuf.get(key);
-    if (!b && ab) { b = actx.decodeAudioData(ab.slice().buffer); seBuf.set(key, b); }
-    if (ab) se.ann++;
-    if (!b) {
-      let bytes;
-      try { bytes = Module.FS.readFile(path); } catch (e) { return; }
-      b = actx.decodeAudioData(bytes.slice().buffer);
-      seBuf.set(path, b); se.registered++;
+    const A = liveExt.ann;
+    const am = A && /normal_se[\\/]se(\d{3})\.(wav|opus|ogg)$/i.exec(path), ab = am && A.files.get(+am[1]);
+    const key = ab ? `ann${A.n}:${am[1]}` : path;
+    // (another announcer set, or none: the last one's lines go)
+    const annN = A ? A.n : 0;
+    if (annN !== seAnnN) { seAnnN = annN; for (const k of [...seBuf.keys()]) if (k.startsWith('ann')) seDrop(k); }
+    let e = seBuf.get(key);
+    if (e) { seBuf.delete(key); seBuf.set(key, e); }  // (most recently played: last)
+    else {
+      let bytes = ab;
+      if (!bytes) { try { bytes = Module.FS.readFile(path); } catch (err) { return; } se.registered++; }
+      e = { p: actx.decodeAudioData(bytes.slice().buffer), bytes: 0 };
+      seBuf.set(key, e);
+      const ent = e;
+      e.p.then(buf => { ent.bytes = buf.length * buf.numberOfChannels * 4; seKeep(key, ent); }, () => {});
     }
+    if (ab) se.ann++;
+    const b = e.p;
     const n = actx.createBufferSource();
     v.src = n;  // claimed now: a Stop or a later Play before the decode resolves cancels it
     b.then(buf => { if (v.src !== n || !live()) return; n.buffer = buf; n.connect(v.g); n.start(); se.played++; },
@@ -608,6 +630,25 @@ function bgmParsed(p) {
   if (!bgmParsedMap.has(p)) { const d = cache.get(p); if (!d) return null; bgmParsedMap.set(p, oggOpusParse(d)); }
   return bgmParsedMap.get(p);
 }
+// A game file out of the page's cache, with its parsed / decoded BGM: a parsed track's packets are views into the file's
+// bytes, so the parse kept every track ever played (and a live extension's replaced music) alive after the cache let go
+function cacheDrop(p) { cache.delete(p); bgmDecoded.delete(p); bgmParsedMap.delete(p); }
+// the files held for the viewer's own picks (the radio's track and stage, the music pick, a live extension's music): a
+// pick lasts across a live match's sessions, and a new session's cache prune took them (the radio's older-game stage
+// file then never went in again: radioPut reads the cache)
+function cachePinned() {
+  const out = new Set();
+  for (const t of [radio, musicSel, liveExt.music]) if (t && t.path) out.add(t.path.replace(/^\/game\//, ''));
+  if (radio && radio.dat) out.add(radio.dat);
+  if (radio && radio.stages && man) for (const id of radio.stages) for (const p of radioStageFiles(id)) out.add(p);
+  return out;
+}
+// everything but keep (and the picks') out of the cache: the rest stays in Cache Storage, a fetch away
+function cachePrune(keep) {
+  const pin = cachePinned();
+  for (const p of [...cache.keys()]) if (!keep.has(p) && !pin.has(p)) cacheDrop(p);
+  for (const m of [bgmDecoded, bgmParsedMap]) for (const p of [...m.keys()]) if (!cache.has(p)) m.delete(p);
+}
 function bgmDecode(p) {
   if (!bgmDecoded.has(p)) {
     const d = cache.get(p);
@@ -671,7 +712,9 @@ async function glRecover() {
 let bgTicker = null;
 function bgTick(on) {
   if (on && !bgTicker) {
-    bgTicker = new Worker(URL.createObjectURL(new Blob(['setInterval(() => postMessage(0), 16)'], { type: 'text/javascript' })));
+    const u = URL.createObjectURL(new Blob(['setInterval(() => postMessage(0), 16)'], { type: 'text/javascript' }));
+    bgTicker = new Worker(u);
+    URL.revokeObjectURL(u);  // (the worker has its script: one URL a hidden spell was kept)
     bgTicker.onmessage = () => {
       const s = session;
       if (s && s.M && document.visibilityState === 'hidden') try { s.M._viewer_tick(document.pictureInPictureElement ? 1 : 0); } catch (e) {}
@@ -703,7 +746,8 @@ function pipSource() {
   pipVideo.id = 'pipv'; pipVideo.muted = true; pipVideo.playsInline = true; pipVideo.autoPictureInPicture = true;
   pipVideo.srcObject = pipStream(document.getElementById('canvas'));
   pipSelfAt = performance.now();
-  pipVideo.addEventListener('leavepictureinpicture', () => { if (document.visibilityState === 'hidden') bgTick(true); });
+  pipVideo.addEventListener('leavepictureinpicture', () => { pipCover(false); if (document.visibilityState === 'hidden') bgTick(true); });
+  pipVideo.addEventListener('enterpictureinpicture', () => pipCover(true));
   // the window's own controls (Firefox draws volume, mute and play / pause; the video has no sound of its own): the
   // page's volume slider and pause follow them, and they follow the page (pipFollow)
   pipVideo.addEventListener('volumechange', () => {
@@ -730,6 +774,13 @@ function pipFollow() {
   v.muted = n === 0;
   if (ui.paused !== v.paused) { if (ui.paused) v.pause(); else v.play().catch(() => {}); }
 }
+// (user 2026-11-03: the match kept playing on the page too, a duplicate of the window: the page's picture covered while
+// the window is open. The canvas still draws underneath: the window's stream is that canvas)
+function pipCover(on) {
+  document.getElementById('pipcover').hidden = !on;
+  document.getElementById('pip').classList.toggle('on', on);
+}
+document.getElementById('pipback').onclick = () => { if (document.pictureInPictureElement) document.exitPictureInPicture().catch(() => {}); };
 async function togglePip() {
   if (!document.pictureInPictureEnabled) return;
   try {
@@ -817,6 +868,9 @@ function reuseSession(prev, rep, name, want) {
 // match used (a stage's file goes back to its boot placeholder)
 function fillSession(s, want, had) {
   const M = s.M, rep = s.rep, FS = M.FS;
+  // (a reused instance: the last session's live load gate let go (liveBegin sets this one's). It was kept when a replay
+  // followed a live match: that closure held the live session, its timeline and every keyframe, up to KF_BUDGET)
+  M.mbaaLoaderGate = null;
   s.want = want || new Set(cache.keys());
   const probe = new Set((man.plan && man.plan.probe) || []);
   if (had) {
@@ -1564,7 +1618,7 @@ const liveExtApi = {
     // (the token is a counter, not the key: the next module with the same stage brings the same key, and the one before's
     // off, after it, took that one's music off: an announcer pick fell back to the game's music, user 2026-11-03)
     if (!o && tok && (!liveExt.music || liveExt.music.n !== tok)) return null;
-    if (liveExt.music) cache.delete(liveExt.music.key);
+    if (liveExt.music) cacheDrop(liveExt.music.key);
     liveExt.music = o && o.data ? { key: `x/${o.key}.opus`, path: `/game/x/${o.key}.opus`, loopPos: +o.loopPos || 0, file: `x:${o.key}`, title: String(o.title || ''), yt: /^https:\/\/www\.youtube\.com\/watch\?v=[\w-]+$/.test(o.yt || '') ? o.yt : '', ext: true, n: ++liveExt.musicN } : null;
     if (liveExt.music) cache.set(liveExt.music.key, o.data);
     if (session && session.radioChanged) session.radioChanged();
@@ -2177,12 +2231,15 @@ async function radioArt() {
   if (radioArtDone) return;
   radioArtDone = true;
   const tiles = [...document.querySelectorAll('#radiogrid .art[data-src]')].filter(e => !e.style.backgroundImage), path = e => e.dataset.src;
-  await fetchAll(man, tiles.map(path), '', true);
+  await fetchAll(man, tiles.map(path).filter(p => !radioArtUrls.has(p)), '', true);
   for (const e of tiles) {
-    const d = cache.get(path(e));
-    if (d) e.style.backgroundImage = `url(${URL.createObjectURL(new Blob([d], { type: /\.jpg$/.test(path(e)) ? 'image/jpeg' : 'image/png' }))})`;
+    const p = path(e), d = cache.get(p);
+    if (!radioArtUrls.has(p) && d) radioArtUrls.set(p, URL.createObjectURL(new Blob([d], { type: /\.jpg$/.test(p) ? 'image/jpeg' : 'image/png' })));
+    if (radioArtUrls.has(p)) e.style.backgroundImage = `url(${radioArtUrls.get(p)})`;
   }
 }
+// (one picture URL a tile: the grid is made again at every game switched to, and each had made new ones, never let go)
+const radioArtUrls = new Map();
 // an MBAACC track's stages (panel.json: the stages whose BGM it is), the tile's (the first with a preview) first
 function radioTrackStages(f) {
   const ids = Object.entries(stagePanel.stages).filter(([, st]) => st.track === f).map(([id, st]) => [+id, st.art.includes('view')]);
@@ -4217,7 +4274,7 @@ async function start(file, quiet = false, liveId = null) {
   if (CAPTURE) await movieLoad();
   await play(rep, file.name, 0, want);
   if (want && next) prefetch(next, want);
-  else if (want) for (const p of [...cache.keys()]) if (!want.has(p) && !(cssBg && cssBg.includes(p))) cache.delete(p);  // the last match: the previous one's files go
+  else if (want) cachePrune(new Set([...want, ...(cssBg || [])]));  // the last match: the previous one's files go
   if (cssBg && session && session.liveSrc) liveCssBg(session, cssBg);
 }
 // (live) the select screen's files in the background; until they are in MEMFS the game is held on reaching the result
@@ -4232,9 +4289,7 @@ function liveCssBg(s, paths) {
 async function prefetch(it, cur) {
   try {
     const nextWant = wantFor(new Uint8Array(await (await itemFile(it)).arrayBuffer()));
-    for (const p of [...cache.keys()]) if (!cur.has(p) && !nextWant.has(p)) cache.delete(p);  // the rest stays in Cache Storage
-    for (const p of [...bgmDecoded.keys()]) if (!cur.has(p) && !nextWant.has(p)) bgmDecoded.delete(p);  // ~70 MB a track decoded
-    for (const p of [...bgmParsedMap.keys()]) if (!cur.has(p) && !nextWant.has(p)) bgmParsedMap.delete(p);
+    cachePrune(new Set([...cur, ...nextWant]));  // the rest stays in Cache Storage (a decoded track: ~70 MB)
     if (LOWMEM) await warmDisk(man, nextWant); else await fetchAll(man, nextWant, 'next match', true);
   } catch (e) { console.warn('prefetch failed:', e); }
 }
