@@ -339,8 +339,17 @@
   if (!prof.picked) { if (prof.chara === 17) prof.chara = -1; if (prof.moon === 1) prof.moon = -1; prof.picked = 1; store.set('mbaa-chat-profile', prof); }
   if (!NICK_RE.test(prof.nick) || !nameOk(prof.nick)) prof.nick = randNick();
   if (!COLOR_RE.test(prof.color)) prof.color = PRESETS[0];
-  // (mt: when this device last changed it: a signed-in account's newer own message from another device wins, profAdopt)
-  const saveProf = () => { prof.mt = Date.now(); store.set('mbaa-chat-profile', prof); };
+  // (mt: when this device last changed its look (colour, character, moon): a signed-in account's newer own message from
+  // another device wins; dirty: changed here and not yet taken by the bot's account profile, profPush / profSync)
+  // (only a real change of the look counts: a widget re-firing input with the same value is no newer choice)
+  const lookOf = () => `${String(prof.color).toLowerCase()}.${prof.chara}.${prof.moon}`;
+  let lookSaved = lookOf();
+  const saveProf = () => {
+    if (lookOf() === lookSaved) { store.set('mbaa-chat-profile', prof); return; }
+    lookSaved = lookOf(); prof.mt = Date.now(); prof.dirty = 1; store.set('mbaa-chat-profile', prof); profPush();
+  };
+  // (a look chosen before the account sync: offered to the bot once, dated by its mt, so the latest one wins)
+  if (prof.dirty === undefined) prof.dirty = prof.mt ? 1 : 0;
   // the characters with a select-screen icon (no boss versions), in the select screen's order
   const CHARAS = Object.keys(api.chara).map(Number).filter(c => c < 52 && api.iconCell(c) >= 0)
     .sort((a, b) => api.iconCell(a) - api.iconCell(b))
@@ -1560,7 +1569,7 @@
     if (irc.account) { e.target.value = disp(shownNick(irc.account, irc.account, auth.name)); sys('signed in: your name is your account (change it with "change name")'); return; }
     if (!NICK_RE.test(n)) { e.target.value = prof.nick; sys('nick: letters, digits, _ - [ ] { } | ^ ` (not starting with a digit or -), up to 24'); return; }
     if (!nameOk(n)) { e.target.value = prof.nick; sys('that nick is not allowed'); return; }
-    prof.nick = n; saveProf(); profShow();
+    prof.nick = n; store.set('mbaa-chat-profile', prof); profShow();
     if (irc.registered && n !== irc.nick) irc.send(`NICK ${n}`);
   };
   profShow();
@@ -3645,7 +3654,7 @@
   setInterval(() => { if (matchChan && tl.entries.length) { tlPlace(); tlKick(); } }, 1000);
 
   // ---- IRC ----
-  const irc = { ws: null, registered: false, nick: prof.nick, caps: new Set(), batches: new Map(), retry: 0, lastSend: -1e9, account: null, away: new Map(), spreadGot: false, stylesAsk: 0 };
+  const irc = { ws: null, registered: false, nick: prof.nick, caps: new Set(), batches: new Map(), retry: 0, lastSend: -1e9, account: null, away: new Map(), spreadGot: false, stylesAsk: 0, profGot: false, profAsk: 0 };
   const WANT = ['message-tags', 'server-time', 'echo-message', 'batch', 'draft/chathistory', 'chathistory', 'draft/message-redaction',
     'multi-prefix', 'sasl', 'account-tag',
     // read markers (MARKREAD), presence (AWAY to channel members), history's TAGMSGs (reactions, when the server stores
@@ -3655,15 +3664,59 @@
   // when it maps to that nick (chat_auth.py safe())
   // (as the auth-script's safe(): ASCII letters, digits, _ and accented Latin letters; anything else _)
   const safeName = n => String(n).normalize('NFC').replace(/[^A-Za-z0-9_\u00C0-\u00D6\u00D8-\u00F6\u00F8-\u024F]/g, '_').replace(/^_+|_+$/g, '').slice(0, 19) || 'user';
+  // (Ergo's skeleton for ASCII: 0 -> O, 1 / I -> l, then lower case; an account renamed to a look-alike of its old
+  // name keeps the old one, chat_auth.py own_lookalike: "r0ck-9330" with +mbaa/name "rock#9330" shows "rock#9330")
+  const lookFold = n => String(n).replace(/0/g, 'O').replace(/[1I]/g, 'l').toLowerCase();
   function shownNick(nick, account, tagName) {
     const mm = account && key(account) === key(nick) ? /^(.+)-(\d{4})[a-z]?$/.exec(nick) : null;
     if (!mm) return nick;
     const t = /^(.{1,64})#(\d{4})$/.exec(tagName || '');
-    return t && t[2] === mm[2] && key(safeName(t[1])) === key(mm[1]) ? tagName : `${mm[1]}#${mm[2]}`;
+    return t && t[2] === mm[2] && lookFold(safeName(t[1])) === lookFold(mm[1]) ? tagName : `${mm[1]}#${mm[2]}`;
+  }
+
+  // ---- the account's look on every device (signed in) ----
+  // The bot keeps a signed-in account's colour / character / moon (tools/chat/meltybot.mjs "prof"): it sends it to the
+  // account's nick (every device of it: the nick is the account) as TAGMSG +mbaa/prof=<rrggbb>.<chara>.<moon>.<t> (or
+  // "none") when one joins, on the "styles" request and whenever it changes. Latest change wins (user 2026-11-02): a
+  // change here is pushed ("prof color=… chara=… moon=… ago=<ms since the change>": the bot dates it on its own clock,
+  // no device clock compared) and the bot keeps it if newer than its own, then sends the kept one to every device. A
+  // device with no change of its own since the last sync takes what the bot sends; one with a change pushes it and
+  // takes the bot's answer (a newer change elsewhere beats it). Guests: this device's localStorage, as before.
+  const sync = { timer: 0, last: -1e9, sentAt: 0, await: false };
+  function profPush(now) {
+    if (!irc.account || !irc.registered) return;
+    clearTimeout(sync.timer);
+    // (a colour drag fires input continuously: the last value, a push at most every 3 s)
+    const wait = now ? 0 : Math.max(800, sync.last + 3000 - Date.now());
+    sync.timer = setTimeout(() => {
+      if (!irc.account || !irc.registered || !prof.dirty) return;
+      sync.last = sync.sentAt = Date.now(); sync.await = true;
+      const ago = Math.max(0, Date.now() - (prof.mt || Date.now()));
+      irc.send(`PRIVMSG ${BOT} :prof color=${String(prof.color).toLowerCase()} chara=${validChara(prof.chara) ? prof.chara : -1} moon=${[0, 1, 2].includes(prof.moon) ? prof.moon : -1} ago=${ago}`);
+    }, wait);
+  }
+  function profSync(v) {
+    if (!irc.account) return;
+    const answer = sync.await; sync.await = false;
+    const mm = /^([0-9a-f]{6})\.(-1|\d{1,2})\.(-1|[0-2])\.(\d{1,15})$/i.exec(v || '');
+    if (!mm) {  // ("none": nothing kept yet; this device's own choice becomes the account's)
+      if (v === 'none' && prof.mt) { prof.dirty = 1; profPush(true); }
+      return;
+    }
+    // (changed here since the push this answers, or not pushed yet: ours goes to the bot, which compares)
+    if (prof.dirty && (!answer || (prof.mt || 0) > sync.sentAt)) { profPush(true); return; }
+    const color = '#' + mm[1].toLowerCase(), chara = validChara(+mm[2]) ? +mm[2] : -1, moon = +mm[3];
+    const changed = color !== String(prof.color).toLowerCase() || chara !== prof.chara || moon !== prof.moon;
+    Object.assign(prof, { color, chara, moon, dirty: 0 }); lookSaved = lookOf();
+    if (changed) prof.mt = Date.now();  // (own older messages in history do not undo it)
+    store.set('mbaa-chat-profile', prof);
+    if (changed) try { profShow(); } catch (e) {}
   }
 
   // ---- signing in (the auth endpoint: see the top) ----
-  const auth = { state: 'unknown', token: null, name: null, provider: null, signin: null, suggest: '', err: '' };
+  // saslErr: the chat server refused the token (904's reason; the site session is fine): one automatic retry with a fresh
+  // token (saslRetried), then a guest with "try signing in again" (never a dead link: the Discord sign-in URL as its href)
+  const auth = { state: 'unknown', token: null, name: null, provider: null, signin: null, suggest: '', err: '', saslErr: '', saslRetried: false };
   const authEl = $('.cauth'), formEl = $('.cform');
   async function authFetch() {
     try {
@@ -3701,9 +3754,17 @@
     } else if (auth.state === 'guest' || (auth.state === 'signed' && irc.registered)) {
       // (a guest: the sign-in on the profile line; guests read)
       const a = document.createElement('a'); a.className = 'signin';
-      const ret = location.pathname + location.search;
-      a.href = auth.signin ? auth.signin + (auth.signin.includes('?') ? '&' : '?') + 'return=' + encodeURIComponent(ret) : '#';
-      a.textContent = `Sign in${auth.provider ? ` with ${auth.provider}` : ''} to chat`; a.title = 'guests can read; sign in to chat';
+      const ret = location.pathname + location.search, via = auth.signin || `${AUTH_URL}/discord`;
+      a.href = via + (via.includes('?') ? '&' : '?') + 'return=' + encodeURIComponent(ret);
+      if (auth.state === 'signed') {
+        // signed in on the site, but the chat connection is a guest's (the chat server refused the token, or none was
+        // sent): a fresh token and a new connection, not Discord again
+        a.textContent = 'Try signing in again'; a.title = 'your site sign-in is fine; the chat server did not accept it';
+        a.onclick = e => { e.preventDefault(); signRetry(); };
+        if (auth.saslErr) { const t = document.createElement('span'); t.className = 'cerr'; t.textContent = `Chat sign-in failed (${auth.saslErr}). You can read as a guest.`; authEl.append(t); }
+      } else {
+        a.textContent = `Sign in${auth.provider ? ` with ${auth.provider}` : ''} to chat`; a.title = 'guests can read; sign in to chat';
+      }
       sign.append(a);
     }
     if (!signedIn) menuFill([['edit profile', profEdit]]);
@@ -3718,6 +3779,12 @@
       const full = shownNick(irc.account, irc.account, auth.name);
       $('.mynick').textContent = disp(full); $('.mynick').title = full; $('#chatnick').value = disp(full);
     }
+  }
+  // a new connection with a fresh token (the button above; the automatic retry after a refused sign-in)
+  function signRetry() {
+    auth.saslErr = ''; auth.saslRetried = false; irc.retry = 0;
+    state('signing in'); authShow();
+    if (irc.ws) irc.ws.close(); else start();
   }
   // a name box: create the community account (POST <auth>/create) or rename it (<auth>/name); then a fresh connection
   function nameForm(what, value, label) {
@@ -3769,7 +3836,7 @@
     state('connecting');
     let ws;
     try { ws = new WebSocket(WS_URL, ['text.ircv3.net']); } catch (e) { state('offline'); return later(); }
-    irc.ws = ws; irc.registered = false; irc.caps.clear(); irc.batches.clear(); irc.spreadGot = false; clearTimeout(irc.stylesAsk); irc.stylesAsk = 0;
+    irc.ws = ws; irc.registered = false; irc.caps.clear(); irc.batches.clear(); irc.spreadGot = false; clearTimeout(irc.stylesAsk); irc.stylesAsk = 0; irc.profGot = false; clearTimeout(irc.profAsk); irc.profAsk = 0;
     ws.onopen = () => {
       irc.account = null;
       irc.send('CAP LS 302');
@@ -3830,10 +3897,20 @@
           if (b.length % 400 === 0) irc.send('AUTHENTICATE +');
         }
         return;
-      case '900': irc.account = p[2] || null; return;  // (logged in as <account>)
+      case '900': irc.account = p[2] || null; auth.saslErr = ''; auth.saslRetried = false; return;  // (logged in as <account>)
       case '903': irc.send('CAP END'); return;
       case '902': case '904': case '905': case '906': case '908':
-        if (m.cmd !== '908') { sys('sign-in failed: chatting as a guest (reload to try again)'); auth.token = null; irc.send('CAP END'); }
+        if (m.cmd !== '908') {
+          auth.token = null;
+          const why = String(p[p.length - 1] || '').replace(/^SASL authentication failed:?\s*/i, '').slice(0, 120) || 'refused';
+          if (!auth.saslRetried) {  // (once: a fresh token on a new connection; an expired token, a hiccup)
+            auth.saslRetried = true;
+            if (irc.ws) irc.ws.close();
+            return;
+          }
+          auth.saslErr = why === 'Unknown' ? 'the chat server refused it' : why;
+          sys('sign-in failed: chatting as a guest ("Try signing in again" above)'); irc.send('CAP END');
+        }
         return;
       case '001':
         irc.registered = true; irc.retry = 0; irc.nick = p[0]; irc.away.clear(); idleSet = false; if (hiddenNow()) idleStart();
@@ -3939,6 +4016,9 @@
         // attached by the server to the session already here, a join the bot never sees: the owner's phone showed no
         // one's glow / gradient, 2026-11-02. None by 3 s: ask it, once a connection)
         else if (!irc.spreadGot && !irc.stylesAsk) { const ws = irc.ws; irc.stylesAsk = setTimeout(() => { if (irc.ws === ws && !irc.spreadGot) irc.send(`PRIVMSG ${BOT} :styles`); }, 3000); }
+        // (signed in: the account's look comes with the bot's spread; none by 5 s (the "styles" answer is once a minute
+        // a nick: a third device soon after a second), ask for it alone, once a connection)
+        if (irc.account && !irc.profGot && !irc.profAsk) { const ws = irc.ws; irc.profAsk = setTimeout(() => { if (irc.ws === ws && irc.account && !irc.profGot) irc.send(`PRIVMSG ${BOT} :prof`); }, 5000); }
         const hasHist = irc.caps.has('draft/chathistory') || irc.caps.has('chathistory');
         // joined again (a reconnect: signing in or out, the server or the network restarting): what was said while away,
         // from the newest line we have (nothing doubled: msgids are seen once)
@@ -4015,6 +4095,9 @@
         // (every styler's account and spec, in parts when long)
         const ss = m.tags['+mbaa/styles'];
         if (ss != null && fromBot) stylesSet(ss, m.tags['+mbaa/stylesn']);
+        // (this account's look, kept by the bot: to our nick only)
+        const pf = m.tags['+mbaa/prof'];
+        if (pf != null && fromBot && p[0] && key(p[0]) === key(irc.nick)) { irc.profGot = true; profSync(pf); }
         return;
       }
       case 'PRIVMSG': case 'NOTICE': {
@@ -4048,7 +4131,7 @@
         if (irc.account && t.account && key(t.account) === key(irc.account) && COLOR_RE.test(t['+mbaa/color'] || '')) {
           const when = t.time ? +new Date(t.time) : Date.now();
           if (when > (prof.mt || 0) && (t['+mbaa/color'] !== prof.color || (validChara(chara) ? chara : -1) !== prof.chara || moon !== prof.moon)) {
-            prof.color = t['+mbaa/color']; prof.chara = validChara(chara) ? chara : -1; prof.moon = moon; prof.mt = when;
+            prof.color = t['+mbaa/color']; prof.chara = validChara(chara) ? chara : -1; prof.moon = moon; prof.mt = when; prof.dirty = 0; lookSaved = lookOf();
             store.set('mbaa-chat-profile', prof);
             try { profShow(); } catch (e) {}
           } else if (when > (prof.mt || 0)) { prof.mt = when; store.set('mbaa-chat-profile', prof); }
