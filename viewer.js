@@ -506,7 +506,9 @@ function audioHooks(Module, s) {
   const radioOn = () => !liveExt.music && !!musicNow() && !HASH;  // (the radio's music: the pick's, or the music chosen on its own)
   const play = (path, loop, loopPos, offset) => {
     // (the "...and nothing heart" stage's music: off unless the viewer turned it on; songSub)
-    const ext = !HASH && liveExt.music;
+    // (only the fight's own track: bgm.txt's stage tracks, bgmme01-59; character select (99), the win jingle (98), VS (84)
+    // and the rest keep the game's music, user 2026-11-03)
+    const ext = !HASH && liveExt.music && /bgmme(0[1-9]|[1-5]\d)\.(ogg|opus)$/i.test(path || '') && liveExt.music;
     if (ext && path) {   // (the extension's track where the game's would play: same start, same position, looped at its own point)
       if (!cache.has(ext.key)) { halt(); return; }
       path = ext.path; loop = true; loopPos = ext.loopPos;
