@@ -994,6 +994,8 @@
   /* server emotes (img.cemote): text-sized in a line, big in a line of emotes only and in a jumbo; the box keeps its
      width / height attributes' aspect */
   #chatsec img.cemote { height: 1.5em; width: auto; vertical-align: -0.4em; margin: 0 1px; object-fit: contain; }
+  /* (back to back they touch: ":a::b:" showed a 2 px seam, user 2026-11-03) */
+  #chatsec img.cemote + img.cemote, #chatsec .owave i.oemo + i.oemo img.cemote { margin-left: -1px; }
   #chatlog .cbody.ejumbo img.cemote { height: 32px; vertical-align: middle; }
   #chatlog .cjumbo .je img.cemote { height: 32px; vertical-align: middle; margin: 0; }
   #chatlog .creacts button .e img.cemote { height: 16px; vertical-align: middle; margin: 0; }
@@ -1520,10 +1522,13 @@
       if (mm.index > i) out.push(...leaf(text.slice(i, mm.index)));
       const w = document.createElement('span'); w.className = 'owave'; w.setAttribute('aria-label', mm[1]);
       // (the characters of a word grouped in .ow so lines wrap between words; the spaces stand alone)
-      const gs = graphemes(mm[1]);
+      // (a server emote inside is one piece, its image, waving as a letter does: it was its ":name:" letters, user 2026-11-03)
+      const gs = [];
+      for (const x of emoteSplit(mm[1])) { if (typeof x === 'string') gs.push(...graphemes(x)); else gs.push(x); }
       let word = null, wlen = 0;
       gs.forEach((g, k) => {
-        const c = document.createElement('i'); c.textContent = g; c.style.setProperty('--i', String(k)); c.setAttribute('aria-hidden', 'true');
+        const c = document.createElement('i'); c.style.setProperty('--i', String(k)); c.setAttribute('aria-hidden', 'true');
+        if (typeof g === 'string') c.textContent = g; else { c.className = 'oemo'; c.append(emoteImg(g.emote)); g = g.code; }
         if (/^\s$/.test(g)) { word = null; w.append(c); return; }
         if (!word) { word = document.createElement('span'); wlen = 0; let n = k; while (n < gs.length && !/^\s$/.test(gs[n])) n++; if (n - k <= 24) word.className = 'ow'; w.append(word); }
         word.append(c); wlen++;
@@ -3209,7 +3214,7 @@
       glov.M = M; glov.gen = M.mbaaMemGen || 0;
       for (let f = 0; f < 3; f++) glovFaceSend(M, f);
       M.mbaaOvEmoji = glovEmoji; M.mbaaOvRunW = glovRunW; M.mbaaOvRun = glovRun;
-      M.mbaaOvEmoFrames = glovEmoFrames; M.mbaaOvEmoDur = glovEmoDur;
+      M.mbaaOvEmoFrames = glovEmoFrames; M.mbaaOvEmoDur = glovEmoDur; M.mbaaOvEmoAr = glovEmoAr;
       glov.has.clear();
       glov.cv = ''; tl.follow = undefined;
       M._viewer_ov_behind(behind ? 1 : 0); M._viewer_ov_on(overOn.checked && !over.hidden ? 1 : 0);
@@ -3399,6 +3404,8 @@
   let glovEmoCv = null;
   // an animated emote's frames for the renderer (its strip: overlay_gl emoji()); 1: a still one
   const glovEmoAnim = id => { const g = glov.emoList[id]; const b = g && typeof g === 'object' && emoteBmp.get(g.emote.name); return b && b.ok && b.frames && b.frames.length > 1 ? b : null; };
+  // (a server emote's aspect, width / height: its advance on the picture is its picture's width; 0: a Unicode emoji)
+  const glovEmoAr = id => { const g = glov.emoList[id]; return g && typeof g === 'object' ? (g.emote.ar || 1) : 0; };
   const glovEmoFrames = id => { const b = glovEmoAnim(id); return b ? b.frames.length : 1; };
   const glovEmoDur = id => { const b = glovEmoAnim(id); return b ? b.fdur : 100; };
   function glovEmoji(id, spx, box, ptr, frame = 0) {
@@ -3499,6 +3506,9 @@
     }, 250);
   }
   const nico = dmStage('dmlive');
+  // (a problem drawing one comment or swell is reported once a kind, never thrown into the line's path)
+  const ovWarned = new Set();
+  const ovWarn = (k, e) => { if (ovWarned.has(k)) return; ovWarned.add(k); console.warn('overlay ' + k, e); };
   const wallNow = () => performance.now() / 1000;
   function danmaku(l) {
     // (a line with server emotes not loaded yet: shown once they are, or after EMOTE_WAIT as text)
@@ -3509,7 +3519,9 @@
   function danmaku_(l) {
     if (!overOn.checked || document.visibilityState === 'hidden' || l.gone) return;
     pin();
-    { const t0 = OVP && performance.now(); swellFeed(l); if (OVP) ovp('swellFeed', t0); }
+    // (the swell never stands between a line and the picture: a throw in it lost the comment itself, and every one
+    // after it while the emoji spam lasted; user 2026-11-03 "nico text keeps dropping out ... on emoji spam")
+    { const t0 = OVP && performance.now(); try { swellFeed(l); } catch (e) { ovWarn('swell', e); } if (OVP) ovp('swellFeed', t0); }
     if (mentLine(l)) return;  // (a !song / ^stage chip: chat only)
     if (!dmFit(nico)) return;
     const now = wallNow(), spread = spreadOf();
@@ -3523,7 +3535,7 @@
     dmPlace(nico.list, c, spread);
     if (OVP) { ovp('dmPlace', t0); t0 = performance.now(); }
     nico.list.push(c);
-    glovPut(c, 0);
+    try { glovPut(c, 0); } catch (e) { ovWarn('put', e); c.gM = null; }
     if (OVP) ovp('glovPut', t0);
   }
   // ---- the swell: an emoji spammed (SWELL_MIN copies within SWELL_WIN, by anyone) gets one big copy riding across the

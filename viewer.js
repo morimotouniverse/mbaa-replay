@@ -1550,7 +1550,7 @@ async function liveFetch(url, opt) {
 // module (tools/web/cc_live.mjs; set by the site owner only, tools/web/live_ext.mjs). The page imports it and calls its
 // default export with liveExtApi; what it returns (a function) is called when the feed stops naming it, or the page goes to
 // another match or a replay. The same value again does nothing; a late joiner gets it with its first answer.
-const liveExt = { id: null, v: '', off: null, seq: 0, music: null, stage: null, stageN: 0, ann: null, annN: 0 };
+const liveExt = { id: null, v: '', off: null, seq: 0, music: null, musicN: 0, stage: null, stageN: 0, ann: null, annN: 0 };
 const liveExtApi = {
   module: () => session && session.M,          // the game's Module (a new one per session: read it each time)
   liveId: () => (session && session.liveSrc ? session.liveSrc.id : null),
@@ -1561,12 +1561,14 @@ const liveExtApi = {
   // (returns a token; music(null, token) clears it only while it is still that one: an extension taken off after the next
   // one went on leaves the next one's)
   music(o, tok) {
-    if (!o && tok && (!liveExt.music || liveExt.music.key !== tok)) return null;
+    // (the token is a counter, not the key: the next module with the same stage brings the same key, and the one before's
+    // off, after it, took that one's music off: an announcer pick fell back to the game's music, user 2026-11-03)
+    if (!o && tok && (!liveExt.music || liveExt.music.n !== tok)) return null;
     if (liveExt.music) cache.delete(liveExt.music.key);
-    liveExt.music = o && o.data ? { key: `x/${o.key}.opus`, path: `/game/x/${o.key}.opus`, loopPos: +o.loopPos || 0, file: `x:${o.key}`, title: String(o.title || ''), yt: /^https:\/\/www\.youtube\.com\/watch\?v=[\w-]+$/.test(o.yt || '') ? o.yt : '', ext: true } : null;
+    liveExt.music = o && o.data ? { key: `x/${o.key}.opus`, path: `/game/x/${o.key}.opus`, loopPos: +o.loopPos || 0, file: `x:${o.key}`, title: String(o.title || ''), yt: /^https:\/\/www\.youtube\.com\/watch\?v=[\w-]+$/.test(o.yt || '') ? o.yt : '', ext: true, n: ++liveExt.musicN } : null;
     if (liveExt.music) cache.set(liveExt.music.key, o.data);
     if (session && session.radioChanged) session.radioChanged();
-    return liveExt.music ? liveExt.music.key : null;
+    return liveExt.music ? liveExt.music.n : null;
   },
   // the match card's stage in place of the match's while set: {name, view: image Blob | null, plate: image Blob | null} |
   // null (stageShow: the picture, the name plate, the name as its tooltip; the radio panel's "Match music" tile)
