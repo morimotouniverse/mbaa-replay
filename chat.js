@@ -683,18 +683,22 @@
   /* the input row: the emoji button inside the input's end; the emoji / @name popovers open from the form (placed by
      popPlace: upward over the lines when there is room, as the colour popup does) */
   #chatsec .cform { position: relative; }
-  #chatsec .cinw { flex: 1 1 auto; min-width: 0; position: relative; display: flex; }
+  /* the box is .cinw (user 2026-11-03: the text ran under the emoji / Aa buttons, which sat over the scrolling box's own
+     padding): the text box and the buttons side by side in it, the text clipped at its own edge, scrolling inside it */
+  #chatsec .cinw { flex: 1 1 auto; min-width: 0; position: relative; display: flex; align-items: center; box-sizing: border-box;
+                   background: var(--raise); border: 1px solid var(--line); border-radius: 8px; padding-right: 3px; }
+  #chatsec .cinw:focus-within { border-color: var(--accent2, #8ab4ff); }
   #chatsec .cform .cinw input { flex: 1 1 auto; width: 100%; padding-right: 32px; }
   /* the message box (composerUpgrade): a one-line contenteditable dressed as the input it replaced; its emotes inline */
   #chatsec .cform #chatin { flex: 1 1 auto; width: 100%; min-width: 0; box-sizing: border-box; background: var(--raise); color: var(--fg);
-                            border: 1px solid var(--line); border-radius: 8px; padding: 5px 32px 5px 8px; font: inherit; line-height: 1.35;
+                            border: none; border-radius: 8px 0 0 8px; padding: 5px 4px 5px 8px; font: inherit; line-height: 1.35;
                             min-height: calc(1.35em + 12px); white-space: pre; overflow-x: auto; overflow-y: hidden; scrollbar-width: none;
                             cursor: text; outline: none; -webkit-user-modify: read-write-plaintext-only; overflow-wrap: normal; }
   #chatsec .cform #chatin::-webkit-scrollbar { display: none; }
-  #chatsec .cform #chatin:focus { border-color: var(--accent2, #8ab4ff); }
+  #chatsec .cform #chatin:focus { border-color: transparent; }
   #chatsec .cform #chatin:empty::before { content: attr(data-ph); color: var(--faint); pointer-events: none; }
   #chatsec .cform #chatin img.cemote { height: 1.35em; width: auto; vertical-align: -0.3em; margin: 0; }
-  #chatsec .cemo { position: absolute; right: 3px; top: 50%; transform: translateY(-50%); width: 26px; height: 26px; padding: 0; border: none;
+  #chatsec .cemo { position: static; flex: none; order: 3; width: 26px; height: 26px; padding: 0; border: none;
                    border-radius: 6px; background: none; color: var(--faint); cursor: pointer; display: inline-flex; align-items: center; justify-content: center; }
   #chatsec .cemo:hover, #chatsec .cemo[aria-expanded=true] { color: var(--fg); background: #ffffff12; }
   #chatsec .cemo:focus-visible { outline: 2px solid var(--accent2, #8ab4ff); outline-offset: -2px; }
@@ -890,6 +894,8 @@
   #chatsec button.cmembtn { line-height: 1.4; font-size: 11px; padding: 2px 8px; border-radius: 999px; color: var(--faint); background: none;
                             border: 1px solid var(--line); cursor: pointer; white-space: nowrap; }
   #chatsec button.cmembtn[aria-expanded=true] { color: #fff; background: #ffffff14; }
+  #chatsec button.cmodlog { color: var(--accent2, #8ab4ff); display: inline-flex; align-items: center; gap: 3px; }
+  #chatsec button.cmodlog[hidden] { display: none; }
   #chatsec .cmemb { max-height: 160px; overflow-y: auto; background: #00000033; border-radius: 8px; padding: 4px; font-size: 12px; overscroll-behavior: contain; }
   #chatsec .cmemb[hidden], #chatsec .ctopic[hidden], #chatsec .cments[hidden] { display: none; }
   #chatsec .cmemb .mh { font-size: 10px; color: var(--faint); padding: 2px 4px; }
@@ -947,8 +953,9 @@
   .cmodm button.solid2 { background: var(--accent, #e04a5a); color: #fff; border-color: var(--accent, #e04a5a); }
   /* the slim column: the comment style behind "Aa" (a popover over the input, the spread slider in it); the profile and
      the account on one line (avatar, name, a ▾ menu) */
-  #chatsec .cform .cinw input, #chatsec .cform #chatin { padding-right: 60px; }
-  #chatsec .cnico { position: absolute; right: 31px; top: 50%; transform: translateY(-50%); height: 26px; min-width: 26px; padding: 0 4px; border: none;
+  #chatsec .cform .cinw input, #chatsec .cform #chatin { padding-right: 4px; }
+  #chatsec .cform .cinw input { border: none; background: none; }
+  #chatsec .cnico { position: static; flex: none; order: 2; margin-left: 2px; height: 26px; min-width: 26px; padding: 0 4px; border: none;
                     border-radius: 6px; background: none; color: var(--faint); cursor: pointer; font: 700 12px/1 sans-serif; }
   #chatsec .cnico:hover, #chatsec .cnico[aria-expanded=true] { color: var(--fg); background: #ffffff12; }
   #chatsec .cnico:focus-visible { outline: 2px solid var(--accent2, #8ab4ff); outline-offset: -2px; }
@@ -1093,6 +1100,7 @@
   sec.innerHTML = `
     <div class="chead"><span class="lbl">chat</span><span class="ctabs"></span>
       <button type="button" class="cmembtn" aria-expanded="false" aria-controls="chatmemb" title="who is here">people</button>
+      <button type="button" class="cmembtn cmodlog" hidden aria-haspopup="dialog" aria-expanded="false" title="mod log: who did what (deletes, strikes, mutes, kicks, bans, mods, MOTD) and who is muted / banned now; the owner and admins only"><svg width="11" height="12" viewBox="0 0 24 26" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linejoin="round" aria-hidden="true"><path d="M12 2 3 5.5v7c0 6 4 9.6 9 11.5 5-1.9 9-5.5 9-11.5v-7z"/></svg> mod log</button>
       <label class="tog" title="new comments cross the game picture (Nico Nico style)"><input id="chatover_on" type="checkbox"> on picture</label>
       <label class="cspread" hidden title="spread, for everyone (the site owner only): how long a comment keeps its row on the picture after it would have freed it, so comments a little apart still fan out to new rows (0: Niconico's own). Moving it previews here; letting go sets it on every viewer's page">spread <input id="chatspread" type="range" min="0" max="6" step="0.1" value="1" aria-label="comment spread for everyone, seconds"><output>1.0 s</output></label></div>
     <div class="cmemb" id="chatmemb" hidden></div>
@@ -1344,7 +1352,7 @@
     styleAdmin();
     myNameStyle();
     // (an admin's "mod log" in the profile panel: drawn again when that status changes)
-    try { const a = adminMe(); if (a !== spreadAdmin.wasAdmin) { spreadAdmin.wasAdmin = a; authShow(); } } catch (e) {}
+    try { const a = adminMe(); $('.cmodlog').hidden = !a; if (a !== spreadAdmin.wasAdmin) { spreadAdmin.wasAdmin = a; authShow(); } } catch (e) {}
   };
   // (my own name under the chat: the same glow / gradient everyone sees on my lines)
   function myNameStyle() {
@@ -4307,6 +4315,12 @@
           }
           if (m.cmd === 'NOTICE' && !m.nick.includes('.')) return; if (m.cmd === 'NOTICE') sys(clean(text0)); return;
         }
+        // (the bot's channel announcements, "x was muted / unmuted / kicked / banned ... by y": a bot line in the chat,
+        // live and from history, never a comment on the picture)
+        if (m.cmd === 'NOTICE' && key(m.nick) === key(BOT) && (!m.tags.account || key(m.tags.account) === BOT_ACCT)) {
+          addLine(target, { sys: true, bot: true, text: clean(text0).slice(0, 400), time: m.tags.time ? new Date(m.tags.time) : new Date(), msgid: m.tags.msgid, hist: !!(bt && /chathistory/.test(bt.type)) });
+          return;
+        }
         let text = text0, action = false;
         if (text.startsWith('\x01')) {  // (CTCP: ACTION is "/me"; any other (VERSION, PING…) is never shown raw)
           const ac = /^\x01ACTION (.*?)\x01?$/s.exec(text);
@@ -4769,21 +4783,29 @@
     modm.hidden = false;
     place();
   }
-  function modClose() { modm.hidden = true; modFor = null; }
+  function modClose() { modm.hidden = true; modFor = null; const b = $('.cmodlog'); if (b) b.setAttribute('aria-expanded', 'false'); }
   // the moderation log (owner and admins): "modlog <n> [name]" to the bot; its "modlog: ..." notices fill this panel
   // (meltybot.mjs: deletes, filter strikes, mutes, kicks, bans, mod add / del, MOTD changes; who, whom, when)
   let mlogList = null;
+  const mlogBtn = $('.cmodlog');
+  mlogBtn.onclick = e => { e.stopPropagation(); if (modFor === 'modlog' && !modm.hidden) modClose(); else modlogOpen(mlogBtn); };
   function modlogOpen(anchor, who) {
-    modFor = 'modlog';
+    modFor = 'modlog'; mlogBtn.setAttribute('aria-expanded', 'true');
     const el = (tag, cls, text) => { const e = document.createElement(tag); if (cls) e.className = cls; if (text != null) e.textContent = text; return e; };
     const box = el('div', 'mlogp');
     const h = el('div', 'mh'); h.append(el('b', '', 'mod log'), el('small', '', 'who did what, newest last (UTC); the owner and admins only')); box.append(h);
     const f = el('form', 'mr'), q = el('input'); q.type = 'text'; q.placeholder = 'name (empty: everyone)'; q.value = who || ''; q.spellcheck = false;
-    const go = el('button', 'mchip', 'show'); go.type = 'submit';
+    const go = el('button', 'mchip', 'history'); go.type = 'submit'; go.title = 'the last 50 actions (about this name, if one is typed)';
+    const nowB = el('button', 'mchip', 'muted / banned now'); nowB.type = 'button'; nowB.title = 'who is muted, banned or has strikes right now';
     const cl = el('button', 'mchip', 'close'); cl.type = 'button'; cl.onclick = e => { e.stopPropagation(); modClose(); };
-    f.append(q, go, cl); box.append(f);
+    f.append(q, go, nowB, cl); box.append(f);
     mlogList = el('ol', 'mlog'); box.append(mlogList);
-    const ask = () => { mlogList.replaceChildren(el('li', 'mlw', 'asking MeltyBot…')); const w = q.value.trim().replace(/^[~&@%+]+/, '').split(/\s+/)[0] || ''; toBot(`modlog 50${w ? ` ${w}` : ''}`); };
+    // (no answer in a few seconds: say so, rather than an empty panel)
+    let waitT = 0;
+    const asking = () => { mlogList.replaceChildren(el('li', 'mlw', 'asking MeltyBot…')); clearTimeout(waitT);
+      waitT = setTimeout(() => { const w = mlogList && mlogList.querySelector('.mlw'); if (w) w.textContent = irc.registered ? 'no answer from MeltyBot (is it in the channel?)' : 'not connected'; }, 5000); };
+    const ask = () => { asking(); const w = q.value.trim().replace(/^[~&@%+]+/, '').split(/\s+/)[0] || ''; toBot(`modlog 50${w ? ` ${w}` : ''}`); };
+    nowB.onclick = e => { e.stopPropagation(); asking(); toBot('modlog now'); };
     f.onsubmit = e => { e.preventDefault(); ask(); };
     modm.replaceChildren(box);
     modm.hidden = false;
@@ -4797,7 +4819,7 @@
     const w = mlogList.querySelector('.mlw'); if (w) w.remove();
     if (t === 'end') return true;
     const li = document.createElement('li'); li.textContent = clean(t);
-    if (!/^\d{4}-/.test(t)) li.className = 'mlh';
+    if (!/^(\d{4}-|muted |banned |strikes )/.test(t)) li.className = 'mlh';
     mlogList.append(li); mlogList.scrollTop = mlogList.scrollHeight;
     return true;
   }
@@ -4846,7 +4868,7 @@
     modm.style.top = `${a.bottom + 4 + m.height <= H - 8 ? a.bottom + 4 : Math.max(8, a.top - 4 - m.height)}px`;
     ta.focus();
   }
-  document.addEventListener('pointerdown', e => { if (!modm.hidden && !modm.contains(e.target) && !e.target.closest('.cmod, .cmotd')) modClose(); });
+  document.addEventListener('pointerdown', e => { if (!modm.hidden && !modm.contains(e.target) && !e.target.closest('.cmod, .cmotd, .cmodlog')) modClose(); });
   document.addEventListener('keydown', e => { if (e.key === 'Escape' && !modm.hidden) modClose(); });
   // (closed when the viewer scrolls the lines; a new line arriving scrolls the log too, and that leaves it open)
   for (const ev of ['wheel', 'touchmove']) logEl.addEventListener(ev, () => { if (!modm.hidden) modClose(); }, { passive: true });
