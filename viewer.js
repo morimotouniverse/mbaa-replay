@@ -2726,7 +2726,10 @@ function liveSetupCheck(s, p) {
 // the setup not known at our load yet (the bridge asks the host for it as the players' game starts): the load waits,
 // asked again each second (a host's load and the probe can take ~7 s); none after SETUP_WAIT ms: our own picks, checked
 // again once it comes (liveLateCheck)
-const SETUP_WAIT = Q.get('liveTestLate') === '1' ? 0 : 20000;  // (test: no wait, the late check runs)
+// (2 s: the bridge's probe of the host often takes 5-35 s or fails (journal 2026-11-03: "no InitialGameState; again in
+// 5 s", "not offered"); at 20 s the picture sat on the select's end that long, then jumped in and fast-forwarded the
+// backlog: user 2026-11-02. Our select follows the players', so our picks go on and the late check switches if not)
+const SETUP_WAIT = Q.get('liveTestLate') === '1' ? 0 : 2000;  // (test: no wait, the late check runs)
 async function liveSetupWait(s, game) {
   s.loadHeld = true; s.loadNeed = []; liveHoldApply(s);
   const t0 = performance.now();
@@ -2998,7 +3001,10 @@ function liveBegin(s) {  // play(): after viewer_play
   const poll = async () => {
     if (session !== s) return;
     try {
-      const r = await liveFetch(`${LIVE}/live/${L.id}/rec?from=${L.info.game}&since=${L.since}&v=${VIEWER}`,
+      // (match: our match's key; the bridge answers 404 once the host is on another match, and so does the page itself
+      // once the list has said so (L.moved): another match's records fed into ours hung the picture, user 2026-11-02)
+      const r = L.moved ? { ok: false, status: 404 } : await liveFetch(`${LIVE}/live/${L.id}/rec?from=${L.info.game}&since=${L.since}&v=${VIEWER}` +
+        (L.info.match ? `&match=${encodeURIComponent(L.info.match)}` : ''),
         AbortSignal.timeout ? { signal: AbortSignal.timeout(5000) } : undefined);
       // (a 404 is the bridge saying the capture or game is not there: its capture closed (the match over) or the host's
       // id is on another match now: no data, so the stream reads as quiet, not an outage. Was: every 404 restarted the
@@ -3064,6 +3070,7 @@ function liveBegin(s) {  // play(): after viewer_play
         // 2026-11-01: Counsel's set with tigre ended, Counsel hosted Inf20 on the same id; the page left, came back to
         // it, and showed the next-match card there)
         const mine = now && liveOurs(now, L) ? now : null, t = performance.now();
+        if (now && !mine) L.moved = true;  // (the host on another match: nothing more of ours comes; the poll stops asking)
         // The end, from evidence that holds up (a list read missing an entry or a host poll that failed is not an end;
         // nor is a quiet stream: players at a result screen): the stream has nothing more for us (ended, or the buffer
         // run down and no new data for 6 s; a 404 feed counts as no data) AND the list has said so: the host is in

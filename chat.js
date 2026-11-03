@@ -124,6 +124,115 @@
   }
   // text nodes with the known :name:s as images
   const emoteNodes = t => emoteSplit(t).map(x => typeof x === 'string' ? document.createTextNode(x) : emoteImg(x.emote));
+  // ---- the composer (user 2026-11-02): a server emote shows as its image right in the box, as soon as its ":name:" is
+  // whole (typed, Tab-picked or picked from the emoji panel), and two may touch (":a::b:"). The box is a one-line
+  // contenteditable that keeps an <input>'s API on the element itself (value, selectionStart / End, setSelectionRange,
+  // setRangeText, focus), so everything that reads #chatin, here and in viewer.js, is unchanged. Its value is the text
+  // with each emote image's own ":name:" (data-code, as typed) in its place: what is sent. An image is one piece for the
+  // caret (Backspace / Delete / arrows take it whole); paste, cut and copy go through plain text; the DOM is redrawn
+  // (caret kept, by value offset) only when a ":name:" becomes whole or the editor left markup (a <br>, a wrapper), and
+  // never while a phone keyboard is composing.
+  function composerUpgrade(el, maxLen) {
+    const isTok = n => n.nodeType === 1 && n.tagName === 'IMG' && n.dataset.code;
+    const nodeLen = n => n.nodeType === 3 ? n.data.length : isTok(n) ? n.dataset.code.length : 0;
+    const serial = n => { let s = ''; for (const c of n.childNodes) s += c.nodeType === 3 ? c.data : isTok(c) ? c.dataset.code : c.nodeType === 1 ? serial(c) : ''; return s; };
+    const ser = () => serial(el).replace(/[\r\n\u200b]/g, m => m === '\u200b' ? '' : ' ');
+    const flat = () => [...el.childNodes].every(c => (c.nodeType === 3 && !/[\r\n\u200b]/.test(c.data)) || isTok(c));
+    const whole = () => [...el.childNodes].some(c => c.nodeType === 3 && hasEmote(c.data) && emoteSplit(c.data).some(x => typeof x !== 'string'));
+    // value offset <-> DOM point (on the flat tree: text nodes and images, the box's own children)
+    function offOf(node, off) {
+      if (!node || !el.contains(node)) return null;
+      let o = 0;
+      if (node === el) { for (let i = 0; i < off && i < el.childNodes.length; i++) o += nodeLen(el.childNodes[i]); return o; }
+      let top = node; while (top.parentNode !== el) top = top.parentNode;
+      for (const c of el.childNodes) { if (c === top) break; o += nodeLen(c); }
+      return o + (top === node && node.nodeType === 3 ? Math.min(off, node.data.length) : off > 0 ? nodeLen(top) : 0);
+    }
+    function pointOf(o) {
+      const ch = el.childNodes;
+      for (let i = 0; i < ch.length; i++) {
+        const n = ch[i], len = nodeLen(n);
+        if (n.nodeType === 3) { if (o <= len) return [n, o]; }
+        else if (o <= 0) return [el, i];
+        else if (o < len) return [el, i + 1];   // (inside an emote's code: after the image)
+        o -= len;
+      }
+      return [el, ch.length];
+    }
+    let sel = [0, 0], composing = false;
+    const live = () => { const s = getSelection(); return s && s.rangeCount && el.contains(s.anchorNode) ? s : null; };
+    function readSel() {
+      const s = live();
+      if (s) { const a = offOf(s.anchorNode, s.anchorOffset), b = offOf(s.focusNode, s.focusOffset); if (a != null && b != null) sel = [Math.min(a, b), Math.max(a, b)]; }
+      return sel;
+    }
+    function applySel() {
+      if (document.activeElement !== el) return;
+      const s = getSelection(), [an, ao] = pointOf(sel[0]), [fn, fo] = pointOf(sel[1]);
+      try { s.setBaseAndExtent(an, ao, fn, fo); } catch (e) {}
+    }
+    function render(v, a, b = a) {
+      const nodes = [];
+      for (const x of emoteSplit(v)) {
+        if (typeof x === 'string') { if (x) nodes.push(document.createTextNode(x)); continue; }
+        const im = emoteImg(x.emote); im.dataset.code = x.code; im.alt = x.code; nodes.push(im);
+      }
+      el.replaceChildren(...nodes);
+      const n = v.length; sel = [Math.max(0, Math.min(a, n)), Math.max(0, Math.min(b, n))];
+      applySel();
+    }
+    const tidy = () => { if (composing || (flat() && !whole())) return; const [a, b] = readSel(); render(ser(), a, b); };
+    Object.defineProperties(el, {
+      value: { get: ser, set(v) { v = String(v ?? '').replace(/[\r\n]/g, ' '); render(v, v.length); }, configurable: true },
+      selectionStart: { get: () => readSel()[0], configurable: true },
+      selectionEnd: { get: () => readSel()[1], configurable: true },
+    });
+    el.setSelectionRange = (a, b = a) => { const n = ser().length; sel = [Math.max(0, Math.min(a, n)), Math.max(0, Math.min(b, n))]; if (sel[1] < sel[0]) sel[1] = sel[0]; applySel(); };
+    el.setRangeText = (text, a, b, mode = 'preserve') => {
+      const v = ser(), [s0, s1] = readSel();
+      if (a == null) { a = s0; b = s1; }
+      text = String(text).replace(/[\r\n]/g, ' ');
+      const nv = v.slice(0, a) + text + v.slice(b), d = text.length - (b - a);
+      const at = mode === 'end' ? [a + text.length, a + text.length] : mode === 'start' ? [a, a] : mode === 'select' ? [a, a + text.length]
+        : [s0 > b ? s0 + d : s0 > a ? a : s0, s1 > b ? s1 + d : s1 > a ? a + text.length : s1];
+      render(nv, at[0], at[1]);
+    };
+    const focus0 = HTMLElement.prototype.focus;
+    el.focus = function (opt) { const had = document.activeElement === el, keep = sel.slice(); focus0.call(el, opt); if (!had) { sel = keep; applySel(); } };
+    document.addEventListener('selectionchange', () => { if (live()) readSel(); });
+    // (typed text over the length cap is refused, as maxlength did; markup commands do nothing; Enter is the form's)
+    el.addEventListener('beforeinput', e => {
+      const t = e.inputType || '';
+      if (t === 'insertParagraph' || t === 'insertLineBreak') { e.preventDefault(); const f = el.closest('form'); if (f && !e.isComposing) f.requestSubmit(); return; }
+      if (t.startsWith('format') || t === 'insertFromDrop' || t === 'deleteByDrag') { e.preventDefault(); return; }
+      if ((t === 'insertText' || t === 'insertReplacementText') && e.data) {
+        const [a, b] = readSel();
+        if (ser().length - (b - a) + e.data.length > maxLen) e.preventDefault();
+      }
+    });
+    el.addEventListener('input', tidy);
+    el.addEventListener('compositionstart', () => { composing = true; });
+    el.addEventListener('compositionend', () => { composing = false; tidy(); });
+    el.addEventListener('paste', e => {
+      e.preventDefault();
+      const [a, b] = readSel(), v = ser();
+      let t = ((e.clipboardData && e.clipboardData.getData('text/plain')) || '').replace(/[\r\n]+/g, ' ');
+      t = t.slice(0, Math.max(0, maxLen - (v.length - (b - a))));
+      if (!t) return;
+      el.setRangeText(t, a, b, 'end');
+      el.dispatchEvent(new Event('input', { bubbles: true }));
+    });
+    const clip = (e, cut) => {
+      const [a, b] = readSel();
+      if (a === b || !e.clipboardData) return;
+      e.preventDefault(); e.clipboardData.setData('text/plain', ser().slice(a, b));
+      if (cut) { el.setRangeText('', a, b, 'end'); el.dispatchEvent(new Event('input', { bubbles: true })); }
+    };
+    el.addEventListener('copy', e => clip(e, false));
+    el.addEventListener('cut', e => clip(e, true));
+    el.addEventListener('drop', e => e.preventDefault());
+    return el;
+  }
   // ---- !song / ^stage mentions (user 2026-11-02): "!sunset-avenue" a song of the viewer's music list, "^g-table" a radio
   // stage. A sent one is a chip; a tap puts it on the tapper's own picture only (viewer.js mentionApply: the radio panel's
   // own picks). Slugs: ASCII, from the names (a clash: the game's name after it). Unknown slugs stay text.
@@ -245,8 +354,8 @@
     return b;
   }
   const emoteReady = e => emoteLoad(e).ok;
-  // An animated emote on the picture: its frames decoded once into canvases (b.frames, at even times: b.fdur ms each,
-  // at most EMOTE_FRAMES: a longer one keeps frames evenly spread over its loop), which the renderer puts side by side
+  // An animated emote on the picture: its frames decoded once into canvases (b.frames, b.fdur ms each, at most
+  // EMOTE_FRAMES, taken exactly: emoteFrames), which the renderer puts side by side
   // in one strip and picks from by the clock (no upload per frame). ImageDecoder where there is one; else the file's own
   // frame list (its ANMF chunks: count and durations) and the <img> drawn as it plays, one sample a frame time.
   const EMOTE_FRAMES = 32, EMOTE_DECODE_MAX = 240;
@@ -254,12 +363,22 @@
     const buf = await (await fetch(EMOTE_DIR + e.file)).arrayBuffer();
     const info = webpAnim(new Uint8Array(buf));
     if (!info || info.durs.length < 2) return;
-    const total = info.durs.reduce((a, d) => a + d, 0) || info.durs.length * 100;
-    const n = Math.min(EMOTE_FRAMES, info.durs.length);
+    const durs = info.durs.map(d => d > 0 ? Math.round(d) : 100), N = durs.length, total = durs.reduce((a, d) => a + d, 0);
     // (the source frame showing at time t of the loop)
-    const at = t => { let s = 0; for (let i = 0; i < info.durs.length; i++) { s += info.durs[i]; if (t < s) return i; } return info.durs.length - 1; };
-    const want = Array.from({ length: n }, (_, k) => at((k + 0.5) * total / n));
-    const canvasOf = (src, w, h) => { const cv = document.createElement('canvas'); cv.width = w; cv.height = h; cv.getContext('2d').drawImage(src, 0, 0, w, h); return cv; };
+    const at = t => { let s = 0; for (let i = 0; i < N; i++) { s += durs[i]; if (t < s) return i; } return N - 1; };
+    // Exact, never resampled at uneven times (the giga emotes' judder, user 2026-11-02): the loop sampled on a time grid,
+    // its durations' common step (ms; an even source: its own frames), widened by an integer factor until it is at most
+    // EMOTE_FRAMES slots (an even source past that: every 2nd / 3rd frame), so a frame held 1000 ms still holds 1000 ms
+    // (an uneven one is not made even); each slot shown total / n: the loop keeps the source's length
+    const gcd = (x, y) => { while (y) [x, y] = [y, x % y]; return x; };
+    const step = (durs.reduce(gcd, 0) || 1) * Math.ceil(total / (durs.reduce(gcd, 0) || 1) / EMOTE_FRAMES);
+    const ts = [];  // (the loop times sampled, ms)
+    for (let t = step / 2; t < total; t += step) ts.push(t);
+    const n = ts.length;
+    const want = ts.map(at);
+    // (CPU-backed: the renderer copies each one into a CPU canvas to read it (glovEmoji); a GPU one made every copy a
+    // readback, a swell's whole strip built in one present)
+    const canvasOf = (src, w, h) => { const cv = document.createElement('canvas'); cv.width = w; cv.height = h; cv.getContext('2d', { willReadFrequently: true }).drawImage(src, 0, 0, w, h); return cv; };
     const frames = [];
     if (window.ImageDecoder) {
       const dec = new ImageDecoder({ data: buf, type: 'image/webp' });
@@ -281,13 +400,13 @@
         await im.decode();
         const t0 = performance.now();
         for (let k = 0; k < n; k++) {
-          const due = t0 + (k + 0.5) * total / n - performance.now();
+          const due = t0 + ts[k] - performance.now();
           if (due > 0) await new Promise(r => setTimeout(r, due));
           frames.push(canvasOf(im, im.naturalWidth, im.naturalHeight));
         }
       } finally { im.remove(); }
     }
-    if (frames.length > 1) { b.frames = frames; b.fdur = total / frames.length; }
+    if (frames.length > 1) { b.frames = frames; b.fdur = total / n; }  // (total / n even when a decode cap cut the list short: each frame keeps its own time)
   }
   // an animated WebP's frames: {durs: [ms]} from its ANMF chunks (null: not a WebP; one frame: still)
   function webpAnim(u) {
@@ -558,6 +677,15 @@
   #chatsec .cform { position: relative; }
   #chatsec .cinw { flex: 1 1 auto; min-width: 0; position: relative; display: flex; }
   #chatsec .cform .cinw input { flex: 1 1 auto; width: 100%; padding-right: 32px; }
+  /* the message box (composerUpgrade): a one-line contenteditable dressed as the input it replaced; its emotes inline */
+  #chatsec .cform #chatin { flex: 1 1 auto; width: 100%; min-width: 0; box-sizing: border-box; background: var(--raise); color: var(--fg);
+                            border: 1px solid var(--line); border-radius: 8px; padding: 5px 32px 5px 8px; font: inherit; line-height: 1.35;
+                            min-height: calc(1.35em + 12px); white-space: pre; overflow-x: auto; overflow-y: hidden; scrollbar-width: none;
+                            cursor: text; outline: none; -webkit-user-modify: read-write-plaintext-only; overflow-wrap: normal; }
+  #chatsec .cform #chatin::-webkit-scrollbar { display: none; }
+  #chatsec .cform #chatin:focus { border-color: var(--accent2, #8ab4ff); }
+  #chatsec .cform #chatin:empty::before { content: attr(data-ph); color: var(--faint); pointer-events: none; }
+  #chatsec .cform #chatin img.cemote { height: 1.35em; width: auto; vertical-align: -0.3em; margin: 0; }
   #chatsec .cemo { position: absolute; right: 3px; top: 50%; transform: translateY(-50%); width: 26px; height: 26px; padding: 0; border: none;
                    border-radius: 6px; background: none; color: var(--faint); cursor: pointer; display: inline-flex; align-items: center; justify-content: center; }
   #chatsec .cemo:hover, #chatsec .cemo[aria-expanded=true] { color: var(--fg); background: #ffffff12; }
@@ -806,7 +934,7 @@
   .cmodm button.solid2 { background: var(--accent, #e04a5a); color: #fff; border-color: var(--accent, #e04a5a); }
   /* the slim column: the comment style behind "Aa" (a popover over the input, the spread slider in it); the profile and
      the account on one line (avatar, name, a ▾ menu) */
-  #chatsec .cform .cinw input { padding-right: 60px; }
+  #chatsec .cform .cinw input, #chatsec .cform #chatin { padding-right: 60px; }
   #chatsec .cnico { position: absolute; right: 31px; top: 50%; transform: translateY(-50%); height: 26px; min-width: 26px; padding: 0 4px; border: none;
                     border-radius: 6px; background: none; color: var(--faint); cursor: pointer; font: 700 12px/1 sans-serif; }
   #chatsec .cnico:hover, #chatsec .cnico[aria-expanded=true] { color: var(--fg); background: #ffffff12; }
@@ -986,7 +1114,7 @@
     <div class="creply" hidden><span></span><button type="button" title="cancel the reply" aria-label="cancel the reply">✕</button></div>
     <div class="ceprev" hidden aria-live="polite"><small>preview</small><span></span></div>
     <form class="cform" autocomplete="off"><input id="chatcmd" type="text" maxlength="60" spellcheck="false" placeholder="commands"
-      title="Niconico commands for your comments on the picture, e.g. ue / shita (top / bottom, 3 s), big / small, a colour (red, pink, orange, yellow, green, cyan, blue, purple, white, black, white2, red2, …, or #rrggbb). Empty: scrolls, medium, your colour."><span class="cinw"><input id="chatin" type="text" maxlength="${MAXLEN}" placeholder="say something…  (!song ^stage)" title="say something: :emoji, @name, !song (e.g. !sunset) or ^stage (e.g. ^gtable): a song or stage shows as a chip anyone can tap to play it on their own picture" enterkeyhint="send" aria-autocomplete="list"><button type="button" class="cemo" title="emoji" aria-label="emoji" aria-haspopup="dialog" aria-expanded="false"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><circle cx="12" cy="12" r="9"/><path d="M8.5 14.5a4.5 4.5 0 0 0 7 0"/><circle cx="9" cy="10" r=".6" fill="currentColor"/><circle cx="15" cy="10" r=".6" fill="currentColor"/></svg></button><button type="button" class="cnico" title="how your comments look on the picture (position, size, font, colour)" aria-label="comment style" aria-haspopup="dialog" aria-expanded="false">Aa</button></span>
+      title="Niconico commands for your comments on the picture, e.g. ue / shita (top / bottom, 3 s), big / small, a colour (red, pink, orange, yellow, green, cyan, blue, purple, white, black, white2, red2, …, or #rrggbb). Empty: scrolls, medium, your colour."><span class="cinw"><div id="chatin" contenteditable="true" role="textbox" aria-multiline="false" aria-label="message" spellcheck="true" data-ph="say something…  (!song ^stage)" title="say something: :emoji, @name, !song (e.g. !sunset) or ^stage (e.g. ^gtable): a song or stage shows as a chip anyone can tap to play it on their own picture" enterkeyhint="send" aria-autocomplete="list"></div><button type="button" class="cemo" title="emoji" aria-label="emoji" aria-haspopup="dialog" aria-expanded="false"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><circle cx="12" cy="12" r="9"/><path d="M8.5 14.5a4.5 4.5 0 0 0 7 0"/><circle cx="9" cy="10" r=".6" fill="currentColor"/><circle cx="15" cy="10" r=".6" fill="currentColor"/></svg></button><button type="button" class="cnico" title="how your comments look on the picture (position, size, font, colour)" aria-label="comment style" aria-haspopup="dialog" aria-expanded="false">Aa</button></span>
       <button type="submit" class="txt">send</button>
       <div class="epop" hidden role="dialog" aria-label="emoji"></div><div class="mpop" hidden role="listbox" aria-label="mention someone"></div></form>
     <details><summary><canvas class="me" width="42" height="56"></canvas><span class="mynick"></span><span class="cstate"></span></summary>
@@ -1142,7 +1270,7 @@
     row.hidden = !head && !btns.childElementCount;
   }
   const profEdit = () => { const d = sec.querySelector('details'); d.open = true; d.scrollIntoView({ block: 'nearest' }); };
-  const logEl = $('#chatlog'), tabsEl = $('.ctabs'), input = $('#chatin'), cmdIn = $('#chatcmd'), stateEl = $('.cstate');
+  const logEl = $('#chatlog'), tabsEl = $('.ctabs'), input = composerUpgrade($('#chatin'), MAXLEN), cmdIn = $('#chatcmd'), stateEl = $('.cstate');
   // the newest line stays in view when the log's box changes size (the on-screen keyboard, a rotation, the layout)
   let logStick = true;
   logEl.addEventListener('scroll', () => { logStick = logEl.scrollHeight - logEl.scrollTop - logEl.clientHeight < 30; }, { passive: true });
@@ -2562,7 +2690,12 @@
       return { n, name: disp(nameOf(n, c)), aw, idle: aw != null && /^idle$/i.test(aw), bot: key(n) === key(BOT), op: c.ops.has(key(n)), pre: rankPre(c, n), me: key(n) === key(irc.nick),
                ty: c.typing.has(key(n)), col };
     });
-    rows.sort((a, b) => (!!a.aw - !!b.aw) || (b.bot - a.bot) || a.name.localeCompare(b.name, undefined, { sensitivity: 'base' }));
+    // (here first, then away; in each: by rank -- ~ owner, & admin, @ mod (an op with no prefix counts as one), % half-op,
+    // the bot, then everyone else (+ voice too) -- then by name, case- and accent-blind, the prefix not part of it;
+    // "you" sorts in your own rank, user 2026-11-02)
+    const RANK = { '~': 0, '&': 1, '@': 2, '%': 3 };
+    const rank = r => r.pre in RANK ? RANK[r.pre] : r.op ? RANK['@'] : r.bot ? 4 : 5;
+    rows.sort((a, b) => ((a.aw != null) - (b.aw != null)) || (rank(a) - rank(b)) || a.name.localeCompare(b.name, undefined, { sensitivity: 'base' }));
     const away = rows.filter(r => r.aw != null).length;
     const h = document.createElement('div'); h.className = 'mh';
     h.textContent = `${rows.length - away} here${away ? ` · ${away} away` : ''}`;
@@ -4321,10 +4454,14 @@
       store.set(EMO_RECENT, [ch, ...(store.get(EMO_RECENT, []) || []).filter(x => x !== ch)].slice(0, 24));
       emoOpen(false); inputBack(null, false); return;
     }
-    const a = input.selectionStart ?? input.value.length, b = input.selectionEnd ?? a;
-    const ins = reactEmote(ch) ? `${ch} ` : ch;  // (an emote's ":name:" and a space: the next word stays apart)
+    let a = input.selectionStart ?? input.value.length, b = input.selectionEnd ?? a;
+    // (an emote's ":name:" and a space, so the next word stays apart; a second emote picked straight after takes that
+    // space back, so two in a row touch: ":a::b:", autoSp)
+    if (reactEmote(ch) && a === b && autoSp >= 0 && a === autoSp + 1 && input.value[autoSp] === ' ') { input.setRangeText('', autoSp, autoSp + 1, 'end'); a = b = autoSp; }
+    const ins = reactEmote(ch) ? `${ch} ` : ch;
     if (input.value.length - (b - a) + ins.length > MAXLEN) return;
     input.setRangeText(ins, a, b, 'end');
+    autoSp = reactEmote(ch) ? a + ins.length - 1 : -1;
     inputBack(a + ins.length, true); cePrevDraw();
     store.set(EMO_RECENT, [ch, ...(store.get(EMO_RECENT, []) || []).filter(x => x !== ch)].slice(0, 24));
   }
@@ -4353,6 +4490,7 @@
   const cePrev = $('.ceprev');
   let cePrevV = null;
   let ment = null;  // {start, items: [nick], i}
+  let autoSp = -1;  // value index of the space a pick put after a server emote (taken back by a ":" typed next)
   let mentMore = false;  // (the older games' music and stages asked for: the first "!" / "^")
   const foldName = t => String(t).normalize('NFKD').replace(/[̀-ͯ]/g, '').toLowerCase();
   function nameOf(nick, c) {
@@ -4393,7 +4531,9 @@
       return mentionClose();
     }
     // ":jo…" (two letters or more after a space / the start) offers the matching :codes:
-    const em = /(^|\s):([a-z0-9_+-]{2,40})$/i.exec(before);
+    // (also straight after a whole server emote, ":a::b…": emotes may touch)
+    const em0 = /:([a-z0-9_+-]{2,40})$/i.exec(before), emPre = em0 && before.slice(0, em0.index), emAfter = emPre != null && /:([A-Za-z0-9_]{2,32}):$/.exec(emPre);
+    const em = em0 && (/(^|\s)$/.test(emPre) || (emAfter && emoteOf(emAfter[1]))) ? [em0[0], '', em0[1]] : null;
     if (em && document.activeElement === input) {
       const q = em[2].toLowerCase();
       // (the server's emotes first, then Unicode's: names starting with it, then names holding it)
@@ -4420,18 +4560,14 @@
     ment = { start: pos - mm[2].length - 1, end: pos, items, i: 0 };
     mentionDraw();
   }
-  // The composer's preview (user 2026-11-02): a server emote (":mech:", typed in full or picked with Tab) stays ":mech:"
-  // in the input and on the wire (a Unicode :code: becomes its emoji right there: mentionScan); the line as it will look,
-  // its emotes as images, shows in a strip above the input while it has one. (A strip, not a contenteditable: the input
-  // stays a plain <input>, so the phone keyboards, the caret and everything reading input.value are untouched)
+  // The composer's preview strip (user 2026-11-02) is retired: the box shows its emotes inline now (composerUpgrade);
+  // a server emote is still ":name:" in input.value and on the wire (a Unicode :code: becomes its emoji: mentionScan)
   function cePrevDraw() {
     if (!cePrev) return;
     const v = input.value;
     if (v === cePrevV) return;
     cePrevV = v;
-    const has = hasEmote(v) && emoteSplit(v).some(x => typeof x !== 'string');
-    if (has) cePrev.querySelector('span').replaceChildren(...emoteNodes(emoCodesIn(v)));
-    cePrev.hidden = !has;
+    cePrev.hidden = true;  // (retired: the box itself shows its emotes now, composerUpgrade)
   }
   function mentionDraw() {
     mpop.replaceChildren();
@@ -4464,12 +4600,18 @@
     if (!ment || mpop.hidden) return false;
     const x = ment.items[ment.i], ins = ment.pre ? `${ment.pre}${x.slug} ` : ment.kind === 'emo' ? (x.emote ? `${x.ch} ` : x.ch) : `@${x.nick} `;
     const v = input.value.slice(0, ment.start) + ins + (ment.slash ? '' : input.value.slice(ment.end));
-    if (v.length <= MAXLEN) { input.value = v; input.setSelectionRange(ment.start + ins.length, ment.start + ins.length); }
+    if (v.length <= MAXLEN) { input.value = v; input.setSelectionRange(ment.start + ins.length, ment.start + ins.length); autoSp = x.emote ? ment.start + ins.length - 1 : -1; }
     cePrevV = null;
     const at = input.selectionStart;
     mentionClose(); inputBack(at, true);
     return true;
   }
+  // (the space a pick put after a server emote goes again when the very next thing typed is ":", another emote: ":a::b:")
+  input.addEventListener('input', () => {
+    const p = autoSp; autoSp = -1;
+    if (p < 0) return;
+    if (input.selectionStart === p + 2 && input.selectionEnd === p + 2 && input.value.slice(p, p + 2) === ' :') { input.setRangeText('', p, p + 1, 'end'); input.setSelectionRange(p + 1, p + 1); }
+  });
   input.addEventListener('input', mentionScan);
   input.addEventListener('input', cePrevDraw);
   if (cePrev) cePrev.addEventListener('pointerdown', e => e.preventDefault());  // (a touch on it keeps the input's focus: the keyboard stays up)
