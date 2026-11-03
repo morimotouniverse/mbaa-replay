@@ -2707,6 +2707,13 @@ async function liveListShow() {
     a.append(side(0), el('span', 'lvs', 'vs'), side(1), v);
     if (liveSrc && liveSrc.id === m.id) { li.className = 'cur'; liveWatching(m.viewers); }
     if (liveIdle(m)) li.classList.add('idle');
+    // (in place: the chat, the radio and the loaded game stay; a new tab / window with a modifier or the middle button)
+    a.onclick = e => {
+      if (e.button || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
+      e.preventDefault();
+      if (session && session.liveSrc && session.liveSrc.id === m.id) return;
+      liveGo(m.id, true);
+    };
     li.append(a);
     return li;
   });
@@ -3445,17 +3452,29 @@ function nextCardHide() {
   clearTimeout(nextCard.timer); cancelAnimationFrame(nextCard.raf);
   nextCard.s = null; nextCard.id = null; nextCard.why = null;
 }
-function liveGo(id) {
+// push: a new history entry (a click on the live list or Go now: Back returns to the match before, no reload; user
+// 2026-11-02 "clicking another live match must not reload the page"); the automatic move replaces the entry
+function liveGo(id, push = false) {
   nextCardHide();
   try {
     const u = new URL(location.href);
     u.searchParams.set('live', id);
     for (const k of ['r', 'rep', 'l', 'i', 'c', 't']) u.searchParams.delete(k);
-    history.replaceState(null, '', u);
+    if (push && u.href !== location.href) history.pushState({ live: id }, '', u); else history.replaceState({ live: id }, '', u);
   } catch (e) {}
   document.body.classList.add('live');
   return startLive(id);
 }
+// Back / Forward between matches switched in place: the match of that entry, again in place; an entry that is not a
+// live match (the replay page the viewer came from) loads as a page
+addEventListener('popstate', () => {
+  const id = new URLSearchParams(location.search).get('live');
+  if (!id) { location.reload(); return; }
+  if (session && session.liveSrc && session.liveSrc.id === id) return;
+  nextCardHide();
+  document.body.classList.add('live');
+  startLive(id);
+});
 // list: the live list as just read (the watched match may be in it). title: what happened ("Match over", ...)
 function nextCardShow(s, list, title) {
   if (session !== s || (s && nextCard.stay === s)) return false;  // (s null: a page with no match yet)
@@ -3476,7 +3495,7 @@ function nextCardShow(s, list, title) {
     const vs = document.createElement('span'); vs.className = 'lvs'; vs.textContent = 'vs';
     b.append(liveSide(m, 0), vs, liveSide(m, 1), v);
     b.title = liveName(m);
-    b.onclick = e => { e.stopPropagation(); liveGo(m.id); };
+    b.onclick = e => { e.stopPropagation(); liveGo(m.id, true); };
     return b;
   };
   const others = el.querySelector('.nc-o');
@@ -3486,7 +3505,7 @@ function nextCardShow(s, list, title) {
   const feat = el.querySelector('.nc-m');
   feat.textContent = '';
   if (next) feat.append(row(next, 'nc-row nc-next'));
-  el.querySelector('.nc-go').onclick = e => { e.stopPropagation(); if (nextCard.id) liveGo(nextCard.id); };
+  el.querySelector('.nc-go').onclick = e => { e.stopPropagation(); if (nextCard.id) liveGo(nextCard.id, true); };
   el.querySelector('.nc-stay').onclick = e => { e.stopPropagation(); nextCard.stay = s; nextCardHide(); status('staying on this match (the live list has the others)'); };
   for (const ev of ['pointerdown', 'click', 'touchend']) el['on' + ev] = e => e.stopPropagation();  // (never the picture's)
   el.classList.toggle('wait', !next);
