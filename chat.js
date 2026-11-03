@@ -3042,7 +3042,9 @@
     madyellow: '#999900', green2: '#00CC66', elementalgreen: '#00CC66', cyan2: '#00CCCC', blue2: '#3399FF', marinblue: '#3399FF',
     purple2: '#6633CC', nobleviolet: '#6633CC', black2: '#666666' };
   // On the picture a comment is the whole line, never clipped (a long one scrolls by faster: its speed grows with its width)
-  let NICO_ON_SCREEN = 60;
+  // (raised from 60, user 2026-11-03: under spam new comments stopped reaching the picture; phones keep a lower cap for
+  // the 60 fps floor, mobile-perf rulings)
+  let NICO_ON_SCREEN = (() => { try { return matchMedia('(pointer: coarse)').matches ? 100 : 200; } catch (e) { return 200; } })();
   // (benches: ?ovperf=1 times the overlay's steps per comment into window.__ovp: name -> [calls, total ms, max ms])
   const OVP = /[?&]ovperf=1/.test(location.search) ? (window.__ovp = {}) : null;
   const ovp = (n, t0) => { const d = performance.now() - t0, e = OVP[n] || (OVP[n] = [0, 0, 0]); e[0]++; e[1] += d; e[2] = Math.max(e[2], d); };
