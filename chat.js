@@ -604,11 +604,12 @@
   #chatsec .cpick button { font: inherit; color: var(--fg); cursor: pointer; }
   #chatsec .cpk-x { background: none; border: none; width: 28px; height: 28px; padding: 0; border-radius: 8px; color: var(--muted) !important; font-size: 14px; }
   #chatsec .cpk-sv { position: relative; height: 150px; border-radius: 8px; cursor: crosshair; touch-action: none; outline: none;
-                     background: linear-gradient(to top, #000, transparent), linear-gradient(to right, #fff, transparent), var(--cpk-h, red); }
+                     background: #000; }
+  #chatsec .cpk-sv > canvas, #chatsec .cpk-hue > canvas { position: absolute; inset: 0; width: 100%; height: 100%; border-radius: inherit; pointer-events: none; }
   #chatsec .cpk-hue { position: relative; height: 18px; border-radius: 9px; cursor: ew-resize; touch-action: none; outline: none;
-                      background: linear-gradient(to right, #f00, #ff0, #0f0, #0ff, #00f, #f0f, #f00); }
+                      background: #888; }
   #chatsec .cpk-sv:focus-visible, #chatsec .cpk-hue:focus-visible { box-shadow: 0 0 0 2px var(--accent2, #8ab4ff); }
-  #chatsec .cpk-sv > i, #chatsec .cpk-hue > i { position: absolute; width: 16px; height: 16px; margin: -8px 0 0 -8px; border-radius: 50%; border: 2px solid #fff;
+  #chatsec .cpk-sv > i, #chatsec .cpk-hue > i { position: absolute; z-index: 1; width: 16px; height: 16px; margin: -8px 0 0 -8px; border-radius: 50%; border: 2px solid #fff;
                      box-shadow: 0 0 0 1px #000a, inset 0 0 0 1px #000a; box-sizing: border-box; pointer-events: none; background: var(--cpk-c); }
   #chatsec .cpk-hue > i { top: 50%; width: 20px; height: 20px; margin: -10px 0 0 -10px; background: var(--cpk-h); }
   #chatsec .cpk-sws { display: grid; grid-template-columns: repeat(auto-fill, minmax(24px, 1fr)); gap: 6px; }
@@ -621,6 +622,18 @@
   #chatsec .cpk-hex { flex: 1 1 60px; min-width: 0; height: 30px; box-sizing: border-box; background: var(--panel, #15151f); color: var(--fg); border: 1px solid var(--line);
                       border-radius: 8px; padding: 0 8px; font: 13px ui-monospace, monospace; }
   #chatsec .cpk-hex.bad { border-color: var(--accent, #e04a5a); }
+  /* RGB / HSL fields and the eyedropper (Rhekar / Skeleton 2026-11-03) */
+  #chatsec .cpk-num { display: flex; align-items: center; gap: 6px; }
+  #chatsec .cpk-mode { display: inline-flex; border-radius: 8px; overflow: hidden; box-shadow: 0 0 0 1px var(--line); flex: none; }
+  #chatsec .cpk-mode button { border: none; background: none; padding: 0 7px; height: 28px; font-size: 11px; font-weight: 700; color: var(--muted) !important; }
+  #chatsec .cpk-mode button[aria-checked=true] { background: #ffffff1a; color: var(--fg) !important; }
+  #chatsec .cpk-n { width: 0; flex: 1 1 0; min-width: 0; height: 28px; box-sizing: border-box; background: var(--panel, #15151f); color: var(--fg); border: 1px solid var(--line);
+                    border-radius: 8px; padding: 0 4px; font: 12px ui-monospace, monospace; text-align: center; -moz-appearance: textfield; }
+  #chatsec .cpk-n::-webkit-inner-spin-button { display: none; }
+  #chatsec .cpk-eye { width: 30px; height: 28px; flex: none; padding: 0; border: 1px solid var(--line); border-radius: 8px; background: none; display: grid; place-items: center; }
+  #chatsec .cpk-eye[hidden] { display: none; }
+  #chatsec .cpk-eye[aria-pressed=true] { border-color: var(--accent2, #8ab4ff); color: var(--accent2, #8ab4ff) !important; }
+  body.cpk-eyeing, body.cpk-eyeing * { cursor: crosshair !important; }
   #chatsec .cpk-ok { height: 30px; padding: 0 14px; border: none; border-radius: 999px; background: var(--accent, #e04a5a); color: #fff !important; font-weight: 700; }
   body.mob #chatsec .cpick { padding: 14px; gap: 12px; font-size: 14px; }
   body.mob #chatsec .cpk-sv { height: 170px; }
@@ -1572,16 +1585,75 @@
   // Esc, done, a click outside or the button again close it. position: fixed beside the button, kept inside the visual
   // viewport. Its pointerdowns stop at it, so the popovers it opens from (the Aa menu, the name style panel) stay open.
   const PICK_SW = ['#ffffff', '#e8e8f0', '#9a9ab0', '#000000', '#e04a5a', '#ff4fd8', '#ff7ac8', '#ff9a3c', '#ffd84a', '#7ee05a', '#40e0ff', '#40c0ff', '#7a8cff', '#c878e6'];
-  const hex2hsv = hx => {
-    const n = parseInt(hx.slice(1), 16), r = (n >> 16) / 255, g = (n >> 8 & 255) / 255, b = (n & 255) / 255;
-    const mx = Math.max(r, g, b), d = mx - Math.min(r, g, b);
-    const h = d === 0 ? 0 : mx === r ? ((g - b) / d + 6) % 6 : mx === g ? (b - r) / d + 2 : (r - g) / d + 4;
-    return { h: h * 60, s: mx ? d / mx : 0, v: mx };
-  };
-  const hsv2hex = ({ h, s, v }) => {
-    const f = k => { const t = (k + h / 60) % 6; return v - v * s * Math.max(0, Math.min(t, 4 - t, 1)); };
-    return '#' + [f(5), f(3), f(1)].map(x => Math.round(x * 255).toString(16).padStart(2, '0')).join('');
-  };
+  // OkHSV (Björn Ottosson's perceptual HSV over Oklab; user 2026-11-03 "we need to make it OkHSV"): even steps of hue and
+  // shade look even, and a hue at full colour and value is that hue's own brightest, not one fixed lightness for all.
+  // h in degrees, s / v 0..1; the hex stays sRGB.
+  const OKC = (() => {
+    const cbrt = Math.cbrt;
+    const toLin = x => x <= 0.04045 ? x / 12.92 : ((x + 0.055) / 1.055) ** 2.4;
+    const toGam = x => x <= 0.0031308 ? 12.92 * x : 1.055 * x ** (1 / 2.4) - 0.055;
+    const lin2lab = (r, g, b) => {
+      const l_ = cbrt(0.4122214708 * r + 0.5363325363 * g + 0.0514459929 * b), m_ = cbrt(0.2119034982 * r + 0.6806995451 * g + 0.1073969566 * b),
+            s_ = cbrt(0.0883024619 * r + 0.2817188376 * g + 0.6299787005 * b);
+      return [0.2104542553 * l_ + 0.7936177850 * m_ - 0.0040720468 * s_, 1.9779984951 * l_ - 2.4285922050 * m_ + 0.4505937099 * s_,
+              0.0259040371 * l_ + 0.7827717662 * m_ - 0.8086757660 * s_];
+    };
+    const lab2lin = (L, a, b) => {
+      const l = (L + 0.3963377774 * a + 0.2158037573 * b) ** 3, m = (L - 0.1055613458 * a - 0.0638541728 * b) ** 3, q = (L - 0.0894841775 * a - 1.2914855480 * b) ** 3;
+      return [4.0767416621 * l - 3.3077115913 * m + 0.2309699292 * q, -1.2684380046 * l + 2.6097574011 * m - 0.3413193965 * q,
+              -0.0041960863 * l - 0.7034186147 * m + 1.7076147010 * q];
+    };
+    const maxSat = (a, b) => {  // the most saturated sRGB colour of this hue (a, b: unit), one Halley step
+      let k0, k1, k2, k3, k4, wl, wm, ws;
+      if (-1.88170328 * a - 0.80936493 * b > 1) { [k0, k1, k2, k3, k4, wl, wm, ws] = [1.19086277, 1.76576728, 0.59662641, 0.75515197, 0.56771245, 4.0767416621, -3.3077115913, 0.2309699292]; }
+      else if (1.81444104 * a - 1.19445276 * b > 1) { [k0, k1, k2, k3, k4, wl, wm, ws] = [0.73956515, -0.45954404, 0.08285427, 0.12541070, 0.14503204, -1.2684380046, 2.6097574011, -0.3413193965]; }
+      else { [k0, k1, k2, k3, k4, wl, wm, ws] = [1.35733652, -0.00915799, -1.15130210, -0.50559606, 0.00692167, -0.0041960863, -0.7034186147, 1.7076147010]; }
+      let S = k0 + k1 * a + k2 * b + k3 * a * a + k4 * a * b;
+      const kl = 0.3963377774 * a + 0.2158037573 * b, km = -0.1055613458 * a - 0.0638541728 * b, ks = -0.0894841775 * a - 1.2914855480 * b;
+      const l_ = 1 + S * kl, m_ = 1 + S * km, s_ = 1 + S * ks;
+      const f = wl * l_ ** 3 + wm * m_ ** 3 + ws * s_ ** 3;
+      const f1 = wl * 3 * kl * l_ * l_ + wm * 3 * km * m_ * m_ + ws * 3 * ks * s_ * s_;
+      const f2 = wl * 6 * kl * kl * l_ + wm * 6 * km * km * m_ + ws * 6 * ks * ks * s_;
+      return S - f * f1 / (f1 * f1 - 0.5 * f * f2);
+    };
+    const stMax = (a, b) => { const S = maxSat(a, b), [r, g, bb] = lab2lin(1, S * a, S * b), L = cbrt(1 / Math.max(r, g, bb)), C = L * S; return [C / L, C / (1 - L)]; };
+    const K1 = 0.206, K2 = 0.03, K3 = (1 + K1) / (1 + K2);
+    const toe = x => 0.5 * (K3 * x - K1 + Math.sqrt((K3 * x - K1) ** 2 + 4 * K2 * K3 * x));
+    const toeInv = x => (x * x + K1 * x) / (K3 * (x + K2));
+    const hex = rgb => '#' + rgb.map(x => Math.round(Math.max(0, Math.min(1, x)) * 255).toString(16).padStart(2, '0')).join('');
+    function toRgb(hDeg, s, v) {  // OkHSV -> sRGB 0..1
+      if (v <= 0) return [0, 0, 0];
+      const h = hDeg / 360, a = Math.cos(2 * Math.PI * h), b = Math.sin(2 * Math.PI * h);
+      const [Smax, Tmax] = stMax(a, b), S0 = 0.5, k = 1 - S0 / Smax;
+      const Lv = 1 - s * S0 / (S0 + Tmax - Tmax * k * s), Cv = s * Tmax * S0 / (S0 + Tmax - Tmax * k * s);
+      let L = v * Lv, C = v * Cv;
+      const Lvt = toeInv(Lv), Cvt = Cv * Lvt / Lv;
+      const Ln = toeInv(L); C = C * Ln / L; L = Ln;
+      const [rs, gs, bs] = lab2lin(Lvt, a * Cvt, b * Cvt), sc = cbrt(1 / Math.max(rs, gs, bs, 1e-9));
+      L *= sc; C *= sc;
+      return lab2lin(L, C * a, C * b).map(x => toGam(Math.max(0, Math.min(1, x))));
+    }
+    function fromHex(hx) {
+      const n = parseInt(hx.slice(1), 16);
+      const [L0, a0, b0] = lin2lab(toLin((n >> 16) / 255), toLin((n >> 8 & 255) / 255), toLin((n & 255) / 255));
+      if (L0 <= 1e-7) return { h: 0, s: 0, v: 0 };
+      const C0 = Math.hypot(a0, b0);
+      if (C0 < 1e-6) return { h: 0, s: 0, v: Math.min(1, toe(L0)) };  // (a grey: no hue)
+      const a = a0 / C0, b = b0 / C0, h = 0.5 + 0.5 * Math.atan2(-b0, -a0) / Math.PI;
+      const [Smax, Tmax] = stMax(a, b), S0 = 0.5, k = 1 - S0 / Smax;
+      const t = Tmax / (C0 + L0 * Tmax), Lv = t * L0, Cv = t * C0;
+      const Lvt = toeInv(Lv), Cvt = Cv * Lvt / Lv;
+      const [rs, gs, bs] = lab2lin(Lvt, a * Cvt, b * Cvt), sc = cbrt(1 / Math.max(rs, gs, bs, 1e-9));
+      let L = L0 / sc, C = C0 / sc;
+      C = C * toe(L) / L; L = toe(L);
+      const cl = x => Math.max(0, Math.min(1, x));
+      return { h: (h * 360) % 360, s: cl((S0 + Tmax) * Cv / (Tmax * S0 + Tmax * k * Cv)), v: cl(L / Lv) };
+    }
+    return { toRgb, fromHex, hex };
+  })();
+  const hex2hsv = hx => OKC.fromHex(hx);
+  const hsv2hex = ({ h, s, v }) => OKC.hex(OKC.toRgb(h, s, v));
+  window.__okhsv = { hex2hsv, hsv2hex };  // (tests: tools/chat/okhsv_check.mjs)
   const pick = document.createElement('div');
   pick.className = 'cpick'; pick.hidden = true; pick.setAttribute('role', 'dialog');
   pick.innerHTML = `<div class="cpk-head"><span class="cpk-ttl"></span><button type="button" class="cpk-x" aria-label="close the colour picker">✕</button></div>
@@ -1590,9 +1662,28 @@
     <div class="cpk-sws" role="group" aria-label="presets"></div>
     <div class="cpk-foot"><span class="cpk-cmp"><button type="button" class="cpk-old" title="current colour: click to go back to it" aria-label="back to the current colour"></button><i class="cpk-new" title="new colour"></i></span>
       <input type="text" class="cpk-hex" maxlength="7" spellcheck="false" autocomplete="off" enterkeyhint="done" aria-label="colour as hex, #rrggbb">
-      <button type="button" class="cpk-ok">done</button></div>`;
+      <button type="button" class="cpk-ok">done</button></div>
+    <div class="cpk-num"><span class="cpk-mode" role="radiogroup" aria-label="number fields"><button type="button" data-m="rgb" role="radio">RGB</button><button type="button" data-m="hsl" role="radio">HSL</button></span>
+      <input type="number" class="cpk-n" data-i="0" inputmode="numeric"><input type="number" class="cpk-n" data-i="1" inputmode="numeric"><input type="number" class="cpk-n" data-i="2" inputmode="numeric">
+      <button type="button" class="cpk-eye" title="pick a colour from anywhere on the screen" aria-label="eyedropper" hidden><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m2 22 1-1h3l9-9"/><path d="M3 21v-3l9-9"/><path d="m15 6 3.4-3.4a2.1 2.1 0 1 1 3 3L18 9l.4.4a2.1 2.1 0 1 1-3 3l-3.8-3.8a2.1 2.1 0 1 1 3-3l.4.4Z"/></svg></button></div>`;
   sec.append(pick);
   const pq = s => pick.querySelector(s), pSv = pq('.cpk-sv'), pHue = pq('.cpk-hue'), pHex = pq('.cpk-hex'), pOld = pq('.cpk-old');
+  // (the square: OkHSV at the hue, saturation across, value up, a small canvas the browser scales smoothly, drawn again
+  // per hue; the bar: the hues at full saturation and value, drawn once)
+  const svCv = document.createElement('canvas'), hueCv = document.createElement('canvas');
+  svCv.width = 48; svCv.height = 32; hueCv.width = 180; hueCv.height = 1;
+  pSv.append(svCv); pHue.append(hueCv);
+  const paint = (cv, f) => {
+    const g = cv.getContext('2d'), im = g.createImageData(cv.width, cv.height);
+    for (let y = 0; y < cv.height; y++) for (let x = 0; x < cv.width; x++) {
+      const c = f(x / (cv.width - 1), y / Math.max(1, cv.height - 1)), i = (y * cv.width + x) * 4;
+      im.data[i] = c[0] * 255; im.data[i + 1] = c[1] * 255; im.data[i + 2] = c[2] * 255; im.data[i + 3] = 255;
+    }
+    g.putImageData(im, 0, 0);
+  };
+  paint(hueCv, x => OKC.toRgb(x * 360, 1, 1));
+  let svHue = null;
+  const svPaint = h => { if (svHue === h) return; svHue = h; paint(svCv, (x, y) => OKC.toRgb(h, x, 1 - y)); };
   for (const c of PICK_SW) {
     const b = document.createElement('button');
     b.type = 'button'; b.dataset.c = c; b.style.background = c; b.title = c; b.setAttribute('aria-label', c);
@@ -1601,13 +1692,15 @@
   const pk = { btn: null, hsv: { h: 0, s: 0, v: 1 }, old: '#ffffff', changed: false };
   function pickShow() {
     const { h, s, v } = pk.hsv, hx = hsv2hex(pk.hsv);
-    pick.style.setProperty('--cpk-h', `hsl(${h.toFixed(1)}, 100%, 50%)`); pick.style.setProperty('--cpk-c', hx);
+    pick.style.setProperty('--cpk-h', hsv2hex({ h, s: 1, v: 1 })); pick.style.setProperty('--cpk-c', hx);
+    svPaint(Math.round(h * 2) / 2);
     const k1 = pSv.firstChild, k2 = pHue.firstChild;
     k1.style.left = `${s * 100}%`; k1.style.top = `${(1 - v) * 100}%`; k2.style.left = `${h / 3.6}%`;
     pSv.setAttribute('aria-valuetext', `${hx}: ${Math.round(s * 100)}% colour, ${Math.round(v * 100)}% light`);
     pHue.setAttribute('aria-valuenow', String(Math.round(h)));
     pq('.cpk-new').style.background = hx; pOld.style.background = pk.old;
     if (document.activeElement !== pHex) { pHex.value = hx; pHex.classList.remove('bad'); }
+    numShow(hx);
     pick.querySelectorAll('.cpk-sws button').forEach(b => b.setAttribute('aria-pressed', String(b.dataset.c === hx)));
   }
   function pickSet(hsv) {
@@ -1669,6 +1762,85 @@
     pickSet(hex2hsv(hx));
   });
   pHex.addEventListener('blur', () => { pHex.value = hsv2hex(pk.hsv); pHex.classList.remove('bad'); });
+  // RGB (0-255) or HSL (0-360, 0-100, 0-100: CSS's HSL) as three numbers; the mode is remembered
+  let numMode = 'rgb'; try { if (localStorage.getItem('mbaa-cpk-mode') === 'hsl') numMode = 'hsl'; } catch (e) {}
+  const nIn = [...pick.querySelectorAll('.cpk-n')];
+  const rgbOf = hx => { const n = parseInt(hx.slice(1), 16); return [n >> 16, n >> 8 & 255, n & 255]; };
+  const rgbHex = c => '#' + c.map(x => Math.round(Math.max(0, Math.min(255, x))).toString(16).padStart(2, '0')).join('');
+  const rgb2hsl = ([r, g, b]) => {
+    r /= 255; g /= 255; b /= 255;
+    const mx = Math.max(r, g, b), mn = Math.min(r, g, b), d = mx - mn, l = (mx + mn) / 2;
+    const s = d === 0 ? 0 : d / (1 - Math.abs(2 * l - 1));
+    const h = d === 0 ? 0 : mx === r ? ((g - b) / d + 6) % 6 : mx === g ? (b - r) / d + 2 : (r - g) / d + 4;
+    return [Math.round(h * 60) % 360, Math.round(s * 100), Math.round(l * 100)];
+  };
+  const hsl2rgb = ([h, s, l]) => {
+    s /= 100; l /= 100;
+    const k = n => (n + h / 30) % 12, a = s * Math.min(l, 1 - l);
+    return [0, 8, 4].map(n => 255 * (l - a * Math.max(-1, Math.min(k(n) - 3, 9 - k(n), 1))));
+  };
+  function numShow(hx) {
+    const v = numMode === 'rgb' ? rgbOf(hx) : rgb2hsl(rgbOf(hx));
+    const max = numMode === 'rgb' ? [255, 255, 255] : [360, 100, 100], lbl = numMode === 'rgb' ? ['red', 'green', 'blue'] : ['hue', 'saturation', 'lightness'];
+    nIn.forEach((el, i) => { el.min = 0; el.max = max[i]; el.setAttribute('aria-label', lbl[i]); el.title = lbl[i]; if (document.activeElement !== el) el.value = v[i]; });
+    pick.querySelectorAll('.cpk-mode button').forEach(b => b.setAttribute('aria-checked', String(b.dataset.m === numMode)));
+  }
+  nIn.forEach(el => el.addEventListener('input', () => {
+    const v = nIn.map(x => +x.value);
+    if (v.some(x => !Number.isFinite(x))) return;
+    pickSet(hex2hsv(rgbHex(numMode === 'rgb' ? v : hsl2rgb(v))));
+  }));
+  nIn.forEach(el => el.addEventListener('blur', () => numShow(hsv2hex(pk.hsv))));
+  pick.querySelectorAll('.cpk-mode button').forEach(b => b.addEventListener('click', e => {
+    e.stopPropagation(); numMode = b.dataset.m; try { localStorage.setItem('mbaa-cpk-mode', numMode); } catch (x) {} numShow(hsv2hex(pk.hsv));
+  }));
+  // the eyedropper: Chrome / Edge any pixel on the screen (window.EyeDropper); Firefox and Safari have no such API, so there
+  // the next click on the page picks: a pixel of the game picture, an image or a canvas under it, else that element's
+  // own colour (its background, or its text) (user 2026-11-03: "we had it on my firefox too")
+  const eye = pq('.cpk-eye');
+  eye.hidden = false;
+  const rgbStr = c => { const m = /rgba?\(([\d.]+)[, ]+([\d.]+)[, ]+([\d.]+)(?:[, /]+([\d.]+))?/.exec(c || ''); return m && (m[4] === undefined || +m[4] > 0) ? rgbHex([+m[1], +m[2], +m[3]]) : null; };
+  function pixelAt(el, x, y) {
+    try {
+      const r = el.getBoundingClientRect(), w = el.naturalWidth || el.videoWidth || el.width, h = el.naturalHeight || el.videoHeight || el.height;
+      if (!w || !h || !r.width || !r.height) return null;
+      const c = document.createElement('canvas'); c.width = c.height = 1;
+      const g = c.getContext('2d', { willReadFrequently: true });
+      g.drawImage(el, Math.floor((x - r.left) / r.width * w), Math.floor((y - r.top) / r.height * h), 1, 1, 0, 0, 1, 1);
+      const d = g.getImageData(0, 0, 1, 1).data;
+      return d[3] ? rgbHex([d[0], d[1], d[2]]) : null;
+    } catch (e) { return null; }  // (a cross-origin image, a lost context)
+  }
+  function pagePick(x, y) {
+    for (const el of document.elementsFromPoint(x, y)) {
+      if (pick.contains(el)) continue;
+      if (/^(CANVAS|IMG|VIDEO)$/.test(el.tagName)) { const p = pixelAt(el, x, y); if (p) return p; continue; }
+      const cs = getComputedStyle(el), bg = rgbStr(cs.backgroundColor);
+      if (bg) return bg;
+      if (el.childNodes.length && [...el.childNodes].some(n => n.nodeType === 3 && n.textContent.trim())) { const fg = rgbStr(cs.color); if (fg) return fg; }
+    }
+    return null;
+  }
+  eye.addEventListener('click', async e => {
+    e.stopPropagation();
+    if (window.EyeDropper) {
+      try { const r = await new window.EyeDropper().open(); if (r && /^#[0-9a-f]{6}$/i.test(r.sRGBHex)) pickSet(hex2hsv(r.sRGBHex.toLowerCase())); } catch (x) {}
+      return;
+    }
+    if (document.body.classList.contains('cpk-eyeing')) return;
+    document.body.classList.add('cpk-eyeing'); eye.setAttribute('aria-pressed', 'true');
+    const done = () => { document.body.classList.remove('cpk-eyeing'); eye.setAttribute('aria-pressed', 'false'); removeEventListener('pointerdown', grab, true); removeEventListener('keydown', esc, true); };
+    const grab = ev => {
+      if (pick.contains(ev.target)) { done(); return; }
+      ev.preventDefault(); ev.stopPropagation();
+      const hx = pagePick(ev.clientX, ev.clientY);
+      done();
+      if (hx) pickSet(hex2hsv(hx));
+      addEventListener('click', ce => { ce.preventDefault(); ce.stopPropagation(); }, { capture: true, once: true });  // (the pick's click does nothing else)
+    };
+    const esc = ev => { if (ev.key === 'Escape') { ev.stopPropagation(); done(); } };
+    setTimeout(() => { addEventListener('pointerdown', grab, true); addEventListener('keydown', esc, true); }, 0);
+  });
   pick.addEventListener('click', e => {
     const b = e.target.closest('button');
     if (!b) return;

@@ -2349,7 +2349,7 @@ async function radioSet(f, stageOnly = 0) {
   if (radioPick !== f) return;  // (picked again meanwhile)
   radio = t ? { path: `/game/${t.key}`, loopPos: t.loopPos, file: f, title: t.title, tile: t.tile, tileUrl: t.tileUrl, stageName: t.stageName,
                 game: t.game, dat: t.dat && cache.has(t.dat) ? t.dat : '', lights: t.lights,
-                stages: stageOnly ? [stageOnly] : t.stages || null } : null;  // (a chat ^stage chip: that stage, not the track's first)
+                stages: stageOnly ? [stageOnly] : t.stages || null, chip: !!stageOnly } : null;  // (a chat ^stage chip: that stage, not the track's first)
   if (session && session.radioChanged) session.radioChanged();
   stageKey = '';
   xfStagePending = xfYieldPending = true;
@@ -2471,7 +2471,10 @@ function radioFilesIn(s, id) {
 }
 // (the viewer's own radio pick names a stage: an older game's stage track, or an MBAACC track's stage, the match's own
 // included)
-const radioPickHasStage = () => !!(radio && radioStageFollow && !HASH && (radio.dat || (radio.stages && radio.stages.length)));
+// (a ^stage chip's pick always takes its stage: "stage changes" off is for the radio's track picks; user 2026-11-03,
+// gaku's chip under a forced stage changed only the music)
+const stageFollows = () => radioStageFollow || !!(radio && radio.chip);
+const radioPickHasStage = () => !!(radio && stageFollows() && !HASH && (radio.dat || (radio.stages && radio.stages.length)));
 function radioStageSync(s) {
   const M = s && s.M;
   if (!M || !M._viewer_radio_stage_id || s.glLost) return;
@@ -2485,10 +2488,10 @@ function radioStageSync(s) {
   let ov = null;
   try { ov = window.mbaaStageOverride ? window.mbaaStageOverride(s, { own }) : null; } catch (e) {}
   if (ov && ov.data && memfsSize(M, ov.dat) !== ov.data.length) fsPut(M.FS, '/game/' + ov.dat, ov.data);
-  const st = ov && ov.data ? ov : radio && radio.dat && !HASH && radioStageFollow ? radio : null;
+  const st = ov && ov.data ? ov : radio && radio.dat && !HASH && stageFollows() ? radio : null;
   // an MBAACC track: its stage (the match's own when it is one of the track's: nothing to swap)
   let stage = 0;
-  if (!st && radio && radioStageFollow && radio.stages && radio.stages.length && !HASH && M._viewer_radio_stage_want_stage) {
+  if (!st && radio && stageFollows() && radio.stages && radio.stages.length && !HASH && M._viewer_radio_stage_want_stage) {
     const own = M._viewer_radio_stage_match();
     stage = radio.stages.includes(own) ? 0 : radio.stages[0];
   }
@@ -2570,7 +2573,7 @@ async function stageShow(s) {
   if (!stagePanel || !s || !s.M) { box.hidden = true; return; }
   const id = radio && radio.stageNow ? radio.stageNow : s.M.HEAP32[STAGE_ID >> 2], st = stagePanel.stages[id];  // (an MBAACC pick's stage)
   const mu = musicNow(), own = musicPick === 'match' ? s.bgmNow : null;
-  const f = mu ? mu.file : trackOf(own || s.bgmNow) || (st && st.track), key = `${id}/${f}/${+radioStageFollow}/${radio ? radio.file : ''}/${musicPick}/${liveExt.stage ? liveExt.stage.n : ''}`;
+  const f = mu ? mu.file : trackOf(own || s.bgmNow) || (st && st.track), key = `${id}/${f}/${+stageFollows()}/${radio ? radio.file : ''}/${musicPick}/${liveExt.stage ? liveExt.stage.n : ''}`;
   if (key === stageKey) return;
   stageKey = key;
   const tr = mu ? mu : stagePanel.tracks[f];
@@ -2594,7 +2597,7 @@ async function stageShow(s) {
     box.hidden = false;
     return;
   }
-  if (radio && radioStageFollow && (radio.tile || radio.tileUrl)) {  // an older game's stage: its picture, its name for the plate
+  if (radio && stageFollows() && (radio.tile || radio.tileUrl)) {  // an older game's stage: its picture, its name for the plate
     const view = box.querySelector('.view'), name = box.querySelector('.name'), d = radio.tile && cache.get(radio.tile);
     const old = view.dataset.src && view.dataset.src.startsWith('blob:') ? view.dataset.src : '';
     // (the stage's own render; a track with none shows its community tile)
