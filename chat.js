@@ -1786,7 +1786,7 @@
   }
   const clean = t => String(t).replace(/\x03\d{0,2}(,\d{1,2})?/g, '').replace(/[\x00-\x1f\x7f]/g, '');
   // 4chan-style word filter (user 2026-11-03): "cuck" reads "neco" for everyone, the sender too ("hello fellow necos",
-  // "neco melty"); the server, the bot and the mod log keep what was typed. The root only (cucks -> necos, cucked ->
+  // "neco melty"); only the display: the server keeps what was typed and nothing goes to the mod log. The root only (cucks -> necos, cucked ->
   // necoed), case kept (CUCK -> NECO, Cuck -> Neco); look-alike letters and a spelled-out c u c k / c.u.c.k caught too.
   // (spelled with anything between its letters, "c u ck", "c.u.c.k", "cu-ck", zero-width marks: from a word start only,
   // so "magic uk" stays; run together, anywhere. User 2026-11-03: "they're getting around the word filter")
@@ -1794,6 +1794,8 @@
   const WF_ROOT = new RegExp(`${WF_C}+${WF_U}+${WF_C}*k+`, 'giu');
   const WF_SPACED = new RegExp(`(?<![\\p{L}\\p{N}])${WF_C}${WF_SEP}${WF_U}+${WF_SEP}${WF_C}${WF_SEP}k+`, 'giu');  // (spaced: the second c needed, "c u k" (see you, k) stays)
   const wfCase = (m, w) => m === m.toUpperCase() && /[A-Z]/.test(m) ? w.toUpperCase() : /^[A-Z]/.test(m) ? w[0].toUpperCase() + w.slice(1) : w;
+  // (owner 2026-11-03: mods (ops in any channel we are in: mods are every channel's) may say it; their lines read as typed)
+  const modNick = n => !!n && [...chans.values()].some(c => c.ops.has(key(n)));
   const wordFilter = t => String(t).replace(WF_SPACED, m => wfCase(m.replace(/[^A-Za-z]/g, ''), 'neco')).replace(WF_ROOT, m => wfCase(m, 'neco'));
   // at most MARKS_MAX combining marks in a row (real scripts stack 2 - 4; a Zalgo stack of dozens ran over the lines
   // round it and cost the layout; the picture's overlay keeps as many: glovCps)
@@ -4351,7 +4353,7 @@
           if (!ac || !ac[1].trim()) return;
           action = true; text = ac[1];
         }
-        text = wordFilter(text);
+        if (!modNick(m.nick)) text = wordFilter(text);
         const t = m.tags, hist = !!(bt && /chathistory/.test(bt.type));
         if (!hist) typingGone(m.nick);
         const at = /^\d{1,9}\.\d{1,7}$/.test(t['+mbaa/at'] || '') ? t['+mbaa/at'].split('.').map(Number) : null;
@@ -4420,7 +4422,7 @@
     clearTimeout(typPauseT); typSent.state = 'done';  // (a message ends typing: receivers clear it on the line)
     if (!irc.caps.has('echo-message')) {
       const action = text.startsWith('\x01ACTION ');
-      addLine(shown, { nick: shownNick(irc.nick, irc.account, auth.name), irc: irc.nick, acct: irc.account, reply: rp ? rp.msgid : null, text: wordFilter(action ? text.slice(8, -1) : text), action, self: true, time: new Date(),
+      addLine(shown, { nick: shownNick(irc.nick, irc.account, auth.name), irc: irc.nick, acct: irc.account, reply: rp ? rp.msgid : null, text: (modNick(irc.nick) ? (s => s) : wordFilter)(action ? text.slice(8, -1) : text), action, self: true, time: new Date(),
                        color: prof.color, chara: prof.chara, moon: prof.moon, cmd, at });
     }
   }
