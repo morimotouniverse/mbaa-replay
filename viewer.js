@@ -1577,6 +1577,23 @@ let liveSrc = null;  // {id, info, since}
 // requests (no answer, a timeout, a 5xx from the Worker: the bridge is down). A notice up at the last answer stays up
 // while the feed is down (the restart itself); without one, two failures in a row show "unreachable". Meanwhile the polls
 // back off (liveNet.delay), and a match missing from the list just after (the bridge re-joining its hosts) is waited for
+// A timer that still runs on time in a hidden tab (dewmeer 2026-11-03: "keep the game in sync while the tab's not
+// active"): browsers slow a background page's own timers to once a second or less (Chrome: once a minute after 5 min),
+// which starved the live feed while the game kept ticking (bgTick), so the match fell behind and stalled. A worker's
+// timer is not slowed: while hidden, the live loops wait on one.
+const wClock = { w: null, n: 0, cb: new Map() };
+function wTimeout(fn, ms) {
+  if (document.visibilityState !== 'hidden') return setTimeout(fn, ms);
+  try {
+    if (!wClock.w) {
+      const u = URL.createObjectURL(new Blob(['onmessage = e => setTimeout(() => postMessage(e.data[0]), e.data[1])'], { type: 'text/javascript' }));
+      wClock.w = new Worker(u); URL.revokeObjectURL(u);
+      wClock.w.onmessage = e => { const f = wClock.cb.get(e.data); wClock.cb.delete(e.data); if (f) f(); };
+    }
+    const id = ++wClock.n; wClock.cb.set(id, fn); wClock.w.postMessage([id, ms]);
+    return 0;
+  } catch (e) { return setTimeout(fn, ms); }
+}
 const liveNet = { fails: 0, troubleAt: -1e9, notice: '' };
 liveNet.delay = () => liveNet.fails ? Math.min(1000 * 2 ** (liveNet.fails - 1), 5000) : 1000;
 liveNet.recent = () => performance.now() - liveNet.troubleAt < 60000;
@@ -1672,7 +1689,7 @@ async function liveExtSet(id, v) {
 let liveWant = null, liveCss = null;
 function liveRetry(id, match) {  // startLive could not reach the feed: again, unless a replay or another match was opened meanwhile
   if (session && !session.liveSrc) return;
-  setTimeout(() => { if ((!session || session.liveSrc) && liveWant === id) startLive(id, match); }, Math.max(2000, liveNet.delay()));
+  wTimeout(() => { if ((!session || session.liveSrc) && liveWant === id) startLive(id, match); }, Math.max(2000, liveNet.delay()));
 }
 // An update reload (updateWatch) of a live page: where it was (the match, its game, how far short of the stream's newest
 // frame) for the reloaded page, so it goes on from there: not that game again from its start (user 2026-11-01: a deploy's
@@ -2663,7 +2680,7 @@ async function liveListShow() {
   let l = [];
   // (a failed fetch, a phone's network dropping one request, keeps the list as it is and asks again in 5 s: it emptied
   // and hid the whole list for 15 s)
-  try { l = await liveList(); } catch (e) { if (ol.children.length) { setTimeout(liveListShow, 5000); return; } }
+  try { l = await liveList(); } catch (e) { if (ol.children.length) { wTimeout(liveListShow, 5000); return; } }
   try { await playersArt(); } catch (e) {}
   sec.hidden = !l.length;
   // a name the watched match didn't have at the join (the list learns it later: the host's GameSetup, a probe) fills in
@@ -2732,7 +2749,7 @@ async function liveListShow() {
     }
   if (!l.some(m => liveSrc && liveSrc.id === m.id)) liveWatching(0);
   marquee(ol, '.lnm:not(.mq)');
-  setTimeout(liveListShow, 15000);
+  wTimeout(liveListShow, 15000);
 }
 // the received records by index (each the longest so far), kept outside the game's memory: a seek's keyframe restore
 // rolls the game's copy back to what had arrived then, and liveRefeed hands it everything again
@@ -3435,7 +3452,7 @@ function liveBegin(s) {  // play(): after viewer_play
     } else if (!s.seeking) {
       status(`live: watching back, ${(ahead / 60).toFixed(0)} s behind (LIVE to catch up)`);
     }
-    setTimeout(poll, liveNet.delay());
+    wTimeout(poll, liveNet.delay());
   };
   poll();
 }
