@@ -649,6 +649,7 @@ function cachePinned() {
 // everything but keep (and the picks') out of the cache: the rest stays in Cache Storage, a fetch away
 function cachePrune(keep) {
   const pin = cachePinned();
+  if (liveKept) for (const p of liveKept.want) pin.add(p);  // (a kept live match's files: its switch-back reads them)
   for (const p of [...cache.keys()]) if (!keep.has(p) && !pin.has(p)) cacheDrop(p);
   for (const m of [bgmDecoded, bgmParsedMap]) for (const p of [...m.keys()]) if (!cache.has(p)) m.delete(p);
 }
@@ -820,8 +821,22 @@ function bootSnapshot(M) {
   kzM = M;
   const top = M._viewer_mem_top(), W = PAGE >> 2, H = new Int32Array(M.HEAPU8.buffer), n = Math.ceil(top / PAGE);
   const pages = new Array(n);
+  // (each page's hash, as a keyframe's, taken before packing (zlib's scratch changes as pages are packed): a kept live
+  // match's keyframe (liveKeepTake) takes the boot page for one the game has not changed since boot, so only its changed
+  // pages cost memory. None for the hash output and the zlib scratch: their content is not what was hashed)
+  const hs = Array.from(pageHashes(M, n * PAGE));
+  const x0 = Math.floor(M._viewer_page_hash_area(0) / PAGE), x1 = Math.ceil(M._viewer_page_hash_area(1) / PAGE);
+  const z0 = M._viewer_kz_base ? Math.floor(M._viewer_kz_base() / PAGE) : -1, z1 = M._viewer_kz_base ? Math.ceil((M._viewer_kz_base() + M._viewer_kz_size()) / PAGE) : -1;
   let bytes = 0;
   for (let i = 0; i < n; i++) { pages[i] = packPage(H, i * W, W); bytes += pages[i].bytes; }
+  // (and only where the page hashes the same after packing: the pages zlib's calls wrote meanwhile (its C stack frames,
+  // its arena counter) were packed with content other than what was hashed)
+  const h2 = pageHashes(M, n * PAGE);
+  for (let i = 0; i < n; i++) {
+    const j = 4 * i;
+    if ((i >= x0 && i < x1) || (i >= z0 && i < z1) || hs[j] !== h2[j] || hs[j + 1] !== h2[j + 1] || hs[j + 2] !== h2[j + 2] || hs[j + 3] !== h2[j + 3]) continue;
+    pages[i].h = [hs[j], hs[j + 1], hs[j + 2], hs[j + 3]];
+  }
   return { top: n * PAGE, pages, bytes };
 }
 // The picture's comment renderer (overlay_gl.cpp) keeps its fonts, glyph / emoji caches, registered comments and switches
@@ -845,6 +860,7 @@ function restoreBoot(s) {
   // both names after a catch-up jump or a seek for the rest of the session, user 2026-11-01)
   s.bannerKey = null;
   ovRestored(s);
+  liveKeptStale(M);  // (a kept live match's textures survive the reset: liveKeepTake)
   M._viewer_tex_store_reset();  // the last match's sealed textures (the boot ones stay)
 }
 async function newSession(rep, name, want) {
@@ -911,6 +927,7 @@ async function play(rep, name, catchUp = 0, want = null) {
   { const b = document.getElementById('ffbadge'); if (b) b.hidden = true; } catchUpShow(null);  // (a new session: its own state)
   misses.clear();
   const s = await newSession(rep, name, want);
+  swMark('session');
   try { call(s, 'viewer_rate', 1); } catch (e) {}  // (a reused module keeps the last session's live pacing rate)
   // stage animations on, except for native comparisons (?stageAnim=0, hash runs): the oracle's settings have them off
   call(s, 'viewer_stage_anim', Q.get('stageAnim') !== null ? +(Q.get('stageAnim') !== '0') : HASH ? 0 : 1);
@@ -928,12 +945,15 @@ async function play(rep, name, catchUp = 0, want = null) {
   if (s.lt && !s.M.ccall('viewer_lt_set', 'number', ['array', 'number'], [s.lt, s.lt.length])) { console.warn('clip: live forcing unreadable'); s.lt = null; }
   if (!s.lt) s.M.ccall('viewer_lt_clear', null, [], []);
   else console.log(`clip: replay played with its live forcing (${s.lt.length} bytes)`);
-  if (HASH) s.M.ccall('viewer_hash_enable', null, [], []);
+  if (HASH || CU_HASH) s.M.ccall('viewer_hash_enable', null, [], []);
   call(s, 'viewer_play', 0);
+  swMark('play'); swMark('load');
   if (liveSrc && Q.get('live')) { liveBegin(s); swMark('boot', true, liveSrc.id); }
   call(s, 'viewer_hud', ui.hud ? 1 : 0);
   window.__mbaa = { Module: s.M, man };
   if (!HASH || CAPTURE) timelineInit(s);
+  swMark('timeline', s);
+  if (s.liveResumeK && s.tl) liveResumeApply(s);  // (back to a kept live match: its keyframe)
   // the pre-scan is a second copy of the game (~400 MB with its files): not in low-memory mode, where marks come as playback reaches them
   if (!HASH && !CAPTURE && !PERF && !catchUp && !s.liveSrc && !(LOWMEM && Q.get('scan') !== '1')) startScan(s);
   window.__mbaaStarted = 1;
@@ -960,6 +980,7 @@ async function play(rep, name, catchUp = 0, want = null) {
   }
   if (s !== session) return;
   call(s, 'viewer_run');
+  swMark('run');
   xfRuns++;
   loading(false);
   if (!HASH) movieLoad();
@@ -1043,6 +1064,7 @@ function timelineInit(s) {
   const t = s.tl = { kfs: [], simMax: 0, end: null, marks: [], fights: [], intro: -1, bytes: 0, lastKf: -1, seekMs: [],
                      want: null, running: false, round: -1, scene: -1, est: repEstimate(s.rep), M };
   M.mbaaTexKfRef = new Map();  // (a reused instance: the last match's keyframes are gone with its timeline)
+  for (const [k, n] of M.mbaaTexHold || []) M.mbaaTexKfRef.set(k, n);  // (a kept live match's: liveKeepTake)
   M.mbaaFrame = f => {
     if (f > t.simMax) {
       t.simMax = f;
@@ -1058,10 +1080,21 @@ function timelineInit(s) {
       t.intro = scene === 1 ? intro : -1;
       if (t.end === null && M._viewer_ended()) t.end = f;
     }
-    if (s.liveSrc) { liveCssWatch(s); liveRematchHold(s); liveBanner(s); liveStreak(s); slogWatch(s); }
+    const cu = s.cu;
+    if (cu) {
+      // a live catch-up (liveCatchUp): the watchers where they can act, outside a battle, at the retry menu, a scene or
+      // retry change, and every CU_WATCH frames (a streak post a few frames later); the banner once at the end. In a
+      // battle with no retry menu they have nothing to hold or start: a select's files, the retry menu's rematch
+      const sc = M.HEAP32[0x54EEE8 >> 2], rt = M._viewer_spectate_in_retry();
+      if (sc !== 1 || rt || sc !== cu.scene || rt !== cu.retry || f - cu.full >= CU_WATCH) {
+        cu.scene = sc; cu.retry = rt; cu.full = f;
+        liveCssWatch(s); liveRematchHold(s); liveStreak(s); slogWatch(s);
+      }
+    } else if (s.liveSrc) { liveCssWatch(s); liveRematchHold(s); liveBanner(s); liveStreak(s); slogWatch(s); }
     else if (TUNE) liveBanner(s);
     if (!s.seeking) incTick(s, f);
-    else if (f >= t.lastKf + KF_EVERY && f >= t.simMax && !M._viewer_files_open() && !(LOWMEM && !t.marks.length)) keyframe(s, f);  // phones: none in the intro (incTick)
+    // (a live catch-up: a keyframe every CU_KF_EVERY frames, every KF_EVERY in its last CU_KF_TAIL)
+    else if (f >= t.lastKf + (cu && f < cu.T - CU_KF_TAIL ? CU_KF_EVERY : KF_EVERY) && f >= t.simMax && !M._viewer_files_open() && !(LOWMEM && !t.marks.length)) keyframe(s, f);  // phones: none in the intro (incTick)
   };
   if (!M._viewer_files_open()) keyframe(s, M._viewer_frame());
 }
@@ -1199,7 +1232,8 @@ function kfTexDrop(t, kf) {
 function kfTexBytes(t) {
   const M = t.M, ref = M && M.mbaaTexKfRef, S = M && M.mbaaTexStore;
   let n = 0;
-  if (ref && S) for (const k of ref.keys()) { const e = S.get(k); if (e && !e.perm && !e.stale) n += e.bytes || 0; }
+  const hold = M && M.mbaaTexHold;
+  if (ref && S) for (const k of ref.keys()) { const e = S.get(k); if (e && !e.perm && !e.stale && !(hold && hold.has(k))) n += e.bytes || 0; }
   return n;
 }
 function storeGc(t) {
@@ -1774,6 +1808,11 @@ function swBegin(id) {
 }
 // first: only the first time per switch (else the newest time: cuEnd after a second jump)
 function swMark(k, first = true, id = null) {
+  // (a switch back to a kept match (phase 7): its steps in window.__mbaaSwitchBack; the second argument may be the session)
+  const ses = first && typeof first === 'object' ? first : null;
+  if (ses) first = true;
+  const B = window.__mbaaSwitchBack;
+  if (B && !B.restored && (liveResumeK || (ses && ses.liveResumeK))) (B.steps || (B.steps = {}))[k] = Math.round(performance.now() - (B.click ?? B.start));
   if (!sw || (id && id !== sw.id) || (first && sw.marks[k] != null)) return;
   sw.marks[k] = Math.round(performance.now() - sw.t0);
 }
@@ -1844,6 +1883,13 @@ async function startLive(id, match = null) {
   }
   liveCss = null;
   const prev = session;
+  // (the match kept warm when the page left it (liveKeepTake): back to it from its keyframe, if its game is still the
+  // list's and it was kept on this instance)
+  const K = liveKept;
+  if (K && K.id === id && K.match === (info.match || null)) {
+    if (K.game === info.game && prev && prev.M === K.M && Date.now() - K.at <= KEEP_MS) return liveResumeStart(K, prev);
+    liveKeptDrop(K.game !== info.game ? `its game moved on (${K.game} -> ${info.game})` : 'not resumable');
+  }
   // (the same match: the host's next match on the same id has its own streaks)
   if (!info.streak && prev && prev.M && liveOurs(info, prev.liveSrc) && prev.streakKnown && prev.M.HEAP32[0x54EEE8 >> 2] !== 1)
     info.streak = STREAK.map(a => prev.M.HEAP32[a >> 2]);
@@ -1851,11 +1897,16 @@ async function startLive(id, match = null) {
   if (r && r.ok) liveExtSet(id, r.headers.get('X-Live-Ext'));
   if (liveWant !== id) return;
   if (!r || !r.ok) { status(`live match: ${r ? `HTTP ${r.status}` : 'unreachable'}`); return !r || r.status >= 500 ? liveRetry(id, match) : undefined; }
+  const bytes = await r.arrayBuffer();
+  if (liveWant !== id) return;
+  // (the live match being left for another: kept warm for a switch back)
+  if (prev && prev.liveSrc && prev.liveSrc.id !== id) liveKeepTake(prev);
   liveSrc = { id, info, since: info.game };
   window.__mbaaRepUrl = null;
-  const bootBytes = await r.arrayBuffer();
   swMark('bootRep', true, id);
-  await start(new File([bootBytes], `LIVE ${info.names.map(n => n.trim()).join(' vs ')}`), false, id);
+  // (a switch from a match on screen: quiet, the old picture held until the new match's first frame is drawn and
+  // crossfaded into it, not the opening movie; a first load: the movie)
+  await start(new File([bytes], `LIVE ${info.names.map(n => n.trim()).join(' vs ')}`), !CU_OLD && session && session.M ? 'switch' : false, id);
 }
 // the last index number in a block of .ccs records (u32 index, u32 kind, rng 12 + ring 220, u32 frames, u16 x 2 x frames)
 function liveLastIndex(b) {
@@ -1902,39 +1953,134 @@ function stepSlicer() {
 const taskTurn = () => new Promise(r => { const ch = new MessageChannel(); ch.port1.onmessage = () => setTimeout(r, 0); ch.port2.postMessage(0); });
 // a short yield (scheduler.yield: its continuation runs ahead of other tasks; else a timer)
 const yieldTask = () => (globalThis.scheduler && typeof scheduler.yield === 'function') ? scheduler.yield() : new Promise(r => setTimeout(r, 0));
+// Catch-up (SWITCH_PLAN.md phases 4-5): frames stepped in ~CU_SLICE_MS tasks, then a real task turn (a message: timers,
+// worker replies and network completions run in it; no 4 ms timer clamp); the frame hook's live watchers only where they
+// can act (outside a battle, the retry menu, a scene change, every CU_WATCH frames: frameHook); DVR keyframes every
+// CU_KF_EVERY frames until the last CU_KF_TAIL (there every KF_EVERY, as playback: a seek back from live finds them);
+// one frame drawn every CU_SHOW_MS (the new match on screen at once, a fast-forward under the progress overlay). Drawn
+// and undrawn frames are the same game state (a tick owing several frames draws only its last). ?cuOld=1: the old path
+// (every watcher every frame, a keyframe every KF_EVERY, 600-frame steps, the loading movie on a switch), for the checks
+// (tools/web/live_catchup_check.py: the state at live is the same either way)
+const CU_OLD = Q.get('cuOld') === '1', CU_HASH = Q.get('cuhash') === '1';
+// (the checks: the landing frame rounded down to a multiple of ?cuRound=, so runs that started catching up a few frames
+// apart land on the same frame)
+const CU_ROUND = +(Q.get('cuRound') || 0);
+const cuTarget = (M, n) => { const f = M._viewer_frame(), T = f + n; return CU_ROUND && Math.floor(T / CU_ROUND) * CU_ROUND > f + 2 ? Math.floor(T / CU_ROUND) * CU_ROUND : T; };
+const CU_SLICE_MS = +(Q.get('cuSlice') || 50), CU_SHOW_MS = +(Q.get('cuShow') ?? 200), CU_KF_EVERY = 1800, CU_KF_TAIL = 600, CU_WATCH = 30;
+const cuTurn = () => new Promise(r => { const ch = new MessageChannel(); ch.port1.onmessage = () => { ch.port1.close(); r(); }; ch.port2.postMessage(0); });
+// marks of a match switch (performance.now(); window.__mbaaSwitch, the checks): click, picture (the new match's first
+// frame drawn), cuStart / cuEnd (catch-up), live (caught up)
 async function liveCatchUp(s, n) {
-  const M = s.M, T = M._viewer_frame() + n, DRAW = 2, swId = s.liveSrc && s.liveSrc.id;
-  swMark('cuStart', true, swId);
-  if (sw && sw.id === swId) sw.cuFrames = (sw.cuFrames || 0) + n;
+  if (CU_OLD) return liveCatchUpOld(s, n);
+  const M = s.M, T = cuTarget(M, n), DRAW = 2, t0 = performance.now(), f0 = M._viewer_frame();
+  catchUpShow(T - f0, T - f0);
+  s.seeking = true; s.mute = true;
+  s.stopSes(); s.bgmHalt();
+  uiApply(s);
+  call(s, 'viewer_suppress', 1);
+  s.cu = { T, scene: -1, retry: -1, full: -1e9 };
+  swMark('cuStart', true, s.liveSrc && s.liveSrc.id);
+  if (sw && s.liveSrc && sw.id === s.liveSrc.id) sw.cuFrames = (sw.cuFrames || 0) + (T - f0);
+  let f = f0, per = 0.5, shown = -1e9, said = 0, stalled = false, drawn = 0;
+  const pf = s.cuProf = { sim: 0, draw: 0, turn: 0, turns: 0 };
+  try {
+    while (f < T - DRAW && !stalled) {
+      // a picture now and then, the first before any stepping (a game's first frames load it: its versus screen is on
+      // screen meanwhile); not the last frames before T, drawn below
+      if (CU_SHOW_MS > 0 && f < T - DRAW - 1 && performance.now() - shown >= CU_SHOW_MS && !hidden()) {
+        const td = performance.now();
+        if (s.liveSrc) liveBanner(s);  // (the players' names on the banner of the frame drawn)
+        call(s, 'viewer_suppress', 0);
+        const g = M._viewer_step(1);
+        call(s, 'viewer_suppress', 1);
+        pf.draw += performance.now() - td;
+        if (g === f) { stalled = true; break; }
+        f = g; drawn++; shown = performance.now();
+        if (!s.livePic) { s.livePic = true; swMark('picture'); }
+        if (M.HEAP32[0x54EEE8 >> 2] === 1) swMark('battlePic');
+      }
+      const ts = performance.now();
+      // a task's worth: steps sized to the time left in the slice at the measured cost per frame
+      for (let now = ts; f < T - DRAW && now - ts < CU_SLICE_MS; now = performance.now()) {
+        const k = Math.max(1, Math.min(T - DRAW - f, Math.floor((CU_SLICE_MS - (now - ts)) / per)));
+        const g = M._viewer_step(k), t1 = performance.now();
+        pf.sim += t1 - now;
+        if (g === f) { stalled = true; break; }  // (held: a select's files, the stream)
+        per = Math.max(0.02, 0.5 * per + 0.5 * (t1 - now) / (g - f));
+        f = g;
+      }
+      if (performance.now() - said > 200 || f >= T - DRAW) { said = performance.now(); status(`live: catching up (${T - f} frames to go)`); catchUpShow(T - f, T - f0); }
+      const tt = performance.now();
+      await cuTurn();
+      pf.turn += performance.now() - tt; pf.turns++;
+      if (session !== s) { catchUpShow(null); return; }
+    }
+  } finally { if (s.cu && s.cu.T === T) s.cu = null; }
+  catchUpShow(null);
+  call(s, 'viewer_suppress', 0);
+  if (f < T) call(s, 'viewer_step', T - f);
+  else call(s, 'viewer_represent');
+  if (session === s && s.liveSrc) { liveCssWatch(s); liveRematchHold(s); liveBanner(s); liveStreak(s); slogWatch(s); }  // (the watchers once at the end)
+  s.seeking = false; s.mute = ui.paused;
+  uiApply(s);
+  if (!ui.paused) s.bgmSync(M._viewer_frame());
+  s.livePic = true;
+  swMark('picture'); swMark('battlePic');
+  cuDone(s, f0, t0, drawn);
+}
+// (the checks) the catch-up's rate, and the game state where it landed: the state-hash rows of every frame so far
+// (?cuhash=1: viewer_hash_enable at the start) and the hashes of every memory page
+function cuDone(s, f0, t0, drawn) {
+  const M = s.M, f = M._viewer_frame(), ms = performance.now() - t0;
+  const r = { frames: f - f0, ms, fps: (f - f0) / (ms / 1000), from: f0, frame: f, drawn, kfs: s.tl ? s.tl.kfs.length : 0, old: CU_OLD, prof: s.cuProf || null,
+             kfMs: s.tl ? s.tl.kfs.filter(k => k.frame >= f0).map(k => Math.round(k.ms)) : [] };
+  s.cuProf = null;
+  if (CU_HASH) {
+    const rows = M.ccall('viewer_hash_take', 'string', [], []);
+    s.cuRows = (s.cuRows || '') + rows;
+    let h = 0x811c9dc5;
+    for (let i = 0; i < s.cuRows.length; i++) h = Math.imul(h ^ s.cuRows.charCodeAt(i), 0x01000193);
+    const lines = s.cuRows.split('\n').filter(l => l && !l.startsWith('k,'));
+    Object.assign(r, { rowsHash: (h >>> 0).toString(16), rows: lines.length, lastRow: lines[lines.length - 1] || '' });
+    const top = M._viewer_mem_top(), hs = pageHashes(M, top);
+    const x0 = Math.floor(M._viewer_page_hash_area(0) / PAGE), x1 = Math.ceil(M._viewer_page_hash_area(1) / PAGE);
+    const pages = [];
+    for (let i = 0; i * 4 < hs.length; i++) pages.push(i >= x0 && i < x1 ? '' : [0, 1, 2, 3].map(j => (hs[i * 4 + j] >>> 0).toString(16)).join(''));
+    r.pages = pages; r.top = top;
+  }
+  (window.__mbaaCatchUp = window.__mbaaCatchUp || []).push(r);
+  swMark('cuEnd'); swMark('live');
+  if (s.cssBgGo) s.cssBgGo();
+  console.log(`live: caught up ${r.frames} frames in ${Math.round(ms)} ms (${Math.round(r.fps)} frames/s, ${drawn} drawn)`);
+}
+async function liveCatchUpOld(s, n) {
+  const M = s.M, T = cuTarget(M, n), DRAW = 2, t0 = performance.now(), f0 = M._viewer_frame();
   catchUpShow(n, n);
   s.seeking = true; s.mute = true;
   s.stopSes(); s.bgmHalt();
   uiApply(s);
   call(s, 'viewer_suppress', 1);
-  let f = M._viewer_frame(), shown = 0, turn = performance.now();
-  const sl = stepSlicer();
+  swMark('cuStart', t0);
+  let f = M._viewer_frame();
   while (f < T - DRAW) {
-    const k = Math.min(T - DRAW - f, sl.n()), t0 = performance.now();
-    const g = call(s, 'viewer_step', k);
-    sl.took(performance.now() - t0, g - f);
+    const g = call(s, 'viewer_step', Math.min(T - DRAW - f, 600));
     if (g === f) break;
     f = g;
-    if (performance.now() - shown > 200) { shown = performance.now(); status(`live: catching up (${T - f} frames to go)`); catchUpShow(T - f, n); }
-    // (a real task turn at least every ~50 ms: timers, worker replies (the card's art), network completions and a paint
-    // run during the catch-up. A scheduler.yield continuation runs ahead of them, and 600-frame steps (~0.45 s each)
-    // held the card until the catch-up was over: SWITCH_PLAN.md finding 4)
-    if (performance.now() - turn > 50) { await taskTurn(); turn = performance.now(); } else await yieldTask();
+    status(`live: catching up (${T - f} frames to go)`);
+    catchUpShow(T - f, n);
+    await new Promise(r => setTimeout(r, 0));
     if (session !== s) { catchUpShow(null); return; }
   }
   catchUpShow(null);
   call(s, 'viewer_suppress', 0);
   if (f < T) call(s, 'viewer_step', T - f);
   else call(s, 'viewer_represent');
-  swMark('cuEnd', false, swId);
-  if (sw && sw.marks.frame == null && sw.id === swId) requestAnimationFrame(() => swMark('frame', true, swId));
   s.seeking = false; s.mute = ui.paused;
   uiApply(s);
   if (!ui.paused) s.bgmSync(M._viewer_frame());
+  s.livePic = true;
+  swMark('picture'); swMark('battlePic');
+  cuDone(s, f0, t0, 0);
 }
 // The player block (spectating): per side the character's select-screen icon in its animated 1P / 2P cursor frame, the
 // player's name, the moon and character. The art is the select screen's own (grp/c_sel_aa: icons 48x64, the large row
@@ -3022,7 +3168,7 @@ function liveCssWatch(s) {
   // result screen until all ~80 MB were in, ~45 s on a phone that joined late in a game, the list meanwhile on the next
   // game, then a fresh start: "they don't work on the phone", 2026-11-01)
   const sc = g(0x54EEE8);
-  if (s.cssBgP && !s.cssBgReady && !s.cssBgHeld && (sc === CSS_SCENE || (s.cssChoice && (sc === 5 || call(s, 'viewer_spectate_in_retry'))))) { s.cssBgHeld = true; liveHoldApply(s); }
+  if (s.cssBgP && !s.cssBgReady && !s.cssBgHeld && (sc === CSS_SCENE || (s.cssChoice && (sc === 5 || call(s, 'viewer_spectate_in_retry'))))) { s.cssBgHeld = true; if (s.cssBgGo) s.cssBgGo(); liveHoldApply(s); }
   if (g(0x54EEE8) !== CSS_SCENE) { if (s.cssHeld) liveCssHold(s, false); s.cssKey = null; return; }
   s.cssPassed = true;  // (the next game's load checks the select's picks against the stream's setup: liveLoaderGate)
   const done = g(CSS_OBJ + 0x3C) >= 4;
@@ -3408,6 +3554,197 @@ function liveRefeed(s) {  // restore(): after the keyframe is back
   for (const x of parts) all.set(x, o), o += x.length;
   liveFeed(s, all);
 }
+// ---- Switch-back (harness-design/live_switch/SWITCH_PLAN.md phase 7, option D): desktop only. The live match left for
+// another one is kept warm: a keyframe at the moment it was left (its live point; a page the game has not changed since
+// boot is the boot snapshot's own, so only the changed pages cost memory), its records, read on in the background while
+// away (kept, never played: no simulation), its files in memory and the store textures its keyframe names (held through
+// the next match's store reset and eviction). Back to it (the live list, Back): the same instance restores that keyframe
+// into a new session of the match and catches up only the time away (~60 frames a second away, ~1,300 simulated a
+// second). One match kept (the next switch keeps the one left then); dropped after KEEP_MS, on memory pressure, when it
+// leaves the feed or its game moves on (a new game: a fresh start is as quick), and when a replay opens. Phones / low
+// memory: never (LOWMEM). ?swkeep=0: off.
+const SW_KEEP = !LOWMEM && !HASH && !CAPTURE && Q.get('swkeep') !== '0' && Q.get('reuse') !== '0' &&
+  !(navigator.deviceMemory && navigator.deviceMemory < 4);
+const KEEP_MS = +(Q.get('keepms') || 300000);
+let liveKept = null, liveResumeK = null, liveClickAt = null;
+// (a switch back's steps, ms since the click: __mbaaSwitchBack.steps)
+const texKey = (a, i) => a[i] + ':' + a[i + 1] + ':' + a[i + 2];
+// the store entries a kept keyframe names: counted in M.mbaaTexHold, and in the timeline's reference map (store eviction
+// skips them; timelineInit seeds a new session's map from the hold)
+function liveHoldTex(M, tex, d) {
+  const hold = M.mbaaTexHold || (M.mbaaTexHold = new Map()), ref = M.mbaaTexKfRef;
+  for (let i = 0; i + 2 < tex.length; i += 3) {
+    const k = texKey(tex, i), n = (hold.get(k) || 0) + d;
+    if (n > 0) hold.set(k, n); else hold.delete(k);
+    if (ref) { const r = (ref.get(k) || 0) + d; if (r > 0) ref.set(k, r); else ref.delete(k); }
+  }
+}
+// (restoreBoot, before the store reset: a held entry the match being left did not use was marked stale by the reset
+// before, and a stale one goes at the next: unmarked, the reset marks it stale again and keeps it)
+function liveKeptStale(M) {
+  const S = M.mbaaTexStore;
+  if (S && M.mbaaTexHold) for (const k of M.mbaaTexHold.keys()) { const e = S.get(k); if (e) e.stale = 0; }
+}
+function liveMemTight() {
+  const m = performance.memory;  // (Chromium only; elsewhere the 5 minutes and the one-match cap bound it)
+  return !!(m && m.jsHeapSizeLimit && m.usedJSHeapSize > 0.8 * m.jsHeapSizeLimit);
+}
+function liveKeptDrop(why) {
+  const K = liveKept;
+  if (!K) return;
+  liveKept = null;
+  wClear(K.timer);
+  try { liveHoldTex(K.M, K.kf.tex, -1); } catch (e) {}
+  console.log(`live: the kept match is dropped (${why})`);
+  if (session && session.tl && session.M === K.M) storeGc(session.tl);
+}
+function liveKeptStat(K) {
+  const S = K.M.mbaaTexStore, seen = new Set(), cur = session && session.want;
+  let tex = 0, texOnly = 0, files = 0, recs = 0;
+  for (let i = 0; i + 2 < K.kf.tex.length; i += 3) {
+    const k = texKey(K.kf.tex, i), e = S && S.get(k);
+    if (seen.has(k) || !e || e.perm) continue;
+    seen.add(k); tex += e.bytes || 0; if (e.stale) texOnly += e.bytes || 0;
+  }
+  for (const p of K.want) if (!(cur && cur.has(p))) { const d = cache.get(p); if (d) files += d.length; }
+  for (const b of K.recs.values()) recs += b.length;
+  const r1 = x => Math.round(x / 1e5) / 10;
+  return { frame: K.kf.frame, game: K.game, pagesMB: r1(K.bytes), pagesOwn: K.own, pagesBoot: K.shared, texMB: r1(tex),
+           texOnlyMB: r1(texOnly), filesOnlyMB: r1(files), recsKB: Math.round(recs / 1e3), awayS: Math.round((Date.now() - K.at) / 100) / 10,
+           polls: K.polls, takeMs: Math.round(K.ms * 10) / 10 };
+}
+window.__mbaaKept = () => (liveKept ? liveKeptStat(liveKept) : null);
+// the session being left for another live match (startLive, just before the new one starts): kept
+function liveKeepTake(s) {
+  if (!SW_KEEP || !s || !s.liveSrc || !s.tl || !s.boot || !s.M || session !== s) return;
+  const L = s.liveSrc, M = s.M, t = s.tl, t0 = performance.now();
+  if (L.moved || L.next || L.backEnded || s.cssHeld || s.loadHeld || call(s, 'viewer_ended')) return;
+  if (liveMemTight()) { console.log('live: the match left is not kept (memory pressure)'); return; }
+  // (an incremental keyframe in progress: dropped, as a seek does: its pages are not all packed yet)
+  if (t.inc) {
+    if (t.inc.kf) { const at = t.kfs.indexOf(t.inc.kf); if (at >= 0) { t.kfs.splice(at, 1); for (const p of t.inc.kf.pages) pageRef(t, p, -1); kfTexDrop(t, t.inc.kf); } }
+    t.inc = null;
+    t.lastKf = t.kfs.length ? t.kfs[t.kfs.length - 1].frame : -1;
+  }
+  const f = M._viewer_frame();
+  if (!M._viewer_files_open()) keyframe(s, f);
+  let kf = null;
+  for (const k of t.kfs) if (k.frame <= f && !k.pending) kf = k;
+  if (!kf || kf.frame < f - 600) { console.log('live: the match left is not kept (no keyframe near its frame)'); return; }
+  const B = s.boot.pages;
+  let bytes = 0, shared = 0, own = 0;
+  const pages = kf.pages.map((q, i) => {
+    if (!q) return null;
+    const b = B[i];
+    if (b && b.h && q.h && b.h[0] === q.h[0] && b.h[1] === q.h[1] && b.h[2] === q.h[2] && b.h[3] === q.h[3]) { shared++; return { boot: b }; }
+    own++; bytes += q.bytes;
+    const c = { bytes: q.bytes, h: q.h };
+    if (q.r) c.r = q.r; else if (q.z) c.z = q.z; else { c.m = q.m; c.v = q.v; }
+    return c;
+  });
+  const g0 = call(s, 'viewer_spectate_game');
+  liveKeptDrop('another match kept');
+  const K = liveKept = {
+    M, id: L.id, match: L.info.match || null, info: L.info, game: g0 >= 0 ? g0 : L.info.game, rep: s.rep, name: s.name,
+    want: new Set([...s.want].filter(p => !s.freed.has(p))), kf: { frame: kf.frame, pages, tex: kf.tex ? Int32Array.from(kf.tex) : new Int32Array(0) },
+    recs: L.recs, since: L.since, tapes: L.tapes, firstGame: L.firstGame, marks: t.marks.slice(), fights: t.fights.slice(),
+    streakKnown: s.streakKnown, at: Date.now(), bytes, shared, own, polls: 0, ms: 0, timer: 0 };
+  liveHoldTex(M, K.kf.tex, +1);
+  K.ms = performance.now() - t0;
+  K.timer = wTimeout(() => liveKeptPoll(K), 1000);
+  console.log(`live: the match left is kept for a switch back (frame ${kf.frame}, ${(bytes / 1e6).toFixed(1)} MB of its own pages, ` +
+              `${shared} pages the boot snapshot's, ${K.ms.toFixed(1)} ms)`);
+}
+// while away: the kept match's records, read on as the session would (not counted as a viewer: no v=), kept only
+async function liveKeptPoll(K) {
+  if (liveKept !== K) return;
+  if (Date.now() - K.at > KEEP_MS) return liveKeptDrop(`kept ${Math.round(KEEP_MS / 1000)} s`);
+  if (liveMemTight()) return liveKeptDrop('memory pressure');
+  try {
+    const r = await fetch(`${LIVE}/live/${K.id}/rec?from=${K.info.game}&since=${K.since}` + (K.match ? `&match=${encodeURIComponent(K.match)}` : ''),
+      { cache: 'no-store', ...(AbortSignal.timeout ? { signal: AbortSignal.timeout(5000) } : {}) });
+    if (liveKept !== K) return;
+    if (r.status === 404) return liveKeptDrop('it left the feed');
+    if (r.ok) {
+      const b = new Uint8Array(await r.arrayBuffer());
+      if (liveKept !== K) return;
+      if (b.length) { liveKeep(K, b); K.since = liveLastIndex(b); }
+      K.polls++;
+    }
+  } catch (e) {}
+  if (liveKept === K) K.timer = wTimeout(() => liveKeptPoll(K), 1000);
+}
+// startLive: back to the kept match (its game still the list's). The match being left is kept in its turn.
+async function liveResumeStart(K, prev) {
+  liveKept = null; wClear(K.timer);  // (its texture hold stays until the restore takes it over: liveResumeApply)
+  const B = window.__mbaaSwitchBack = { click: liveClickAt, start: performance.now(), awayS: (Date.now() - K.at) / 1000, kept: liveKeptStat(K) };
+  if (prev && prev.liveSrc && prev.liveSrc.id !== K.id) liveKeepTake(prev);
+  console.log(`live: back to the kept match (${B.awayS.toFixed(1)} s away)`);
+  liveResumeK = K;
+  liveSrc = { id: K.id, info: K.info, since: K.info.game };
+  window.__mbaaRepUrl = null;
+  await start(new File([K.rep], K.name), true, K.id);
+}
+// play(), after timelineInit: the kept keyframe restored into the new session (the instance's boot state + this match's
+// load are under it), the records fed again, then the time away caught up
+function liveResumeApply(s) {
+  const K = s.liveResumeK, t = s.tl, M = s.M, t0 = performance.now(), B = window.__mbaaSwitchBack || (window.__mbaaSwitchBack = {});
+  s.liveResumeK = null;
+  // (pages of its own for this timeline's counts; a boot page counts no bytes: the boot snapshot holds it anyway)
+  const kf = { frame: K.kf.frame, ms: 0, fresh: 0, pages: K.kf.pages.map(q => !q ? null : q.boot ? { ...q.boot, n: 0, bytes: 0 } : { ...q, n: 0 }) };
+  for (const q of kf.pages) if (q) { t.bytes += q.bytes; pageRef(t, q, +1); }
+  liveHoldTex(M, K.kf.tex, -1);  // (the hold, from here the timeline's own reference)
+  kf.tex = K.kf.tex;
+  for (let i = 0; i + 2 < kf.tex.length; i += 3) { const k = texKey(kf.tex, i); M.mbaaTexKfRef.set(k, (M.mbaaTexKfRef.get(k) || 0) + 1); }
+  let at = t.kfs.length;
+  while (at > 0 && t.kfs[at - 1].frame > kf.frame) at--;
+  if (at > 0 && t.kfs[at - 1].frame === kf.frame) { const o = t.kfs.splice(at - 1, 1)[0]; for (const p of o.pages) pageRef(t, p, -1); kfTexDrop(t, o); at--; }
+  t.kfs.splice(at, 0, kf);
+  t.lastKf = t.kfs[t.kfs.length - 1].frame;
+  t.marks = K.marks; t.fights = K.fights;
+  restore(s, kf);
+  const scene = M.HEAP32[0x54EEE8 >> 2];
+  t.simMax = Math.max(t.simMax, kf.frame); t.scene = scene; t.round = M.HEAP32[0x77BFA4 >> 2]; t.intro = scene === 1 ? M.HEAPU8[0x55D20B] : -1;
+  s.liveHeldSeen = call(s, 'viewer_spectate_held');
+  s.liveJoined = false;  // (the first poll's jump threshold: as at a join)
+  s.swBack = B;
+  B.restored = performance.now(); B.restoreMs = Math.round((B.restored - t0) * 10) / 10; B.frame = kf.frame; B.copied = t.lastCopied;
+  if (Q.get('swhash') === '1') {  // (test: the state rows of the 30 frames after the restored one, live_switch_back_check.py)
+    M.ccall('viewer_hash_enable', null, [], []);
+    call(s, 'viewer_suppress', 1); call(s, 'viewer_step', 30); call(s, 'viewer_suppress', 0);
+    B.rows0 = { from: kf.frame, csv: M.ccall('viewer_hash_take', 'string', [], []) };
+  }
+  B.gap = call(s, 'viewer_spectate_buffered') - LIVE_BEHIND;
+  // (after play() has started the loop: the gap, unrendered; the first poll's jump finds the session seeking)
+  setTimeout(async () => {
+    if (session !== s) return;
+    const n = call(s, 'viewer_spectate_buffered') - LIVE_BEHIND;
+    B.catchStart = performance.now(); B.catchN = n;
+    if (n > 30 && !s.seeking) await liveCatchUp(s, n);
+    if (session !== s) return;
+    B.caught = performance.now();
+    console.log(`live: back at the kept match's live point: restore ${B.restoreMs} ms (${B.copied} pages), ${n} frames caught up, ` +
+                `${Math.round(B.caught - (B.click ?? B.start))} ms from the click`);
+  }, 0);
+}
+// (test, ?swhash=1: the live session's state for the check; the state rows of n frames from frame k (a seek there), or
+// from the current frame (k null))
+if (Q.get('swhash') === '1') window.__mbaaLiveState = () => {
+  const s = session;
+  if (!s || !s.liveSrc || !s.M) return null;
+  return { id: s.liveSrc.id, frame: s.M._viewer_frame(), ahead: call(s, 'viewer_spectate_buffered'), seeking: !!s.seeking,
+           follow: !!s.liveFollow, game: call(s, 'viewer_spectate_game'), scene: s.M.HEAP32[0x54EEE8 >> 2], swLive: s.swLive ?? null,
+           kfs: s.tl ? s.tl.kfs.length : 0, tlMB: s.tl ? Math.round(s.tl.bytes / 1e5) / 10 : 0, heapMB: Math.round(s.M.HEAPU8.length / 1e5) / 10 };
+};
+if (Q.get('swhash') === '1') window.__mbaaStateRows = async (k, n) => {
+  const s = session;
+  if (!s) return null;
+  if (k != null) await requestSeek(k);
+  const f0 = s.M._viewer_frame();
+  s.M.ccall('viewer_hash_enable', null, [], []);
+  call(s, 'viewer_suppress', 1); call(s, 'viewer_step', n); call(s, 'viewer_suppress', 0); call(s, 'viewer_represent');
+  return { from: f0, csv: s.M.ccall('viewer_hash_take', 'string', [], []) };
+};
 // live: following the stream (paced, ~LIVE_BEHIND frames behind it); DVR (after a seek, a step or a pause): the replay
 // controls on everything received so far, no pacing; the LIVE button goes back
 function liveFollow(s, on) {
@@ -3439,6 +3776,11 @@ function liveBegin(s) {  // play(): after viewer_play
   L.next = false;
   // (the session's finished games' replays, for clip links: liveTapes; a reused instance's older ones go)
   L.tapes = new Map(); L.firstGame = L.info.game; L.clipPend = null;
+  // (back to a kept match: its records, read on while away, and its finished games' tapes; play() restores its keyframe)
+  const KB = liveResumeK && liveResumeK.id === L.id && liveResumeK.M === s.M ? liveResumeK : null;
+  liveResumeK = null;
+  s.swClick = liveClickAt; liveClickAt = null;
+  if (KB) { L.recs = KB.recs; L.since = KB.since; L.tapes = KB.tapes; L.firstGame = KB.firstGame; s.streakKnown = KB.streakKnown; s.liveResumeK = KB; }
   try { for (const n of s.M.FS.readdir('/lt')) if (n.endsWith('.rep') || n.endsWith('.lt')) s.M.FS.unlink(`/lt/${n}`); } catch (e) {}
   liveFollow(s, true);
   call(s, 'viewer_spectate_open', L.info.rollback, L.info.winCount);
@@ -3650,6 +3992,7 @@ function liveBegin(s) {  // play(): after viewer_play
           hist.length = 0; hist.push(ahead);  // (the floor starts again from where the jump landed)
         }
       }
+      if (s.liveSynced && !s.seeking && !s.livePic) { s.livePic = true; swMark('picture'); if (s.cssBgGo) s.cssBgGo(); }  // (no catch-up: drawn as it plays)
       // the link card's picture (tools/web/cc_live.mjs): a fight on screen (4 s into the battle scene: past its fade-in;
       // not mid-jump, not dark), as soon as there is one, then every 2 minutes
       const battle = s.M.HEAP32[0x54EEE8 >> 2] === 1;
@@ -3692,6 +4035,16 @@ function liveBegin(s) {  // play(): after viewer_play
       if (trim !== !!s.liveTrim) { s.liveTrim = trim; call(s, 'viewer_rate', trim ? 1.05 : 1); }
       if (ff !== !!s.liveFF) { s.liveFF = ff; call(s, 'viewer_speed', ff ? 2 : ui.speed); }
       { const b = document.getElementById('ffbadge'); if (b) b.hidden = !ff; }
+      // (a switch's time to live: the click to the session caught up and paced near LIVE_BEHIND (no 2x fast-forward,
+      // excess within 180 frames); window.__mbaaSwitchTimes, newest last; a switch back to a kept match: also
+      // __mbaaSwitchBack.live)
+      if (s.swClick != null && s.swLive == null && s.liveSynced && !s.seeking && !hold && ahead >= 15 && !ff && (!s.swBack || s.swBack.caught)) {
+        s.swLive = performance.now();
+        if (s.swBack) { s.swBack.live = s.swLive; s.swBack.liveAhead = ahead; }
+        const a = window.__mbaaSwitchTimes || (window.__mbaaSwitchTimes = []);
+        a.push({ id: L.id, back: !!s.swBack, ms: Math.round(s.swLive - s.swClick), frame: s.M._viewer_frame() });
+        if (a.length > 20) a.shift();
+      }
       if (s.cssHeld || s.loadHeld) status('live: loading the next game');
       else status(hold ? `live: waiting for the stream (${(ahead / 60).toFixed(1)} s buffered)`
                   : `live: ${(ahead / 60).toFixed(1)} s behind the players` + (ff ? ' (catching up)' : ''));
@@ -3723,6 +4076,7 @@ function liveGo(id, push = false) {
   swBegin(id);
   cardSet((liveListLast || []).find(m => m.id === id));
   cardDraw(true);
+  liveClickAt = performance.now();
   nextCardHide();
   try {
     const u = new URL(location.href);
@@ -3740,6 +4094,7 @@ addEventListener('popstate', () => {
   if (!id) { location.reload(); return; }
   if (session && session.liveSrc && session.liveSrc.id === id) return;
   cardSet((liveListLast || []).find(m => m.id === id)); cardDraw(true);
+  liveClickAt = performance.now();
   nextCardHide();
   document.body.classList.add('live');
   startLive(id);
@@ -4165,6 +4520,10 @@ if (window.ResizeObserver) addEventListener('load', () => { const tb = document.
 const setText = (id, k, v) => { if (uiLast[k] !== v) { uiLast[k] = v; document.getElementById(id).textContent = v; } };
 function uiLoop() {
   const s = session;
+  // (a live catch-up: the time, seek bar, marks and overlay 4 times a second, not at every animation frame between its
+  // slices: the marks redrawn every time, as the timeline grows)
+  if (s && s.cu && performance.now() - (uiLast.cuAt || 0) < 250) { requestAnimationFrame(uiLoop); return; }
+  if (s && s.cu) uiLast.cuAt = performance.now();
   if (s && s.tl) {
     const t = s.tl, f = s.M._viewer_frame(), max = tlMax(t);
     clipTick(s, f);
@@ -4562,7 +4921,7 @@ function loading(on) {
 const XF_STAGE_MS = 350;
 let xf = null, xfRuns = 0;
 const xfReduced = () => !!(window.matchMedia && matchMedia('(prefers-reduced-motion: reduce)').matches);
-function xfGrab(until) {
+function xfGrab(until, max = 4000) {
   if (HASH || CAPTURE || PERF || xfReduced()) return false;
   const src = document.getElementById('canvas'), c = document.getElementById('xfcv');
   if (!c || !src || !src.offsetWidth || !session) return false;
@@ -4575,7 +4934,7 @@ function xfGrab(until) {
                              height: `${src.offsetHeight}px`, transition: 'none', opacity: '1' });
     c.hidden = false;
   }
-  xf = { until, t0: performance.now(), n: 0 };
+  xf = { until, t0: performance.now(), n: 0, max };
   window.__mbaaXf = (window.__mbaaXf || 0) + 1;  // (the checks: grabs made)
   requestAnimationFrame(xfWatch);
   return true;
@@ -4585,7 +4944,7 @@ function xfWatch() {
   if (!me || me.fading || me.watching === false) return;
   let ok = false;
   try { ok = me.until(); } catch (e) { ok = true; }
-  if (ok ? ++me.n >= 2 : performance.now() - me.t0 > 4000) { xfFade(me); return; }
+  if (ok ? ++me.n >= 2 : performance.now() - me.t0 > me.max) { xfFade(me); return; }
   requestAnimationFrame(xfWatch);
 }
 function xfFade(me) {
@@ -4597,7 +4956,10 @@ function xfFade(me) {
 }
 async function start(file, quiet = false, liveId = null) {
   nextCardHide();  // (a new session: any next-match card was the old one's)
-  if (quiet && session) { const n0 = xfRuns; xfGrab(() => xfRuns > n0); }  // (the last game's picture, faded into the next's)
+  if (!liveId) { liveKeptDrop('a replay opened'); liveResumeK = null; }
+  // (the last game's picture, faded into the next's; quiet 'switch', another live match picked (startLive): once the
+  // new session has drawn a frame of its match, the catch-up's first (s.livePic), or follows with none needed)
+  if (quiet && session) { const n0 = xfRuns, old = session; quiet === 'switch' ? xfGrab(() => session !== old && !!session.livePic, 8000) : xfGrab(() => xfRuns > n0); }
   if (!quiet) loading(true);  // (quiet: a live switch, the last game's picture stays until the next one draws)
   // a pick on the radio lasts for its match: a replay's for that replay (a playlist's next, another file has its own
   // music); a live match's for the whole live match (liveId: its next games on a new session, a fallback start), until
@@ -4615,9 +4977,11 @@ async function start(file, quiet = false, liveId = null) {
   // BGM (small) with the match. liveCssBg holds the game at the result screen if they are not in yet
   const cssBg = want && liveSrc ? [...liveCssFiles(man)].filter(p => !/^bgm\//.test(p)) : null;
   if (want && liveSrc) for (const p of liveCssFiles(man)) if (/^bgm\//.test(p)) want.add(p);
+  if (want && liveResumeK) for (const p of liveResumeK.want) want.add(p);  // (back to a kept match: every file it had in)
   if (want) {
     status(`stage ${keys.stage}, P1 ${keys.p1[0]}:${keys.p1[1]} vs P2 ${keys.p2[0]}:${keys.p2[1]}: fetching`);
     await fetchAll(man, want, 'match assets');
+    swMark('files');
   }
   if (liveId) swMark('files', true, liveId);
   window.__mbaaKeys = keys;
@@ -4634,9 +4998,16 @@ async function start(file, quiet = false, liveId = null) {
 // screen (scene 5) or the retry menu, where the next select may follow (a match lasts minutes: in practice never held)
 function liveCssBg(s, paths) {
   s.cssBgReady = false;
-  s.cssBgP = fetchAll(man, paths, '', true)
+  // (not while the join's catch-up runs: ~80 MB read, decrypted and stored competed with it for the main thread in
+  // every task turn it gives, a third of a phone's catch-up time. Started at its end (cuDone), on the first poll that
+  // needs none, at a hold (liveCssWatch: the game at a result screen or select wanting them), or 20 s on)
+  let go;
+  const gate = new Promise(r => { go = r; });
+  s.cssBgGo = () => { if (go) { const g = go; go = null; g(); } };
+  s.cssBgP = gate.then(() => fetchAll(man, paths, '', true))
     .then(() => { if (session !== s) return; liveInstall(s, paths); s.cssBgReady = true; if (s.cssBgHeld) { s.cssBgHeld = false; liveHoldApply(s); } })
     .catch(e => { console.warn('live: select screen files:', e); if (session === s) { s.cssBgP = null; s.cssBgHeld = false; liveHoldApply(s); } });
+  if (CU_OLD || s.livePic) s.cssBgGo(); else setTimeout(s.cssBgGo, 20000);
 }
 // ---- playlist: several replays played back to back (each from round 1); the next one's files load during play ----
 async function prefetch(it, cur) {
@@ -4971,8 +5342,6 @@ function clipControls() {
   }
   const on = (id, f) => { document.getElementById(id).onclick = e => { e.currentTarget.blur(); f(); }; };
   on('cplink', copyTimestamp); on('cpsave', exportVideo); on('cpclear', clearClip);
-  { const sz = document.getElementById('cpsize');
-    if (sz) { sz.value = String(exportScale); sz.addEventListener('change', () => { exportScaleSet(+sz.value); sz.blur(); }); } }
 }
 
 // ---- live clip links: a clip of a live match as a replay link (?r=<id>&t=<in>&e=<out>&c=<clip id>&loop=1) ----
@@ -5327,27 +5696,65 @@ function avcFix(ch, meta) {
   return { ...meta, decoderConfig: { ...dc, description: new Uint8Array(parts) } };
 }
 const REC_TYPES = ['video/mp4;codecs=avc1.640033,mp4a.40.2', 'video/mp4;codecs=avc1.640033,opus', 'video/mp4;codecs=avc1.640028,mp4a.40.2', 'video/mp4', 'video/webm;codecs=vp9,opus', 'video/webm'];
-// Sizes (user 2026-11-04): every one an exact whole multiple of the game's 640x480, nearest neighbour, 60 fps; the
-// bitrate grows with the size (1440p ~30 Mbps as 2026-11-03's ruling). X takes at most 1280x1024
-// (docs.x.com/x-api/media/quickstart/best-practices): 1280x960 is the size for X. The viewer's last pick is kept.
-const EXPORT_SIZES = { 1: [640, 480, 8e6], 2: [1280, 960, 16e6], 3: [1920, 1440, 30e6] };
-let exportScale = 3;
-try { const v = +localStorage.getItem('mbaaExportScale'); if (EXPORT_SIZES[v]) exportScale = v; } catch (e) {}
+// Sizes (user 2026-11-04): every one an exact whole multiple of the game's 640x480, nearest neighbour, 60 fps. Picked
+// in a chooser each time Save MP4 / E is pressed (user 2026-11-04: "i didnt see any settings beforehand"); the last pick
+// is the next default, 1280x960 the first one. Bitrates (user 2026-11-04: a 1920x1440 export at 24 Mbps lagged and
+// drifted out of sync playing in Discord / the browser: 75 MB for 25 s, more than a streamed player keeps up with):
+// nearest-upscaled pixel art needs far less than camera video. X takes at most 1280x1024
+// (docs.x.com/x-api/media/quickstart/best-practices): 1280x960 is the size for X and Discord.
+const EXPORT_SIZES = { 1: [640, 480, 3e6], 2: [1280, 960, 8e6], 3: [1920, 1440, 14e6] };
+const EXPORT_NOTE = { 1: 'small file', 2: 'for Discord and X', 3: 'largest; slow to save in Firefox' };
+let exportScale = 2;
+try { const v = +localStorage.getItem('mbaaExportScale2'); if (EXPORT_SIZES[v]) exportScale = v; } catch (e) {}
+{ const m = +Q.get('exportMbps'); if (m > 0) for (const k in EXPORT_SIZES) EXPORT_SIZES[k][2] = m * 1e6; }  // (tests)
 function exportScaleSet(v) {
   if (!EXPORT_SIZES[v]) return;
   exportScale = v;
-  try { localStorage.setItem('mbaaExportScale', String(v)); } catch (e) {}
-  const el = document.getElementById('cpsize');
-  if (el && +el.value !== v) el.value = String(v);
+  try { localStorage.setItem('mbaaExportScale2', String(v)); } catch (e) {}
 }
 const exportDims = () => EXPORT_SIZES[exportScale];
 const EXPORT_SR = 48000, EXPORT_ABPS = 192000, EXPORT_PREROLL = 180;  // pre-roll: sounds already playing at the in point
 const IS_FIREFOX = /Firefox\//.test(navigator.userAgent);
-async function exportVideo() {
-  const s = session;
+// Save MP4 / E: the size chooser first (1/2/3 or a click picks, Enter takes the highlighted one, Esc closes); E again
+// while it is open closes it. ?exportScale=1|2|3 skips it (tests).
+function exportVideo() {
   if (fx) { fx.cancel = true; return; }
   if (rec) return stopRecording(true);
+  const s = session;
   if (!s || !s.tl) return;
+  const qs = +Q.get('exportScale');
+  if (EXPORT_SIZES[qs]) { exportScaleSet(qs); return exportVideoGo(); }
+  exportChooser();
+}
+function exportChooser() {
+  const stage = document.getElementById('canvas').closest('.stage') || document.body;
+  let el = document.getElementById('xpick');
+  if (el && !el.hidden) { el.hidden = true; return; }
+  if (!el) {
+    el = document.createElement('div'); el.id = 'xpick'; el.setAttribute('role', 'dialog'); el.setAttribute('aria-label', 'Save MP4');
+    stage.append(el);
+  }
+  const s = session, c = s && (s.clip || roundClip(s)), secs = c ? Math.max(0, c.b - c.a) / 60 : 0;
+  el.innerHTML = '<div class="xpt">Save MP4 · 60 fps' + (secs ? ` · ${secs.toFixed(1)} s` : '') + '</div>' +
+    Object.keys(EXPORT_SIZES).sort((a, b) => b - a).map(k => {
+      const [w, h, bps] = EXPORT_SIZES[k], mb = (bps + EXPORT_ABPS) * secs / 8 / 1048576;
+      return `<button data-k="${k}" class="${+k === exportScale ? 'on' : ''}"><b>${w}&times;${h}</b><span>${EXPORT_NOTE[k]}${secs ? ` · ~${mb < 10 ? mb.toFixed(1) : Math.round(mb)} MB` : ''}</span><kbd>${k}</kbd></button>`;
+    }).join('') + '<div class="xph">1 / 2 / 3 or click · Esc closes</div>';
+  el.hidden = false;
+  const close = () => { el.hidden = true; document.removeEventListener('keydown', key, true); };
+  const go = k => { close(); exportScaleSet(+k); exportVideoGo(); };
+  const key = e => {
+    if (el.hidden) { document.removeEventListener('keydown', key, true); return; }
+    if (e.key === 'Escape' || e.key === 'e' || e.key === 'E') { e.preventDefault(); e.stopPropagation(); close(); }
+    else if (EXPORT_SIZES[+e.key]) { e.preventDefault(); e.stopPropagation(); go(e.key); }
+    else if (e.key === 'Enter') { e.preventDefault(); e.stopPropagation(); go(exportScale); }
+  };
+  document.addEventListener('keydown', key, true);
+  for (const b of el.querySelectorAll('button')) b.onclick = e => { e.stopPropagation(); go(b.dataset.k); };
+}
+async function exportVideoGo() {
+  const s = session;
+  if (fx || rec || !s || !s.tl) return;
   ensureAudio(true); await actx.resume();
   if (inIntro(s)) await skipIntro(s);
   const c = s.clip ? { ...s.clip } : roundClip(s);
@@ -5533,9 +5940,37 @@ async function fastExport(s, c, vcfg, acfg) {
     } finally { call(s, 'viewer_suppress', 0); }
     P.preroll = performance.now() - q;
     if (M._viewer_frame() !== c.a) throw new Error(`the pre-roll ended at frame ${M._viewer_frame()}, not ${c.a}`);
-    cv.width = W; cv.height = H; sized = true;
-    if (M._viewer_ov_canvas) M._viewer_ov_canvas(W, H);
     const over = () => ui.boxes || ui.inputs || (clipChat && !clipNative);
+    // Firefox reads a WebGL canvas back slowly (a 1920x1440 VideoFrame: ~24 ms a frame, 0.4x real time in all): there the
+    // canvas stays at the game's own 640x480, each frame is read at that size (a ninth of the pixels) and scaled up here
+    // by whole pixels (the same nearest picture the page's present draws). Not with the renderer's clip comments or the
+    // painted overlays (both drawn at the video's size). ?exportRead=up|canvas forces either way (tests).
+    const rd = Q.get('exportRead'), S = W / 640;
+    const upRead = (rd === 'up' || (rd !== 'canvas' && IS_FIREFOX)) && !ovNative && !over() && Number.isInteger(S) && S >= 1;
+    let upSrc = null, upDst = null, upFmt = null;
+    const upFrame = (ts, dur) => {
+      const f = new VideoFrame(cv, { timestamp: ts, duration: dur, alpha: 'discard' });
+      try {
+        const fw = f.codedWidth, fh = f.codedHeight;
+        if (fw !== 640 || fh !== 480 || !/^(RGB|BGR)[AX]$/.test(f.format || '')) throw new Error(`frame ${fw}x${fh} ${f.format}`);
+        if (!upSrc) { upSrc = new Uint8Array(640 * 480 * 4); upDst = new Uint32Array(W * H); }
+        f.copyTo(upSrc);
+        upFmt = f.format.slice(0, 3) + 'X';
+      } finally { f.close(); }
+      const s32 = new Uint32Array(upSrc.buffer), d = upDst;
+      for (let y = 0; y < 480; y++) {
+        const r0 = y * S * W;
+        let o = r0;
+        for (let x = 0, i = y * 640; x < 640; x++, i++) { const v = s32[i]; for (let j = 0; j < S; j++) d[o++] = v; }
+        for (let j = 1; j < S; j++) d.copyWithin(r0 + j * W, r0, r0 + W);
+      }
+      return new VideoFrame(d, { format: upFmt, codedWidth: W, codedHeight: H, timestamp: ts, duration: dur });
+    };
+    if (upRead) { cv.width = 640; cv.height = 480; sized = true; }
+    else {
+      cv.width = W; cv.height = H; sized = true;
+      if (M._viewer_ov_canvas) M._viewer_ov_canvas(W, H);
+    }
     let out = null, g = null;
     const wall0 = performance.now() / 1000;
     let lastUi = performance.now();
@@ -5557,7 +5992,8 @@ async function fastExport(s, c, vcfg, acfg) {
         src = out;
       }
       P.copy += performance.now() - q; q = performance.now();
-      const vf = new VideoFrame(src, { timestamp: Math.round((k - c.a) * 1e6 / 60), duration: Math.round(1e6 / 60), alpha: 'discard' });
+      const ts = Math.round((k - c.a) * 1e6 / 60), dur = Math.round(1e6 / 60);
+      const vf = upRead ? upFrame(ts, dur) : new VideoFrame(src, { timestamp: ts, duration: dur, alpha: 'discard' });
       P.vframe += performance.now() - q; q = performance.now();
       venc.encode(vf, { keyFrame: (k - c.a) % 120 === 0 }); vf.close(); nIn++;
       P.encode += performance.now() - q; q = performance.now();
@@ -5617,7 +6053,7 @@ async function fastExport(s, c, vcfg, acfg) {
     for (const k in P) P[k] = Math.round(P[k]);
     Object.assign(window.__mbaaLastExport, { ms: Math.round(secs * 1000), prof: P, codecs: [codecs.video.codec, audioCodec],
       hw: codecs.video.hardwareAcceleration || 'no-preference', width: W, height: H, bitrate: codecs.video.bitrate, frames: nIn,
-      chunks: nOut, clipFrames: N, mode: 'webcodecs' });
+      chunks: nOut, clipFrames: N, mode: 'webcodecs', read: upRead ? 'up' : 'canvas' });
   } catch (e) {
     if (e.message !== 'cancelled') throw e;
     status('export cancelled');

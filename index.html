@@ -246,6 +246,17 @@
   #xprog { position: absolute; z-index: 21; left: 50%; top: 50%; transform: translate(-50%, -50%); width: min(420px, 80%); padding: 14px 16px; border-radius: 8px;
     background: rgba(10, 14, 22, 0.92); color: #e8f2ff; font-size: 13px; text-align: center; box-shadow: 0 4px 24px rgba(0,0,0,0.5); }
   #xprog[hidden] { display: none; }
+  #xpick { position: absolute; z-index: 22; left: 50%; top: 50%; transform: translate(-50%, -50%); width: min(360px, 88%); padding: 12px 14px; border-radius: 8px;
+    background: rgba(10, 14, 22, 0.95); color: #e8f2ff; font-size: 13px; box-shadow: 0 4px 24px rgba(0,0,0,0.5); display: flex; flex-direction: column; gap: 6px; }
+  #xpick[hidden] { display: none; }
+  #xpick .xpt { font-weight: 700; text-align: center; margin-bottom: 2px; }
+  #xpick button { display: grid; grid-template-columns: auto 1fr auto; align-items: center; gap: 10px; min-height: 40px; padding: 6px 10px; text-align: left;
+    background: #1c2230; color: inherit; border: 1px solid #3a4050; border-radius: 6px; cursor: pointer; font: inherit; }
+  #xpick button:hover, #xpick button:focus-visible { border-color: #58b8ff; }
+  #xpick button.on { border-color: #58b8ff; background: #1f3048; }
+  #xpick button span { color: #9fb0c8; font-size: 12px; }
+  #xpick kbd { font-size: 11px; color: #9fb0c8; border: 1px solid #3a4050; border-radius: 3px; padding: 0 4px; }
+  #xpick .xph { font-size: 11px; color: #9fb0c8; text-align: center; }
   #xprog .xpb { height: 6px; margin: 10px 0 6px; border-radius: 3px; background: rgba(255,255,255,0.15); overflow: hidden; }
   #xprog .xpb i { display: block; height: 100%; width: 0; background: #58b8ff; }
   #xprog .xph { font-size: 11px; color: #9fb0c8; }
@@ -790,7 +801,7 @@
       <span class="cprange"><b id="cpa">0:00.0</b> &ndash; <b id="cpb">0:00.0</b><span id="cplen"></span></span>
       <span class="cpg"><span class="lbl">in</span><button data-nudge="a,-1" title="In point one frame earlier">&minus;1f</button><button data-nudge="a,1" title="In point one frame later">+1f</button></span>
       <span class="cpg"><span class="lbl">out</span><button data-nudge="b,-1" title="Out point one frame earlier">&minus;1f</button><button data-nudge="b,1" title="Out point one frame later">+1f</button></span>
-      <span class="cpg"><button class="txt" id="cplink" title="Copy a link that plays just this clip (C)"><i class="i i-share"></i>Copy link</button><button class="txt" id="cpsave" title="Save the clip as an MP4 video; again to stop (E)"><i class="i i-film"></i>Save MP4</button><select id="cpsize" title="The MP4's size: every game pixel 3x / 2x / 1x, 60 fps. X takes videos up to 1280x1024: save at 1280x960 for X" aria-label="MP4 size"><option value="3">1920&times;1440</option><option value="2">1280&times;960 &middot; for X</option><option value="1">640&times;480</option></select><button class="txt" id="cpclear" title="Clear the clip (Esc)"><i class="i i-x"></i>Clear</button></span>
+      <span class="cpg"><button class="txt" id="cplink" title="Copy a link that plays just this clip (C)"><i class="i i-share"></i>Copy link</button><button class="txt" id="cpsave" title="Save the clip as an MP4 video; again to stop (E)"><i class="i i-film"></i>Save MP4</button><button class="txt" id="cpclear" title="Clear the clip (Esc)"><i class="i i-x"></i>Clear</button></span>
     </div>
     <div class="tbar">
       <div class="clock"><span id="time">0:00.0</span><span class="hint" id="dur"></span><span id="fc"></span><button id="livebtn" class="livebtn" title="Back to live, ~4 s behind the players (L)" hidden>LIVE</button></div>
@@ -920,6 +931,6 @@
 </div>
 <script src="mbaa.js?v=c7282fdc59cb"></script>
 <script src="bgm_stream.js?v=407ac29e5c89"></script>
-<script src="viewer.js?v=5c7c6d5db41c"></script>
+<script src="viewer.js?v=87f982aca78f"></script>
 </body>
 </html>
