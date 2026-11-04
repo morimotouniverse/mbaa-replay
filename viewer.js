@@ -438,7 +438,7 @@ function audioHooks(Module, s) {
   const seBuf = new Map();
   const SE_BUDGET = (LOWMEM ? 24 : 96) * 1e6;
   let seAnnN = 0;
-  const se = window.mbaaSeStats = { registered: 0, ann: 0, calls: 0, played: 0, decodeFailed: 0, stops: 0, params: 0, bytes: 0, evicted: 0, ctx: () => actx.state };
+  const se = window.mbaaSeStats = { registered: 0, ann: 0, annSrc: { ext: 0, neco: 0 }, annLog: [], calls: 0, played: 0, decodeFailed: 0, stops: 0, params: 0, bytes: 0, evicted: 0, ctx: () => actx.state };
   const seKeep = (key, e) => {  // (a decode settled: its bytes counted, the oldest dropped past the budget)
     if (seBuf.get(key) !== e) return;
     se.bytes += e.bytes;
@@ -458,10 +458,10 @@ function audioHooks(Module, s) {
     const v = chain(ch);
     cut(v); apply(v, vol, pan);
     if (!live()) return;
-    // (an announcer set from liveExtApi.announcer: its own line for this SE id, decoded once per set)
-    const A = liveExt.ann;
-    const am = A && /normal_se[\\/]se(\d{3})\.(wav|opus|ogg)$/i.exec(path), ab = am && A.files.get(+am[1]);
-    const key = ab ? `ann${A.n}:${am[1]}` : path;
+    // (an announcer line: an extension's set (liveExtApi.announcer), else the site's (annDefault: Neco-Arc), decoded once
+    // per set; else the game's own)
+    const A = liveExt.ann, al = annLine(path), ab = al && al.bytes;
+    const key = al ? al.key : path;
     // (another announcer set, or none: the last one's lines go)
     const annN = A ? A.n : 0;
     if (annN !== seAnnN) { seAnnN = annN; for (const k of [...seBuf.keys()]) if (k.startsWith('ann')) seDrop(k); }
@@ -475,7 +475,9 @@ function audioHooks(Module, s) {
       const ent = e;
       e.p.then(buf => { ent.bytes = buf.length * buf.numberOfChannels * 4; seKeep(key, ent); }, () => {});
     }
-    if (ab) se.ann++;
+    if (al && al.src === 'ext') se.ann++;
+    if (al) se.annSrc[al.src]++;
+    { const m = /normal_se[\\/]se(\d{3})\./i.exec(path); if (m) { se.annLog.push([+m[1], al ? al.src : 'game']); if (se.annLog.length > 256) se.annLog.shift(); } }
     const b = e.p;
     const n = actx.createBufferSource();
     v.src = n;  // claimed now: a Stop or a later Play before the decode resolves cancels it
@@ -895,7 +897,8 @@ function fillSession(s, want, had) {
   FS.writeFile('/game/replay.rep', rep);
   M.mbaaAssetMiss = p => { if (man.files[p] && p !== MOVIE && !(s.want.has(p) && cache.has(p))) misses.add(p); };  // (the movie: movieLoad)
   if (movieBytes) M.mbaaMovie = movieBytes;
-  if (movieH264) M.mbaaMovieVideo = movieVideo(movieH264);
+  else if (movieH264) M.mbaaMovieVideo = movieVideo(movieH264);
+  if (!HASH) movieLoad();  // (as soon as a match loads: its VS screen comes first)
   trackOpens(s);
   audioHooks(M, s);
   if (!HASH && !bgmStreamReady) for (const p of s.want) if (/^bgm\/.*\.opus$/.test(p) && cache.has(p)) bgmDecode(p);
@@ -934,6 +937,7 @@ async function play(rep, name, catchUp = 0, want = null) {
   // the pre-scan is a second copy of the game (~400 MB with its files): not in low-memory mode, where marks come as playback reaches them
   if (!HASH && !CAPTURE && !PERF && !catchUp && !s.liveSrc && !(LOWMEM && Q.get('scan') !== '1')) startScan(s);
   window.__mbaaStarted = 1;
+  if (!annDefault.p) setTimeout(annDefaultLoad, 500);  // (Neco's lines: once the first match runs, after its first frames)
   if (CAPTURE) { status(`loaded ${name} (capture mode)`); return; }
   if (HASH) return hashRun(s);
   for (let f = 0; f < catchUp && s === session;) {
@@ -1582,6 +1586,7 @@ let liveSrc = null;  // {id, info, since}
 // which starved the live feed while the game kept ticking (bgTick), so the match fell behind and stalled. A worker's
 // timer is not slowed: while hidden, the live loops wait on one.
 const wClock = { w: null, n: 0, cb: new Map() };
+const wClear = t => { if (t < 0) wClock.cb.delete(-t); else clearTimeout(t); };
 function wTimeout(fn, ms) {
   if (document.visibilityState !== 'hidden') return setTimeout(fn, ms);
   try {
@@ -1591,7 +1596,7 @@ function wTimeout(fn, ms) {
       wClock.w.onmessage = e => { const f = wClock.cb.get(e.data); wClock.cb.delete(e.data); if (f) f(); };
     }
     const id = ++wClock.n; wClock.cb.set(id, fn); wClock.w.postMessage([id, ms]);
-    return 0;
+    return -id;  // (wClear)
   } catch (e) { return setTimeout(fn, ms); }
 }
 const liveNet = { fails: 0, troubleAt: -1e9, notice: '' };
@@ -1623,6 +1628,40 @@ async function liveFetch(url, opt) {
 // default export with liveExtApi; what it returns (a function) is called when the feed stops naming it, or the page goes to
 // another match or a replay. The same value again does nothing; a late joiner gets it with its first answer.
 const liveExt = { id: null, v: '', off: null, seq: 0, music: null, musicN: 0, stage: null, stageN: 0, ann: null, annN: 0 };
+// The site's announcer for every match, replay or live (user 2026-11-03: "i want neco to be the announcer for every
+// match"): Neco-Arc's lines (the Announcer Voice Selector's 'neco' set, tools/web/announcer_pack.py -> announcer/neco.bin,
+// 17 lines, ~93 KB of Ogg Opus; deploy_pages.sh names it with its hash in the mbaa-announcer meta tag). Fetched once, 0.5 s
+// after the first match starts (never in the way of its first frame); until it is in, a line is the game's own. An
+// extension's set (liveExtApi.announcer) replaces it while set, and Neco is back when that one clears. ?ann=game: the
+// game's own announcer (a parity check against CE)
+const annDefault = { files: null, p: null, src: '' };
+function annDefaultLoad() {
+  if (annDefault.p || HASH || Q.get('ann') === 'game') return;
+  const url = (document.querySelector('meta[name="mbaa-announcer"]') || {}).content || 'announcer/neco.bin';
+  annDefault.src = url;
+  annDefault.p = fetch(url).then(r => { if (!r.ok) throw new Error(`HTTP ${r.status}`); return r.arrayBuffer(); }).then(buf => {
+    const d = new Uint8Array(buf), v = new DataView(buf);
+    if (String.fromCharCode(...d.subarray(0, 4)) !== 'ANN1') throw new Error('not an ANN1 pack');
+    const n = v.getUint32(4, true), files = new Map();
+    let off = 8 + 6 * n;
+    for (let i = 0; i < n; i++) {
+      const id = v.getUint16(8 + 6 * i, true), len = v.getUint32(10 + 6 * i, true);
+      if (off + len > d.length) throw new Error('short pack');
+      files.set(id, d.subarray(off, off + len)); off += len;
+    }
+    annDefault.files = files;
+  }).catch(e => console.warn('announcer pack:', e));
+}
+// which announcer serves this sound: {key (the decode cache's), bytes, src: 'ext' | 'neco'} | null (the game's own file).
+// An extension's set is whole while set: a line it has no file for stays the game's (never Neco's in another's set)
+function annLine(path) {
+  const m = /normal_se[\\/]se(\d{3})\.(wav|opus|ogg)$/i.exec(path);
+  if (!m) return null;
+  const id = +m[1], A = liveExt.ann;
+  if (A) { const b = A.files.get(id); return b ? { key: `ann${A.n}:${m[1]}`, bytes: b, src: 'ext' } : null; }
+  const b = annDefault.files && annDefault.files.get(id);
+  return b ? { key: `neco:${m[1]}`, bytes: b, src: 'neco' } : null;
+}
 const liveExtApi = {
   module: () => session && session.M,          // the game's Module (a new one per session: read it each time)
   liveId: () => (session && session.liveSrc ? session.liveSrc.id : null),
@@ -1754,7 +1793,14 @@ async function startLive(id, match = null) {
   // (on its first character select: no game to play yet; waits on the list until the first game loads)
   // (liveCss: the match key on its character select, for chat's channel: the session still on screen is the host's match
   // before, and its key showed that match's old chat, user 2026-11-03)
-  if (info.css) { liveCss = { id, match: info.match || null }; status('on character select: the match starts with its first game'); return liveRetry(id, match); }
+  if (info.css) {
+    liveCss = { id, match: info.match || null };
+    status('on character select: the match starts with its first game');
+    // (counted as its viewer meanwhile: the bridge counts the tabs asking for a match's records, and a tab waiting on a
+    // character select asked for none, so the count halved at every new set until its first game loaded)
+    liveFetch(`${LIVE}/live/${id}/rec?from=-1&v=${VIEWER}` + (info.match ? `&match=${encodeURIComponent(info.match)}` : '')).catch(() => {});
+    return liveRetry(id, match);
+  }
   liveCss = null;
   const prev = session;
   // (the same match: the host's next match on the same id has its own streaks)
@@ -3288,7 +3334,9 @@ function liveBegin(s) {  // play(): after viewer_play
     // (2 s: each viewer's requests are the feed's 1/s plus this; the list is not rate limited, but every request is a
     // Worker request)
     const listEvery = over || s.M.HEAP32[0x54EEE8 >> 2] !== 1 ? 2000 : 5000;
-    if ((over || dry || s.liveFollow) && performance.now() - (L.listAt || -1e9) > listEvery) {
+    // (watching back: once its picture has reached the stream's newest frame too, the end is looked for there. Was: only
+    // following, so a viewer watching back never read the list and never saw the match end: match_end_follow_check)
+    if ((over || dry || s.liveFollow || ahead < 15) && performance.now() - (L.listAt || -1e9) > listEvery) {
       L.listAt = performance.now();
       try {
         const l = await liveList(), now = l.find(m => m.id === L.id);
@@ -3320,8 +3368,14 @@ function liveBegin(s) {  // play(): after viewer_play
         if (!endSign) L.endSaid = false;
         if (mine && (over || dry) && mine.index < L.since && liveNet.recent()) {
           return startLive(L.id, L.info.match);  // (after a restart: the bridge's new capture of the match, numbered from its own join)
+        } else if (ended && !s.liveFollow && (ui.paused || !(call(s, 'viewer_ended') || ahead < 15))) {
+          // (watching back (a seek, a chat timestamp, a step): the card once the picture has played to the end (the game
+          // over, or the stream's last frames played: a spectator's game waits there, never ends), unless paused. Was:
+          // never, so a viewer who had clicked a chat timestamp stayed on the ended match for good: part of the audience
+          // lost at every match end, user 2026-11-03. The poll goes on meanwhile (was: a return, which stopped it: the
+          // end was never looked at again)
+          L.backEnded = true;
         } else if (ended) {
-          if (!s.liveFollow) { status('the match has ended'); return; }
           // (the next one: the card's countdown with jump to live on, else the card to pick from; or its wait for one)
           status('the match has ended');
           slogAdd('live', 'the match has ended: the next-match card');
@@ -3453,7 +3507,8 @@ function liveBegin(s) {  // play(): after viewer_play
       else status(hold ? `live: waiting for the stream (${(ahead / 60).toFixed(1)} s buffered)`
                   : `live: ${(ahead / 60).toFixed(1)} s behind the players` + (ff ? ' (catching up)' : ''));
     } else if (!s.seeking) {
-      status(`live: watching back, ${(ahead / 60).toFixed(0)} s behind (LIVE to catch up)`);
+      status(L.backEnded ? 'the match has ended (watching back: the next match once this one has played out)'
+                         : `live: watching back, ${(ahead / 60).toFixed(0)} s behind (LIVE to catch up)`);
     }
     wTimeout(poll, liveNet.delay());
   };
@@ -3470,7 +3525,7 @@ const liveName = m => m.matchup || (m.names || []).map(n => (n || '').trim()).jo
 function nextCardHide() {
   const el = document.getElementById('nextcard');
   if (el) el.hidden = true;
-  clearTimeout(nextCard.timer); cancelAnimationFrame(nextCard.raf);
+  wClear(nextCard.timer); cancelAnimationFrame(nextCard.raf);
   nextCard.s = null; nextCard.id = null; nextCard.why = null;
 }
 // push: a new history entry (a click on the live list or Go now: Back returns to the match before, no reload; user
@@ -3503,7 +3558,7 @@ function nextCardShow(s, list, title) {
   if (!el) return false;
   // (the others: every live match but ours; the host's next match on our id is another match, and the likeliest next:
   // it has one of our players)
-  const L0 = s ? s.liveSrc : liveSrc, live = list.filter(m => !liveOurs(m, L0) && !liveGone(m) && !m.css);
+  const L0 = s ? s.liveSrc : liveSrc, live = liveNextCands(list, L0);
   const next = liveNextMatch(live, L0);
   // jump to live off: the card to pick from, no countdown (the page never moves to another match by itself)
   const auto = liveJump();
@@ -3534,21 +3589,21 @@ function nextCardShow(s, list, title) {
     feat.textContent = 'Waiting for the next live match…';
     el.hidden = false;
     if (nextCard.s === s && !nextCard.id) return true;  // (waiting already)
-    clearTimeout(nextCard.timer); cancelAnimationFrame(nextCard.raf);
+    wClear(nextCard.timer); cancelAnimationFrame(nextCard.raf);
     nextCard.s = s; nextCard.id = null;
     const wait = async () => {
       if (session !== s || nextCard.s !== s || nextCard.id) return;
       const l = await liveList().catch(() => null);
       if (session !== s || nextCard.s !== s) return;
-      if (l && l.some(m => !liveOurs(m, L0) && !liveGone(m) && !m.css)) nextCardShow(s, l, title);
-      else nextCard.timer = setTimeout(wait, 10000);
+      if (l && liveNextCands(l, L0).length) nextCardShow(s, l, title);
+      else nextCard.timer = wTimeout(wait, 10000);
     };
-    nextCard.timer = setTimeout(wait, 10000);
+    nextCard.timer = wTimeout(wait, 10000);
     return true;
   }
   el.hidden = false;
   if (nextCard.s === s && nextCard.id === next.id && nextCard.auto === auto) return true;  // (counting down to it already)
-  clearTimeout(nextCard.timer); cancelAnimationFrame(nextCard.raf);
+  wClear(nextCard.timer); cancelAnimationFrame(nextCard.raf);
   nextCard.s = s; nextCard.id = next.id; nextCard.at = performance.now() + NEXT_SECS * 1000; nextCard.auto = auto;
   const bar = el.querySelector('.nc-bar i'), go = el.querySelector('.nc-go');
   el.querySelector('.nc-bar').hidden = !auto;
@@ -3561,14 +3616,24 @@ function nextCardShow(s, list, title) {
     nextCard.raf = requestAnimationFrame(tick);
   };
   tick();
-  nextCard.timer = setTimeout(() => { if (session === s && nextCard.s === s && nextCard.id) liveGo(nextCard.id); }, NEXT_SECS * 1000);
+  nextCard.timer = wTimeout(() => { if (session === s && nextCard.s === s && nextCard.id) liveGo(nextCard.id); }, NEXT_SECS * 1000);
   return true;
 }
+// a list entry with either of the session's players (a new set of theirs: the host's next match)
+function liveSamePlayers(m, L0 = liveSrc) {
+  const L = L0 || { id: null, info: {} }, names = new Set((L.info.names || []).map(n => (n || '').trim().toLowerCase()).filter(Boolean));
+  return (m.names || []).some(n => names.has((n || '').trim().toLowerCase()));
+}
+// the next-match card's candidates: every live match but ours, and not one on its first character select unless it is a
+// set of our players (the host's next match starts there: startLive waits on it for its first game. Was: left out, so
+// the card moved the audience to whatever else was on, or waited, while the host they watched started their next set:
+// user 2026-11-03 "people are dropping out when matches end and we get moved to another")
+const liveNextCands = (l, L0) => l.filter(m => !liveOurs(m, L0) && !liveGone(m) && (!m.css || liveSamePlayers(m, L0)));
 // after a match leaves the list: one with either of its players (a new set of theirs), else the most watched
 function liveNextMatch(l, L0 = liveSrc) {
-  const L = L0 || { id: null, info: {} }, names = new Set((L.info.names || []).map(n => (n || '').trim().toLowerCase()).filter(Boolean));
+  const L = L0 || { id: null, info: {} };
   const others = l.filter(m => !liveOurs(m, L) && !liveGone(m));
-  return others.find(m => (m.names || []).some(n => names.has((n || '').trim().toLowerCase())))
+  return others.find(m => liveSamePlayers(m, L))
       || others.sort((a, b) => (b.viewers || 0) - (a.viewers || 0))[0] || null;
 }
 // a local replay is uploaded once (named by its SHA-256, so re-sharing it gives the same link)
@@ -3809,6 +3874,11 @@ function drawOverlay() {
   if (c.width !== w || c.height !== h) { c.width = w; c.height = h; }
   const g = c.getContext('2d');
   g.clearRect(0, 0, w, h);
+  paintOverlay(g, w, h, dpr);
+}
+// the hitboxes, inputs and clip chat painted into g over a w x h picture (dpr: device pixels per CSS pixel; the video
+// export paints them straight into its 1920x1440 frame, crisp, not the screen's overlay scaled)
+function paintOverlay(g, w, h, dpr) {
   const s = session;
   if (!s || !s.tl || s.seeking) return;
   const M = s.M, sx = w / 640, sy = h / 480;
@@ -4169,15 +4239,34 @@ const MOVIE = 'dat/dat_m_vs.vsmv';
 // (tools/web/vsmovie/vsmovie_h264.py; lossy), decoded by movieVideo
 const MOVIE_H264 = 'dat/dat_m_vs.vsmh';
 let movieBytes = null, movieH264 = null, movieLoading = null;
+// (user 2026-11-03: "the vs movie is missing on our site, just black": the 32 MB file was fetched once the match was already
+// running, so over the network the first VS screen (~10 s in a replay, ~0.5 s live) was over before it came. Now it is
+// fetched as soon as a match starts loading, and on desktop the 2 MB H.264 copy plays first (here in ~1 s) until the
+// lossless file is in, which then takes over (CE-exact from then on); a capture run waits for the lossless file only)
+const movieGet = f => f.plain ? fetch(f.plain).then(r => r.arrayBuffer()).then(b => new Uint8Array(b)) : fetchObject(f.o, f.z);
+const movieCanH264 = async () => typeof VideoDecoder !== 'undefined' && (await VideoDecoder.isConfigSupported(movieConfig(new Uint8Array(0))).catch(() => ({}))).supported;
 function movieLoad() {
   if (!movieLoading) movieLoading = (async () => {
-    const f = man.files[LOWMEM ? MOVIE_H264 : MOVIE];
-    if (!f) return;
-    if (LOWMEM && !(typeof VideoDecoder !== 'undefined' && (await VideoDecoder.isConfigSupported(movieConfig(new Uint8Array(0)))).supported))
-      throw new Error('this browser cannot decode the H.264 movie (WebCodecs)');
-    const b = f.plain ? new Uint8Array(await (await fetch(f.plain)).arrayBuffer()) : await fetchObject(f.o, f.z);
-    if (LOWMEM) { movieH264 = b; if (session) session.M.mbaaMovieVideo = movieVideo(b); }
-    else { movieBytes = b; if (session) session.M.mbaaMovie = b; }
+    const fh = man.files[MOVIE_H264], fl = man.files[MOVIE];
+    if (LOWMEM || !fl) {
+      if (!fh) return;
+      if (!(await movieCanH264())) throw new Error('this browser cannot decode the H.264 movie (WebCodecs)');
+      movieH264 = await movieGet(fh);
+      if (session) session.M.mbaaMovieVideo = movieVideo(movieH264);
+      return;
+    }
+    // (desktop: the H.264 copy meanwhile, not in a capture run (its pictures are compared with CE's))
+    const quick = !CAPTURE && fh && (async () => {
+      if (!(await movieCanH264())) return;
+      const b = await movieGet(fh);
+      if (movieBytes) return;  // (the lossless one came first)
+      movieH264 = b;
+      if (session && !session.M.mbaaMovie) session.M.mbaaMovieVideo = movieVideo(b);
+    })().catch(e => console.warn('VS movie (H.264):', e));
+    movieBytes = await movieGet(fl);
+    movieH264 = null;
+    if (session) { session.M.mbaaMovie = movieBytes; delete session.M.mbaaMovieVideo; }
+    await quick;
   })().catch(e => { movieLoading = null; console.warn('VS movie:', e); });
   return movieLoading;
 }
@@ -4567,7 +4656,7 @@ function clipNow() {
   marksKey = '';
   clipPanelShow(true);
   status(`clip ${fmtTime(a)} – ${fmtTime(b)} (${((b - a) / 60).toFixed(1)} s): drag the handles to trim; ` +
-         (clipIsLive(s) ? (liveClipCan() ? 'Copy link (C) saves this game as a replay, Save MP4 (E), Esc clears' : `Save MP4 (E) keeps it; ${LIVE_SIGNIN}`)
+         (clipIsLive(s) ? (liveClipCan() ? 'Copy link (C) saves the game so far as a replay, Save MP4 (E), Esc clears' : `Save MP4 (E) keeps it; ${LIVE_SIGNIN}`)
                         : 'Copy link (C), Save MP4 (E), Esc clears'));
   requestSeek(a).then(() => { if (session === s && s.clip && s.clip.preview && clipPanel && !clipDrag) setPaused(false); });
 }
@@ -4600,8 +4689,8 @@ function clipUi(max) {
   link.disabled = live && !can;
   link.title = !live ? 'Copy a link that plays just this clip (C)'
              : !can ? `Copy link: ${LIVE_SIGNIN}`
-             : pend ? 'Copy link: waiting for this game to end (its replay is saved then); the link is copied when it is ready'
-             : 'Copy a link to this clip (C): this game is saved as a replay (once, whoever clips it) with the chat said during the clip';
+             : pend ? 'Copy link: making the link (the game so far is saved as a replay); it is copied when it is ready'
+             : 'Copy a link to this clip (C): the game so far is saved as a replay with the chat said during the clip';
   link.classList.toggle('pend', !!pend);
 }
 // move an end of the clip (w: 'a' in, 'b' out) to frame f, kept inside what there is and at least a frame long
@@ -4670,14 +4759,17 @@ function clipControls() {
 // go to the Worker (POST <chat path>/clip, tools/web/replay_worker.js liveClip): the replay is stored in the replay
 // store like a shared one (named by its content: one stored replay per game however many clip it), with the players'
 // names in its PCRM block, and the clip's chat as a small JSON (c/<id>) the link names. A game still being played: the
-// link is made when it ends (the clip panel says so; the link is copied, or C copies it, once it is there).
+// game so far is saved at once (liveTapeNow: the session seeks to the clip's out point, web/host/spectate.cpp
+// spectate_tape_snap writes the tape and its live forcing up to there without changing the game, the picture goes back),
+// uploaded, and the link copied in the same click (a ClipboardItem given the link to come; else C copies it once it is
+// there). Only where no snapshot can be made (not in a game's battle) the link waits for the game's end, as before.
 // Frames: a replay's battle starts at viewer frame REP_BATTLE_AT (the VS screen's 9.4 s first; every replay:
 // harness-design/web_parity/viewer_tools/rep_battle_start_probe.py), the session's at the tape's recFrame + 1 (a live boot
 // goes straight to battle, a rematch after its retry menu and VS screen): replay frame = live frame - recFrame - 1 + REP_BATTLE_AT.
 const REP_BATTLE_AT = 566;
 const LIVE_SIGNIN = 'sign in to share live clips (the chat’s Sign in)';
 const liveClipCan = () => { const C = window.mbaaChat; return !!(C && C.irc && C.irc.account); };
-const liveClipPending = s => !!(s && s.liveSrc && s.liveSrc.clipPend && s.clip && s.liveSrc.clipPend.clip === s.clip);
+const liveClipPending = s => !!(s && s.liveSrc && s.liveSrc.clipPend && s.clip && s.liveSrc.clipPend.clip === s.clip && !s.liveSrc.clipPend.link);
 // the game at the clip and the chat timeline's local frame - viewer frame (clipNow: the picture is at the clip's out point)
 function liveClipWhere(s) {
   const L = s.liveSrc, g = call(s, 'viewer_spectate_game'), out = { game: g >= 0 ? g : L.firstGame, loc0: null };
@@ -4717,12 +4809,16 @@ function liveTapes(s) {
 // the chat lines said during the clip (#melty and the match channel): each placed at its stream position (+mbaa/at, else
 // its server time on the capture's clock), as the overlay places them; [{o: frames after the clip's in point, n: name,
 // x: text as on the picture, m: Niconico commands, c: the sender's colour, a: 1 an action}]. Nothing else of a line.
-async function liveClipChat(s, c) {
+// the capture's clock (the feed's /clock), fetched once per link and never waited on for more than 1.5 s (the link is instant)
+const liveClock = (L, p) => p.clockP || (p.clockP = fetch(`${LIVE}/live/${L.id}/clock`,
+  { cache: 'no-store', ...(AbortSignal.timeout ? { signal: AbortSignal.timeout(1500) } : {}) }).then(r => r.ok ? r.json() : null).catch(() => null));
+async function liveClipChat(s, c, p) {
   const C = window.mbaaChat, lv = window.mbaaChatApi.live(), L = s.liveSrc;
   if (!C || !lv || !lv.recs || c.loc0 == null) return [];
   const idx = C.nowOf({ ...lv, ahead: 0 }).idx;
   let clock = C.tl && C.tl.clock;
-  try { const r = await fetch(`${LIVE}/live/${L.id}/clock`, { cache: 'no-store' }); if (r.ok) clock = await r.json(); } catch (e) {}
+  const k = await liveClock(L, p);
+  if (k) clock = k;
   const st = C.status(), want = ['#melty', st.matchChan].filter(Boolean).map(n => n.toLowerCase()), out = [];
   for (const ch of C.chans.values()) {
     if (!want.includes(String(ch.name).toLowerCase())) continue;
@@ -4747,19 +4843,74 @@ async function liveClipLink(s) {
   if (!liveClipCan()) { status(`live clip: ${LIVE_SIGNIN}`); return; }
   if (L.clipPend && L.clipPend.clip === c) {  // (its link is there: copy it now, a click being a user gesture)
     if (L.clipPend.link) return liveClipCopy(L.clipPend.link);
-    status('live clip: the link is made when this game ends (its replay is saved then): Esc to watch on, it is copied then');
+    status(L.clipPend.busy ? 'live clip: making the link…' : 'live clip: the link is made when this game ends (its replay is saved then): Esc to watch on, it is copied then');
     return;
   }
-  const p = { clip: c, game: c.game, a: c.a, b: c.b, chat: await liveClipChat(s, c), link: null, busy: false };
+  // the clipboard, written now (this click or C is the user gesture the browser wants) with the link to come
+  // (ClipboardItem given a promise: Chrome, Safari, Firefox 127+); elsewhere liveClipUpload copies it, or C does
+  let give = null, wrote = null;
+  if (window.ClipboardItem && navigator.clipboard && navigator.clipboard.write) {
+    const lp = new Promise((res, rej) => { give = { res, rej }; });
+    lp.catch(() => {});
+    try { wrote = navigator.clipboard.write([new ClipboardItem({ 'text/plain': lp.then(t => new Blob([t], { type: 'text/plain' })) })]); wrote.catch(() => {}); }
+    catch (e) { wrote = null; give = null; }
+  }
+  const p = { clip: c, game: c.game, a: c.a, b: c.b, chat: [], link: null, busy: true, give, wrote };
   L.clipPend = p; clipPanelKey = ''; marksKey = '';
-  liveTapes(s);
-  if (!L.tapes.has(p.game) && !p.busy)
-    status('live clip: the link is made when this game ends (its replay is saved then): Esc to watch on, it is copied then');
-}
-async function liveClipUpload(s, p) {
-  const L = s.liveSrc, T = L.tapes.get(p.game);
+  status('live clip: saving the game so far as a replay…');
+  p.chat = await liveClipChat(s, c, p);
+  p.busy = false;
+  liveTapes(s);  // (the game has ended: its whole replay, liveTapes uploads it)
+  if (L.tapes.has(p.game) || p.busy || L.clipPend !== p) return;
   p.busy = true;
-  status('live clip: saving the game as a replay…');
+  const T = await liveTapeNow(s, p).catch(e => { console.warn('live clip: no snapshot:', e); return null; });
+  p.busy = false;
+  if (L.clipPend !== p) return;
+  if (T) return liveClipUpload(s, p, T);
+  liveTapes(s);
+  if (L.tapes.has(p.game) || p.busy) return;
+  if (p.give) { p.give.rej(new Error('the link is made when this game ends')); p.give = null; }
+  status('live clip: the link is made when this game ends (its replay is saved then): Esc to watch on, it is copied then');
+  clipPanelKey = ''; marksKey = '';
+}
+// the clip's game so far as a replay (a game still being played): the session at the clip's out point (a seek, paused:
+// the DVR re-simulates there, the same frames the session showed), spectate_tape_snap writes its tape and live forcing
+// up to there (/lt/s<game>_f<battle start>_e<end>.rep + .lt; the game's memory unchanged, the game-end tape_keep still
+// gets everything), then the picture goes back where it was. -> {rep, lt, rec, end, snap: true} | null
+async function liveTapeNow(s, p) {
+  const L = s.liveSrc, M = s.M, f0 = M._viewer_frame(), paused = ui.paused;
+  const gameNow = () => { const g = call(s, 'viewer_spectate_game'); return g >= 0 ? g : L.firstGame; };
+  if (!paused) setPaused(true);  // (the preview's loop (clipTick) would seek away meanwhile)
+  let T = null;
+  try {
+    const t0 = performance.now();
+    if (f0 !== p.b) await requestSeek(p.b);
+    const why = session !== s ? 'session gone' : M._viewer_frame() < p.b ? `at frame ${M._viewer_frame()}, not ${p.b}` : gameNow() !== p.game ? `in game ${gameNow()}, not ${p.game}` : '';
+    try { for (const n of M.FS.readdir('/lt')) if (/^s-?\d+_/.test(n)) M.FS.unlink(`/lt/${n}`); } catch (e) {}
+    if (why || !call(s, 'viewer_live_tape_now')) { console.log(`live clip: no snapshot (${why || 'not in a game being recorded'}; seek ${Math.round(performance.now() - t0)} ms)`); return null; }
+    console.log(`live clip: snapshot at frame ${M._viewer_frame()} (seek from ${f0}: ${Math.round(performance.now() - t0)} ms)`);
+    for (const n of M.FS.readdir('/lt')) {
+      const m = n.match(/^s(-?\d+)_f(\d+)_e(\d+)\.rep$/);
+      if (!m) continue;
+      const rep = M.FS.readFile(`/lt/${n}`), ltn = `/lt/${n.slice(0, -4)}.lt`;
+      let lt = null;
+      try { lt = M.FS.readFile(ltn); M.FS.unlink(ltn); } catch (e) {}
+      M.FS.unlink(`/lt/${n}`);
+      T = { rep, lt, rec: +m[2], end: +m[3], snap: true };
+      console.log(`live: game ${p.game} so far kept for a clip (${rep.length} bytes, live forcing ${lt ? lt.length : 0} bytes, battle from frame ${m[2]}, end ${m[3]})`);
+    }
+    return T && T.end >= p.b ? T : null;
+  } finally {
+    if (session === s) {
+      const back = M._viewer_frame() !== f0 ? requestSeek(f0) : Promise.resolve();
+      if (!paused) back.then(() => { if (session === s && ui.paused) setPaused(false); });
+    }
+  }
+}
+async function liveClipUpload(s, p, snap) {
+  const L = s.liveSrc, T = snap || L.tapes.get(p.game);
+  p.busy = true;
+  status(snap ? 'live clip: uploading the game so far…' : 'live clip: saving the game as a replay…');
   try {
     // frames in the replay: anchored at the battle's first frame (the session's frame T.rec + 1: T.rec is the 0-based
     // step the game went to record mode at; the replay's REP_BATTLE_AT). With the game's live forcing (T.lt) the replay
@@ -4769,8 +4920,7 @@ async function liveClipUpload(s, p) {
     const rep = T.rep.slice();
     // the header's date: the game's start on the capture's clock (the same for every viewer: one stored replay per game)
     try {
-      const r = await fetch(`${LIVE}/live/${L.id}/clock`, { cache: 'no-store' });
-      const k = r.ok ? await r.json() : null, at = k && k.wall != null ? k.s.find(x => x[1] >= p.game) : null;
+      const k = await liveClock(L, p), at = k && k.wall != null ? k.s.find(x => x[1] >= p.game) : null;
       if (at) {
         const d = new Date(k.wall + at[0]), dv = new DataView(rep.buffer);
         [d.getUTCFullYear(), d.getUTCMonth() + 1, d.getUTCDate(), d.getUTCHours(), d.getUTCMinutes(), d.getUTCSeconds()].forEach((v, i) => dv.setUint16(0x18 + 2 * i, v, true));
@@ -4788,7 +4938,7 @@ async function liveClipUpload(s, p) {
                                            headers: { 'Content-Type': 'application/json' } });
     const j = await r.json().catch(() => ({}));
     if (!r.ok) throw new Error(j.error || `HTTP ${r.status}`);
-    T.id = j.r;
+    if (!snap) T.id = j.r;
     const u = new URL(LIVE_CLIP_SITE + '/');
     u.searchParams.set('r', j.r); u.searchParams.set('t', t); u.searchParams.set('e', e);
     if (j.c) u.searchParams.set('c', j.c);
@@ -4796,10 +4946,16 @@ async function liveClipUpload(s, p) {
     p.link = u.toString(); p.t = t; p.e = e; p.id = j.r; p.cid = j.c;
     window.__mbaaLastLink = p.link;
     clipPanelKey = ''; marksKey = '';
-    try { await navigator.clipboard.writeText(p.link); status(`copied: ${p.link}`); }
-    catch (err) { status(`live clip link ready: Copy link (C) copies it: ${p.link}`); }
+    // (the clipboard: the write the click started gets the link; else written now, which some browsers allow only in a
+    // click: then C copies it)
+    let copied = false;
+    if (p.give) { p.give.res(p.link); p.give = null; copied = await p.wrote.then(() => true, () => false); }
+    if (!copied) copied = await navigator.clipboard.writeText(p.link).then(() => true, () => false);
+    p.copied = copied;
+    status(copied ? `copied: ${p.link}` : `live clip link ready: Copy link (C) copies it: ${p.link}`);
   } catch (err) {
     console.warn('live clip link failed:', err);
+    if (p.give) { p.give.rej(err); p.give = null; }
     status(`live clip link failed: ${err.message || err}`);
     if (L.clipPend === p) L.clipPend = null;
     clipPanelKey = ''; marksKey = '';
@@ -4822,7 +4978,7 @@ const CC_COLOR = { white: '#FFFFFF', red: '#FF0000', pink: '#FF8080', orange: '#
   red2: '#CC0033', truered: '#CC0033', pink2: '#FF33CC', orange2: '#FF6600', passionorange: '#FF6600', yellow2: '#999900',
   madyellow: '#999900', green2: '#00CC66', elementalgreen: '#00CC66', cyan2: '#00CCCC', blue2: '#3399FF', marinblue: '#3399FF',
   purple2: '#6633CC', nobleviolet: '#6633CC', black2: '#666666' };
-const CC_FONT = '"Arial", "MS PGothic", "Hiragino Kaku Gothic ProN", "Noto Sans CJK JP", sans-serif';
+const CC_FONT = 'MbaaFlags, "Arial", "MS PGothic", "Hiragino Kaku Gothic ProN", "Noto Sans CJK JP", sans-serif';
 async function clipChatLoad(jp, t) {
   try {
     const j = await jp, ms = document.createElement('canvas').getContext('2d'), out = [];
@@ -4913,8 +5069,10 @@ function clipChatDraw(g, w, h, f) {
 // H.264 encoder), the sound events of those frames are logged and rendered in an OfflineAudioContext, and both go into an
 // MP4 (vendor/mp4-muxer). Without WebCodecs the range is played at 1x and recorded with MediaRecorder.
 let rec = null, fx = null;
-const REC_TYPES = ['video/mp4;codecs=avc1.640028,mp4a.40.2', 'video/mp4', 'video/webm;codecs=vp9,opus', 'video/webm'];
-const EXPORT_W = 1280, EXPORT_H = 960, EXPORT_SR = 48000, EXPORT_PREROLL = 180;  // pre-roll: sounds already playing at the in point
+const REC_TYPES = ['video/mp4;codecs=avc1.640033,mp4a.40.2', 'video/mp4;codecs=avc1.640033,opus', 'video/mp4;codecs=avc1.640028,mp4a.40.2', 'video/mp4', 'video/webm;codecs=vp9,opus', 'video/webm'];
+// 1920x1440: exactly 3x the game's 640x480, nearest neighbour (user 2026-11-03: high quality, true 60 fps, ~30 Mbps)
+const EXPORT_W = 1920, EXPORT_H = 1440, EXPORT_BPS = 30e6, EXPORT_SR = 48000, EXPORT_PREROLL = 180;  // pre-roll: sounds already playing at the in point
+const IS_FIREFOX = /Firefox\//.test(navigator.userAgent);
 async function exportVideo() {
   const s = session;
   if (fx) { fx.cancel = true; return; }
@@ -4928,8 +5086,15 @@ async function exportVideo() {
     if (c.b <= c.a) { status('nothing received after the clip start yet'); return; }
   }
   if (window.VideoEncoder && window.VideoFrame && Q.get('exportMode') !== 'realtime') {
-    try { if (await fastExport(s, c)) return; }
-    catch (e) { console.error('video export failed:', e); status(`video export failed: ${e.message || e}`); return; }
+    try {
+      const codecs = await exportCodecs();
+      // each encoder setup in turn: one that emits B-frames (frames out of order, which the muxer cannot take) is
+      // dropped for the next
+      for (let i = 0; i < codecs.videos.length; i++) {
+        try { if (await fastExport(s, c, codecs.videos[i], codecs.audio)) return; }
+        catch (e) { if (!e.bframes || i === codecs.videos.length - 1) throw e; console.warn(`${codecs.videos[i].codec}: B-frames, next encoder setup`); }
+      }
+    } catch (e) { console.error('video export failed:', e); status(`video export failed: ${e.message || e}`); return; }
   }
   return exportRealtime(s, c);
 }
@@ -4937,20 +5102,28 @@ function loadScript(src) {
   return new Promise((res, rej) => { const e = document.createElement('script'); e.src = src; e.onload = res;
     e.onerror = () => rej(new Error(`could not load ${src}`)); document.head.append(e); });
 }
+// The video encoder setups this browser takes, best first, all 1920x1440 at 60 fps and ~30 Mbps (level 5.1: 1920x1440
+// is 10800 macroblocks, 648000 a second at 60 fps; 5.0 allows 589824). H.264 High (Chrome; Firefox's High profile
+// encoder emits B-frames, out of decode order, which the muxer cannot take, so Firefox gets Constrained Baseline at the
+// same size and rate), then Constrained Baseline, then VP9 (level 5.0) where there is no H.264 encoder; 1280x960 only
+// where nothing takes 1920x1440.
 async function exportCodecs() {
-  let video = null, audio = null;
-  // H.264 Constrained Baseline (level 4.2): no B-frames, which the muxer needs (Firefox's High profile encoder emits
-  // them, out of decode order); VP9 where there is no H.264 encoder
-  for (const codec of ['avc1.42E02A', 'vp09.00.40.08']) {
-    const cfg = { codec, width: EXPORT_W, height: EXPORT_H, bitrate: 12e6, framerate: 60, latencyMode: 'quality' };
-    if (codec.startsWith('avc1')) cfg.avc = { format: 'avc' };
-    try { if ((await VideoEncoder.isConfigSupported(cfg)).supported) { video = cfg; break; } } catch (e) {}
+  const videos = [];
+  let audio = null;
+  const avc = IS_FIREFOX ? ['avc1.42E033', 'avc1.42E034'] : ['avc1.640033', 'avc1.640034', 'avc1.4D0033', 'avc1.42E033', 'avc1.42E034'];
+  for (const [w, h, bps, list] of [[EXPORT_W, EXPORT_H, EXPORT_BPS, [...avc, 'vp09.00.50.08']], [1280, 960, 16e6, ['avc1.42E02A', 'vp09.00.40.08']]]) {
+    for (const codec of list) {
+      const cfg = { codec, width: w, height: h, bitrate: bps, framerate: 60, latencyMode: 'quality' };
+      if (codec.startsWith('avc1')) cfg.avc = { format: 'avc' };
+      try { if ((await VideoEncoder.isConfigSupported(cfg)).supported) videos.push(cfg); } catch (e) {}
+    }
+    if (videos.length) break;
   }
   if (window.AudioEncoder) for (const codec of ['mp4a.40.2', 'opus']) {
     const cfg = { codec, sampleRate: EXPORT_SR, numberOfChannels: 2, bitrate: 192000 };
     try { if ((await AudioEncoder.isConfigSupported(cfg)).supported) { audio = cfg; break; } } catch (e) {}
   }
-  return { video, audio };
+  return { videos, audio };
 }
 function exportName(c, ext) {
   return `${document.getElementById('title').textContent.replace(/[\\/:*?"<>|\u00b7]+/g, ' ').replace(/\s+/g, ' ').trim()} ${fmtTime(c.a).replace(/[:.]/g, '-')}.${ext}`;
@@ -4961,9 +5134,9 @@ function saveBlob(blob, name) {
   setTimeout(() => URL.revokeObjectURL(a.href), 60000);
   window.__mbaaLastExport = { name, size: blob.size, type: blob.type };
 }
-async function fastExport(s, c) {
-  const codecs = await exportCodecs();
-  if (!codecs.video) return false;
+async function fastExport(s, c, vcfg, acfg) {
+  if (!vcfg) return false;
+  const codecs = { video: vcfg, audio: acfg }, W = vcfg.width, H = vcfg.height;
   if (!window.Mp4Muxer) await loadScript('vendor/mp4-muxer.min.js');
   const M = s.M, t0 = performance.now(), pre = Math.max(1, c.a - EXPORT_PREROLL);
   fx = { cancel: false };
@@ -4971,20 +5144,26 @@ async function fastExport(s, c) {
   document.getElementById('clipexp').classList.add('on');
   setPaused(true);
   const hooks = ['mbaaVoicePlay', 'mbaaVoiceParam', 'mbaaVoiceStop', 'mbaaBgmStart', 'mbaaBgmStop'], orig = {};
+  let venc = null;
   try {
     await requestSeek(pre);
     const muxer = new Mp4Muxer.Muxer({ target: new Mp4Muxer.ArrayBufferTarget(), fastStart: 'in-memory',
-      video: { codec: codecs.video.codec.startsWith('avc1') ? 'avc' : 'vp9', width: EXPORT_W, height: EXPORT_H, frameRate: 60 },
+      video: { codec: codecs.video.codec.startsWith('avc1') ? 'avc' : 'vp9', width: W, height: H, frameRate: 60 },
       ...(codecs.audio ? { audio: { codec: codecs.audio.codec === 'opus' ? 'opus' : 'aac', sampleRate: EXPORT_SR, numberOfChannels: 2 } } : {}) });
-    let encErr = null;
-    const venc = new VideoEncoder({ output: (ch, meta) => muxer.addVideoChunk(ch, meta), error: e => { encErr = e; } });
+    // every frame has to land: one chunk per frame, timestamps 1/60 s apart in order (a decreasing one is a B-frame)
+    let encErr = null, nOut = 0, lastTs = -1, nIn = 0;
+    venc = new VideoEncoder({ output: (ch, meta) => {
+      if (ch.timestamp <= lastTs && !encErr) { encErr = new Error(`${codecs.video.codec}: frames out of order (B-frames)`); encErr.bframes = true; }
+      lastTs = ch.timestamp; nOut++;
+      if (!encErr) muxer.addVideoChunk(ch, meta);
+    }, error: e => { encErr = e; } });
     venc.configure(codecs.video);
     // the sound events of every stepped frame, with the frame they happen in
     const ev = [];
     for (const h of hooks) { orig[h] = M[h]; M[h] = (...a) => { ev.push([M._viewer_frame(), h, ...a]); return orig[h](...a); }; }
-    const out = document.createElement('canvas'); out.width = EXPORT_W; out.height = EXPORT_H;
-    const g = out.getContext('2d'); g.imageSmoothingEnabled = false;
-    const cv = document.getElementById('canvas'), ov = document.getElementById('overlay');
+    const out = document.createElement('canvas'); out.width = W; out.height = H;
+    const g = out.getContext('2d', { alpha: false }); g.imageSmoothingEnabled = false;
+    const cv = document.getElementById('canvas');
     let lastUi = 0;
     for (let k = pre; k < c.b; k++) {
       if (fx.cancel || session !== s) throw new Error('cancelled');
@@ -4993,10 +5172,10 @@ async function fastExport(s, c) {
       call(s, 'viewer_step', 1);
       if (M._viewer_frame() === k0) break;  // the end of the replay (or of the live stream received)
       if (k < c.a) continue;
-      g.drawImage(cv, 0, 0, EXPORT_W, EXPORT_H);
-      if (ui.boxes || ui.inputs || clipChat) { drawOverlay(); g.drawImage(ov, 0, 0, EXPORT_W, EXPORT_H); }
+      g.imageSmoothingEnabled = false; g.drawImage(cv, 0, 0, W, H);
+      if (ui.boxes || ui.inputs || clipChat) paintOverlay(g, W, H, W / 960);  // (drawn at the video's size: crisp)
       const vf = new VideoFrame(out, { timestamp: Math.round((k - c.a) * 1e6 / 60), duration: Math.round(1e6 / 60) });
-      venc.encode(vf, { keyFrame: (k - c.a) % 120 === 0 }); vf.close();
+      venc.encode(vf, { keyFrame: (k - c.a) % 120 === 0 }); vf.close(); nIn++;
       while (venc.encodeQueueSize > 6) await new Promise(r => setTimeout(r, 1));
       if (performance.now() - lastUi > 150) {  // let the page breathe and show progress
         lastUi = performance.now();
@@ -5009,6 +5188,7 @@ async function fastExport(s, c) {
     for (const h of hooks) M[h] = orig[h];
     await venc.flush(); venc.close();
     if (encErr) throw encErr;
+    if (nOut !== nIn) throw new Error(`the encoder gave ${nOut} frames for ${nIn}`);
     if (codecs.audio) {
       status('exporting: sound');
       const pcm = await renderExportAudio(s, ev, pre, c);
@@ -5032,12 +5212,14 @@ async function fastExport(s, c) {
     const secs = (performance.now() - t0) / 1000;
     status(`saved ${name} (${(blob.size / 1048576).toFixed(1)} MB, ${((c.b - c.a) / 60).toFixed(1)} s of video in ${secs.toFixed(1)} s)`);
     window.__mbaaLastExport.ms = Math.round(secs * 1000);
-    window.__mbaaLastExport.codecs = [codecs.video.codec, codecs.audio && codecs.audio.codec];
+    Object.assign(window.__mbaaLastExport, { codecs: [codecs.video.codec, codecs.audio && codecs.audio.codec], width: W, height: H,
+      bitrate: codecs.video.bitrate, frames: nIn, chunks: nOut, clipFrames: c.b - c.a, mode: 'webcodecs' });
   } catch (e) {
     if (e.message !== 'cancelled') throw e;
     status('export cancelled');
   } finally {
     for (const h of hooks) if (orig[h]) M[h] = orig[h];
+    if (venc && venc.state !== 'closed') try { venc.close(); } catch (e) {}
     fx = null; overlayDirty = true;
     if (window.mbaaOvSync) window.mbaaOvSync();
     document.getElementById('clipexp').classList.remove('on');
@@ -5060,10 +5242,14 @@ async function renderExportAudio(s, ev, pre, c) {
     v.l.gain.setValueAtTime(pan > 0 ? dsGain(-pan) : 1, t); v.r.gain.setValueAtTime(pan < 0 ? dsGain(pan) : 1, t);
   };
   const cutAt = (v, t) => { if (v.src) { try { v.src.stop(t); } catch (e) {} v.src = null; } };
-  const decoded = new Map();
-  for (const [, h, , path] of ev) if (h === 'mbaaVoicePlay' && !decoded.has(path)) {
-    let bytes = null; try { bytes = M.FS.readFile(path); } catch (e) {}
-    decoded.set(path, bytes ? oc.decodeAudioData(bytes.slice().buffer).catch(() => null) : Promise.resolve(null));
+  // (each sound as the page plays it now: an announcer line from the extension's set or Neco's, annLine)
+  const decoded = new Map(), keyOf = new Map();
+  for (const [, h, , path] of ev) if (h === 'mbaaVoicePlay' && !keyOf.has(path)) {
+    const al = annLine(path), key = al ? al.key : path;
+    keyOf.set(path, key);
+    if (decoded.has(key)) continue;
+    let bytes = al ? al.bytes : null; if (!bytes) try { bytes = M.FS.readFile(path); } catch (e) {}
+    decoded.set(key, bytes ? oc.decodeAudioData(bytes.slice().buffer).catch(() => null) : Promise.resolve(null));
   }
   const bufs = new Map(await Promise.all([...decoded].map(async ([p, d]) => [p, await d])));
   const voices = new Map(), bgmV = chainOf(), exportBgm = new Map();
@@ -5099,7 +5285,7 @@ async function renderExportAudio(s, ev, pre, c) {
   for (const [k, h, ...a] of ev) {
     const t = at(k);
     if (h === 'mbaaVoicePlay') {
-      const [ch, path, vol, pan] = a, v = voice(ch), buf = bufs.get(path);
+      const [ch, path, vol, pan] = a, v = voice(ch), buf = bufs.get(keyOf.get(path));
       cutAt(v, t); setVp(v, vol, pan, t);
       if (buf) { const n = oc.createBufferSource(); n.buffer = buf; n.connect(v.g); n.start(t); v.src = n; }
     } else if (h === 'mbaaVoiceParam') { const [ch, vol, pan] = a; setVp(ch === -1 ? bgmV : voice(ch), vol, pan, t); }
@@ -5113,8 +5299,8 @@ async function exportRealtime(s, c) {
   if (!window.MediaRecorder || !REC_TYPES.some(t => MediaRecorder.isTypeSupported(t))) { status('this browser cannot record video'); return; }
   setPaused(true);
   await requestSeek(c.a);
-  const out = document.createElement('canvas'); out.width = 1280; out.height = 960;
-  const g = out.getContext('2d'); g.imageSmoothingEnabled = false;
+  const out = document.createElement('canvas'); out.width = EXPORT_W; out.height = EXPORT_H;
+  const g = out.getContext('2d', { alpha: false }); g.imageSmoothingEnabled = false;
   // a frame per game frame (requestFrame); where the capture track has no requestFrame, the canvas is captured at 60 fps
   let stream = out.captureStream(0);
   const manual = typeof stream.getVideoTracks()[0].requestFrame === 'function';
@@ -5124,7 +5310,7 @@ async function exportRealtime(s, c) {
   stream.addTrack(dest.stream.getAudioTracks()[0]);
   let mr = null, type = '';
   for (const t of REC_TYPES.filter(t => MediaRecorder.isTypeSupported(t))) {  // the first format whose recorder starts
-    try { mr = new MediaRecorder(stream, { mimeType: t, videoBitsPerSecond: 8e6, audioBitsPerSecond: 192e3 }); mr.start(1000); type = t; break; }
+    try { mr = new MediaRecorder(stream, { mimeType: t, videoBitsPerSecond: EXPORT_BPS, audioBitsPerSecond: 192e3 }); mr.start(1000); type = t; break; }
     catch (e) { console.warn(`recorder ${t} failed:`, e); mr = null; }
   }
   if (!mr) { master.disconnect(dest); status('video export failed: no recorder format would start'); return; }
@@ -5133,7 +5319,7 @@ async function exportRealtime(s, c) {
   mr.onerror = e => recFail(e.error || e);
   if (s.M._viewer_ov_on) s.M._viewer_ov_on(0);  // (the chat's comments stay out of the video)
   rec = { s, a: c.a, b: c.b, round: !!c.round, mr, g, out, dest, chunks, type, last: -1, save: true,
-          speed: ui.speed, track: stream.getVideoTracks()[0] };
+          speed: ui.speed, track: stream.getVideoTracks()[0], frames: 0 };
   if (ui.speed !== 1) call(s, 'viewer_speed', 1);
   document.getElementById('clipexp').classList.add('on');
   recDraw();
@@ -5141,9 +5327,10 @@ async function exportRealtime(s, c) {
 }
 function recDraw() {
   const r = rec;
-  r.g.drawImage(document.getElementById('canvas'), 0, 0, 1280, 960);
-  if (ui.boxes || ui.inputs || clipChat) r.g.drawImage(document.getElementById('overlay'), 0, 0, 1280, 960);
+  r.g.imageSmoothingEnabled = false; r.g.drawImage(document.getElementById('canvas'), 0, 0, EXPORT_W, EXPORT_H);
+  if (ui.boxes || ui.inputs || clipChat) paintOverlay(r.g, EXPORT_W, EXPORT_H, EXPORT_W / 960);
   if (r.track.requestFrame) r.track.requestFrame();
+  r.frames++;
 }
 function recTick(s, f) {
   const r = rec;
@@ -5174,6 +5361,7 @@ function stopRecording(save) {
     if (!save) { if (!/failed/.test(document.getElementById('status').textContent)) status('recording cancelled'); return; }
     const blob = new Blob(r.chunks, { type: r.type.split(';')[0] }), name = exportName(r, r.type.startsWith('video/mp4') ? 'mp4' : 'webm');
     saveBlob(blob, name);
+    Object.assign(window.__mbaaLastExport, { mode: 'realtime', width: EXPORT_W, height: EXPORT_H, frames: r.frames, clipFrames: r.b - r.a, type: r.type });
     status(`saved ${name} (${(blob.size / 1048576).toFixed(1)} MB)`);
   };
   if (r.mr.state === 'inactive') r.mr.onstop(); else r.mr.stop();

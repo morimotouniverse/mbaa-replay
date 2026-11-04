@@ -1,0 +1,4 @@
+TwemojiCountryFlags.woff2 — from country-flag-emoji-polyfill 0.1.8 (MIT, Talkjs), https://www.npmjs.com/package/country-flag-emoji-polyfill
+The flag glyphs are Twemoji graphics, Copyright 2020 Twitter, Inc and other contributors, licensed under CC-BY 4.0:
+https://creativecommons.org/licenses/by/4.0/ (https://github.com/jdecked/twemoji).
+Used by the site for flag emoji (Windows' Segoe UI Emoji has no flags: they showed as letters).
