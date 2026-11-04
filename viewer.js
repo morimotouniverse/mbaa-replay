@@ -6069,7 +6069,7 @@ const REC_TYPES = ['video/mp4;codecs=avc1.640033,mp4a.40.2', 'video/mp4;codecs=a
 // nearest-upscaled pixel art needs far less than camera video. X takes at most 1280x1024
 // (docs.x.com/x-api/media/quickstart/best-practices): 1280x960 is the size for X and Discord.
 const EXPORT_SIZES = { 1: [640, 480, 3e6], 2: [1280, 960, 8e6], 3: [1920, 1440, 14e6] };
-const EXPORT_NOTE = { 1: 'small file', 2: 'for Discord and X', 3: 'largest; slow to save in Firefox' };
+const EXPORT_NOTE = { 1: 'small file', 2: 'for Discord and Twitter', 3: 'largest; slow to save in Firefox' };
 let exportScale = 2;
 try { const v = +localStorage.getItem('mbaaExportScale2'); if (EXPORT_SIZES[v]) exportScale = v; } catch (e) {}
 { const m = +Q.get('exportMbps'); if (m > 0) for (const k in EXPORT_SIZES) EXPORT_SIZES[k][2] = m * 1e6; }  // (tests)
