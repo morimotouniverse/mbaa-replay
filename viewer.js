@@ -1173,10 +1173,11 @@ async function hashRun(s) {
   status(`state hash done: ${h.frames} frames in ${(h.ms / 1000).toFixed(1)} s`);
 }
 // ---- timeline: keyframes, seek, frame step ----
-const ui = { paused: false, speed: 1, boxes: false, inputs: false, skipIntro: false, hud: true, music: true, hitstun: true };
-// ETM's hitstun bar (engine-drawn under the combo counter, so in exports too): on unless this browser turned it off;
+const ui = { paused: false, speed: 1, boxes: false, inputs: false, skipIntro: false, hud: true, music: true, hitstun: false };
+// ETM's hitstun bar (engine-drawn under the combo counter, so in exports too): off unless this browser turned it on (user
+// 2026-11-04: off by default until it is drawn the way ETM does);
 // ?hitstun=0/1 overrides; capture mode (CE-parity pictures) has it off unless asked for
-try { ui.hitstun = localStorage.getItem('mbaaHitstun') !== '0'; } catch (e) {}
+try { ui.hitstun = localStorage.getItem('mbaaHitstun') === '1'; } catch (e) {}
 if (CAPTURE) ui.hitstun = false;
 if (Q.get('hitstun') === '0' || Q.get('hitstun') === '1') ui.hitstun = Q.get('hitstun') === '1';
 const hitstunApply = s => { if (s.M._viewer_hitstun_bar) call(s, 'viewer_hitstun_bar', ui.hitstun ? 1 : 0); };  // (an engine without it: nothing)
