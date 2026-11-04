@@ -423,6 +423,11 @@
      cut at the picture's edge, under the names; with them the small icons are not needed in the card */
   #matchcard { position: relative; }
   #matchcard .por { display: none; }
+  /* (the splashes no longer wait on the stage picture: with no art for the stage yet (a cold cache) or none at all, the
+     stage block stays up with this plain panel in the picture's place, so the splashes, names and moons show at once;
+     viewer.js stageShow hold(). Was: the block hidden, and with it every splash: the "icons and names only" card) */
+  #matchcard:has(#stageblk:not([hidden])) .view.ph { display: block; width: 100%; background: radial-gradient(120% 90% at 50% 20%, #2a2440, #0e0d16); }
+  body:is(.deskchat, :not(.side)) #matchcard:has(#stageblk:not([hidden])) .view.ph { height: clamp(150px, 15vw, 210px); }
   /* (each character's own fit, viewer.js POR_ADJ: --por-y / --por-x in % of the card, --por-s a scale; ?portune=1 dials them) */
   #matchcard.pors:has(#stageblk:not([hidden])) .por:not([hidden]) { display: block; position: absolute; z-index: 1;
     top: calc(-22% + var(--por-y, 0) * 1%); left: calc(25% + var(--por-x, 0) * 1%);
@@ -915,6 +920,6 @@
 </div>
 <script src="mbaa.js?v=c7282fdc59cb"></script>
 <script src="bgm_stream.js?v=407ac29e5c89"></script>
-<script src="viewer.js?v=4445d14e3eb3"></script>
+<script src="viewer.js?v=5c7c6d5db41c"></script>
 </body>
 </html>

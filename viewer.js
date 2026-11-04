@@ -930,7 +930,7 @@ async function play(rep, name, catchUp = 0, want = null) {
   else console.log(`clip: replay played with its live forcing (${s.lt.length} bytes)`);
   if (HASH) s.M.ccall('viewer_hash_enable', null, [], []);
   call(s, 'viewer_play', 0);
-  if (liveSrc && Q.get('live')) liveBegin(s);
+  if (liveSrc && Q.get('live')) { liveBegin(s); swMark('boot', true, liveSrc.id); }
   call(s, 'viewer_hud', ui.hud ? 1 : 0);
   window.__mbaa = { Module: s.M, man };
   if (!HASH || CAPTURE) timelineInit(s);
@@ -1759,10 +1759,46 @@ const liveOurs = (m, L) => !!m && !!L && m.id === L.id && (!m.match || !(L.info 
 // last grew; the players left CCCaster open on the result menu, a lobby bot still lists the host): idle, listed last
 // and dimmed, never followed or moved to
 const LIVE_IDLE = 300, liveIdle = m => m.age > LIVE_IDLE, liveGone = m => m.silent > 8 || liveIdle(m);
+// ---- live switch timing (SWITCH_PLAN.md phase 1): window.__mbaaSwitch, the marks of the newest switch in ms after the
+// click (liveGo): list, bootRep, files, boot, records, cuStart, cuEnd, frame (the first frame drawn after the catch-up),
+// stageArt (the stage art fetch resolved), cardPlayers / cardStage / cardPor / cardTrack and card (all of the card
+// painted for the clicked match), live (following at 1x within LIVE_BEHIND + 90). Read by tools/web/live_switch_time_check.py.
+let sw = null;
+function swBegin(id) {
+  const m = (liveListLast || []).find(x => x.id === id) || null;
+  const st = m && m.chara ? (stageOk(m.stage) ? m.stage : stageStandIn(m.stage)) : null;
+  sw = window.__mbaaSwitch = { id, t0: performance.now(), marks: {}, want: m && m.chara ? { stage: st, chara: m.chara.slice() } : null, n: ((sw && sw.n) || 0) + 1 };
+  const me = sw;
+  const tick = () => { if (sw !== me) return; swCard(); if (!me.marks.card && performance.now() - me.t0 < 60000) requestAnimationFrame(tick); };
+  requestAnimationFrame(tick);
+}
+// first: only the first time per switch (else the newest time: cuEnd after a second jump)
+function swMark(k, first = true, id = null) {
+  if (!sw || (id && id !== sw.id) || (first && sw.marks[k] != null)) return;
+  sw.marks[k] = Math.round(performance.now() - sw.t0);
+}
+// the card's parts painted for the switch's match (run in an animation frame: what is on screen)
+function swCard() {
+  if (!sw || !sw.want) return;
+  const W = sw.want, card = document.getElementById('matchcard'), box = document.getElementById('stageblk');
+  const players = document.getElementById('players'), pors = [...card.querySelectorAll('.por:not(.xfghost)')];
+  const shown = e => e && !e.hidden && getComputedStyle(e).display !== 'none';
+  const img = e => shown(e) && e.complete && e.naturalWidth > 0;
+  let pk = null; try { pk = JSON.parse(plKey || 'null'); } catch (e) {}
+  if (shown(players) && pk && pk[0].every(([c], p) => c === W.chara[p])) swMark('cardPlayers');
+  const stOk = shown(box) && +box.dataset.stage === W.stage && img(box.querySelector('.view'));
+  if (stOk) swMark('cardStage');
+  const porOk = pors.every((e, p) => +e.dataset.c === W.chara[p] && img(e));
+  if (porOk) swMark('cardPor');
+  const trOk = stOk && document.getElementById('trk').textContent.trim() !== '';
+  if (trOk) swMark('cardTrack');
+  if (sw.marks.cardPlayers != null && stOk && porOk && trOk) swMark('card');
+}
+let liveListLast = null;  // (the newest list read)
 async function liveList() {
   const r = await liveFetch(`${LIVE}/live/list`);
   if (!r.ok) throw new Error(`HTTP ${r.status}`);
-  return r.json();
+  return (liveListLast = await r.json());
 }
 // id: the host's live id. match: the match key the start must be (a fallback start of the session's own match, a game
 // it fell behind on): the host on another match by then is not that match, so ours has ended: the next-match card
@@ -1770,8 +1806,13 @@ async function startLive(id, match = null) {
   let info;
   let all;
   liveWant = id;
-  try { all = await liveList(); info = all.find(m => m.id === id); } catch (e) { status(`live feed unreachable: ${e.message}`); return liveRetry(id, match); }
+  try { all = await liveList(); info = all.find(m => m.id === id); swMark('list', true, id); } catch (e) { status(`live feed unreachable: ${e.message}`); return liveRetry(id, match); }
   if (liveWant !== id) return;  // (another match asked for meanwhile)
+  {  // (the card: the match's newest entry, a later game than the click's; none, a select: the engine's)
+    const was = JSON.stringify(cardMeta);
+    cardSet(info && !(match && info.match && info.match !== match) ? info : null);
+    if (JSON.stringify(cardMeta) !== was) cardDraw();
+  }
   if (info && match && info.match && info.match !== match) {
     status('the match has ended');
     if (session && session.liveSrc && session.liveSrc.id === id) { nextCardShow(session, all, 'Match over'); return; }
@@ -1812,7 +1853,9 @@ async function startLive(id, match = null) {
   if (!r || !r.ok) { status(`live match: ${r ? `HTTP ${r.status}` : 'unreachable'}`); return !r || r.status >= 500 ? liveRetry(id, match) : undefined; }
   liveSrc = { id, info, since: info.game };
   window.__mbaaRepUrl = null;
-  await start(new File([await r.arrayBuffer()], `LIVE ${info.names.map(n => n.trim()).join(' vs ')}`), false, id);
+  const bootBytes = await r.arrayBuffer();
+  swMark('bootRep', true, id);
+  await start(new File([bootBytes], `LIVE ${info.names.map(n => n.trim()).join(' vs ')}`), false, id);
 }
 // the last index number in a block of .ccs records (u32 index, u32 kind, rng 12 + ring 220, u32 frames, u16 x 2 x frames)
 function liveLastIndex(b) {
@@ -1846,27 +1889,49 @@ function catchUpShow(left, total) {
   el.querySelector('.cu-s').textContent = secs == null ? 'catching up…' : `about ${secs} s left`;
   el.querySelector('.cu-bar i').style.width = `${Math.round(100 * (1 - left / Math.max(1, total)))}%`;
 }
+// the catch-up's steps: ~STEP_SLICE_MS of game each (the frame cost measured as it goes), so the page gets turns
+const STEP_SLICE_MS = 12;
+function stepSlicer() {
+  let per = 0.5;  // ms per frame, measured (a first slice of 24 frames)
+  return {
+    n: () => Math.max(1, Math.min(600, Math.floor(STEP_SLICE_MS / per))),
+    took(ms, frames) { if (frames > 0) per = Math.max(0.02, 0.5 * per + 0.5 * (ms / frames)); },
+  };
+}
+// a real task turn: a message, then a timer (queued behind the timers, network and worker tasks already waiting)
+const taskTurn = () => new Promise(r => { const ch = new MessageChannel(); ch.port1.onmessage = () => setTimeout(r, 0); ch.port2.postMessage(0); });
+// a short yield (scheduler.yield: its continuation runs ahead of other tasks; else a timer)
+const yieldTask = () => (globalThis.scheduler && typeof scheduler.yield === 'function') ? scheduler.yield() : new Promise(r => setTimeout(r, 0));
 async function liveCatchUp(s, n) {
-  const M = s.M, T = M._viewer_frame() + n, DRAW = 2;
+  const M = s.M, T = M._viewer_frame() + n, DRAW = 2, swId = s.liveSrc && s.liveSrc.id;
+  swMark('cuStart', true, swId);
+  if (sw && sw.id === swId) sw.cuFrames = (sw.cuFrames || 0) + n;
   catchUpShow(n, n);
   s.seeking = true; s.mute = true;
   s.stopSes(); s.bgmHalt();
   uiApply(s);
   call(s, 'viewer_suppress', 1);
-  let f = M._viewer_frame();
+  let f = M._viewer_frame(), shown = 0, turn = performance.now();
+  const sl = stepSlicer();
   while (f < T - DRAW) {
-    const g = call(s, 'viewer_step', Math.min(T - DRAW - f, 600));
+    const k = Math.min(T - DRAW - f, sl.n()), t0 = performance.now();
+    const g = call(s, 'viewer_step', k);
+    sl.took(performance.now() - t0, g - f);
     if (g === f) break;
     f = g;
-    status(`live: catching up (${T - f} frames to go)`);
-    catchUpShow(T - f, n);
-    await new Promise(r => setTimeout(r, 0));
+    if (performance.now() - shown > 200) { shown = performance.now(); status(`live: catching up (${T - f} frames to go)`); catchUpShow(T - f, n); }
+    // (a real task turn at least every ~50 ms: timers, worker replies (the card's art), network completions and a paint
+    // run during the catch-up. A scheduler.yield continuation runs ahead of them, and 600-frame steps (~0.45 s each)
+    // held the card until the catch-up was over: SWITCH_PLAN.md finding 4)
+    if (performance.now() - turn > 50) { await taskTurn(); turn = performance.now(); } else await yieldTask();
     if (session !== s) { catchUpShow(null); return; }
   }
   catchUpShow(null);
   call(s, 'viewer_suppress', 0);
   if (f < T) call(s, 'viewer_step', T - f);
   else call(s, 'viewer_represent');
+  swMark('cuEnd', false, swId);
+  if (sw && sw.marks.frame == null && sw.id === swId) requestAnimationFrame(() => swMark('frame', true, swId));
   s.seeking = false; s.mute = ui.paused;
   uiApply(s);
   if (!ui.paused) s.bgmSync(M._viewer_frame());
@@ -1897,6 +1962,105 @@ function drawMoon(cv, m) {
 // this tab's random id, sent with live record requests: the feed counts the tabs watching each match (nothing else)
 const VIEWER = Array.from(crypto.getRandomValues(new Uint8Array(12)), b => 'abcdefghijklmnopqrstuvwxyz0123456789'[b % 36]).join('');
 let plArt = null, plKey = '', plCells = [-1, -1];
+// ---- the match card from metadata (SWITCH_PLAN.md phase 2) ----
+// A live switch draws the card at the click from the live-list entry clicked (stage, characters, moons, colours, names:
+// cc_live.mjs setupFor), not from the engine's memory, which has nothing for the new match until it has booted and caught
+// up. cardMeta is that match's setup; the card shows it for the old session still on screen and for the new one until
+// it is live (s.cardLive: caught up and following). Then it is the engine's again (it is authoritative: a character
+// select followed, a stage stand-in); the same data give the same keys (plKey / stageKey), so nothing is redrawn and
+// nothing jumps unless the data differ. The art comes preloaded (cardPreload, from every list read), so the click draws
+// it in the same frame; xfInstant: no crossfade from the old match's card (it showed the old card ~80% for 100 ms).
+let cardMeta = null, xfInstant = false;
+function cardSet(m) {
+  if (!m || !Array.isArray(m.chara) || m.css) { cardMeta = null; return; }
+  cardMeta = { id: m.id, game: m.game, stage: m.stage, chara: m.chara.slice(), moon: (m.moon || []).slice(), color: (m.color || []).slice(),
+               names: (m.names || []).slice(), streak: m.streak || null };
+}
+// the card's source for session s: the click's metadata, or null (the engine's memory)
+function cardMetaFor(s) {
+  const C = cardMeta;
+  if (!C) return null;
+  if (!s || !s.M || !s.liveSrc || s.liveSrc.id !== C.id) return C;  // (the old match still on screen, or none yet)
+  if (s.cardLive || s.liveSrc.info.game !== C.game) { cardMeta = null; return null; }  // (live, or a later game: the engine's)
+  return C;
+}
+const cardStageId = id => stageOk(id) ? id : stageStandIn(id);  // (what the engine plays: repStageFix)
+// draw the card now (a click, a new entry for the match): not on the next 500 ms tick
+function cardDraw(instant = false) {
+  xfInstant = instant;
+  try {
+    stageShow(session).catch(() => {});
+    if (plArt) playersShow(session); else playersArt().then(() => playersShow(session)).catch(() => {});
+  } finally { xfInstant = false; }
+}
+// the stage art per stage id, decoded once: {view, name} blob URLs (the name plate trimmed), or a promise of them
+const stageArt = new Map();
+function stageArtGet(id) {
+  if (stageArt.has(id)) return stageArt.get(id);
+  const st = stagePanel && stagePanel.stages[id];
+  if (!st || !man) return null;
+  const n = String(id).padStart(2, '0'), paths = st.art.map(k => `web/stage/${k}_${n}.png`).filter(p => man.files[p]);
+  const pr = (async () => {
+    await fetchAll(man, paths, '', true);
+    const art = {};
+    for (const k of ['view', 'name']) {
+      const d = cache.get(`web/stage/${k}_${n}.png`);
+      let blob = d ? new Blob([d], { type: 'image/png' }) : null;
+      // the name plate's text sits left in a wider sheet cell: cropped to its drawn pixels so the plate centres on the card
+      if (blob && k === 'name') try { blob = await trimAlpha(blob); } catch (e) {}
+      art[k] = blob ? URL.createObjectURL(blob) : '';
+      if (art[k]) await imgReady(art[k]);
+    }
+    stageArt.set(id, art);
+    return art;
+  })();
+  pr.catch(() => stageArt.delete(id));
+  stageArt.set(id, pr);
+  return pr;
+}
+// a blob URL decoded once ahead (the card's <img> then paints it in the frame it is set)
+const imgReady = url => { const i = new Image(); i.src = url; return (i.decode ? i.decode() : Promise.resolve()).catch(() => {}); };
+// a splash's blob URL (porUrls), loaded and decoded once
+const porLoading = new Map();
+function porLoad(path) {
+  if (porUrls.has(path)) return Promise.resolve(porUrls.get(path));
+  if (porLoading.has(path)) return porLoading.get(path);
+  const pr = (async () => {
+    await fetchAll(man, [path], '', true);
+    const d = cache.get(path);
+    if (!d) throw new Error('no data');
+    const u = URL.createObjectURL(new Blob([d], { type: 'image/png' }));
+    await imgReady(u);
+    porUrls.set(path, u);
+    return u;
+  })().finally(() => porLoading.delete(path));
+  porLoading.set(path, pr);
+  return pr;
+}
+// every listed match's card art (stage picture and plate, both splashes; the select sheet; the track title is data),
+// one file at a time in idle time, so it never competes with a match loading. A phone (LOWMEM): the first 4 listed.
+let cardPreQ = [], cardPreRun = false;
+function cardPreload(list) {
+  const want = [];
+  for (const m of (list || []).filter(m => Array.isArray(m.chara) && !m.css).slice(0, LOWMEM ? 4 : 32)) {
+    want.push(['s', cardStageId(m.stage)]);
+    for (const c of m.chara) { const p = porPath(c); if (p) want.push(['p', p]); }
+  }
+  const have = new Set(cardPreQ.map(x => x.join()));
+  for (const x of want) if (!have.has(x.join()) && !(x[0] === 's' ? stageArt.get(x[1]) && !(stageArt.get(x[1]) instanceof Promise) : porUrls.has(x[1]))) { cardPreQ.push(x); have.add(x.join()); }
+  if (cardPreRun || !cardPreQ.length) return;
+  cardPreRun = true;
+  const idle = () => new Promise(r => window.requestIdleCallback ? requestIdleCallback(() => r(), { timeout: 500 }) : setTimeout(r, 50));
+  (async () => {
+    try {
+      await playersArt().catch(() => {});
+      for (let x; (x = cardPreQ.shift());) {
+        await idle();
+        try { await (x[0] === 's' ? stageArtGet(x[1]) : porLoad(x[1])); } catch (e) {}
+      }
+    } finally { cardPreRun = false; }
+  })();
+}
 async function playersArt() {
   if (plArt) return plArt;
   const art = ['grp/c_sel_aa/csel_icon00.png', 'grp/c_sel_aa/csel_cursor00.png'];
@@ -1907,11 +2071,12 @@ async function playersArt() {
   return icons && cursor ? (plArt = { icons, cursor }) : null;
 }
 function playersShow(s) {
-  const box = document.getElementById('players');
-  if (!s || !s.M) { box.hidden = true; return; }
-  const H = s.M.HEAP32, rows = box.querySelectorAll('.pl');
-  const names = ((s.liveSrc && s.liveSrc.info.names) || []).map(n => (n || '').trim());  // (a replay has none)
-  const sides = [0, 1].map(p => [H[(BSLOT + p * 0x2C + 8) >> 2], H[(BSLOT + p * 0x2C + 0x14) >> 2]]);
+  const box = document.getElementById('players'), C = cardMetaFor(s);
+  if (!C && (!s || !s.M)) { box.hidden = true; return; }
+  const rows = box.querySelectorAll('.pl');
+  const names = ((C ? C.names : s.liveSrc && s.liveSrc.info.names) || []).map(n => (n || '').trim());  // (a replay has none)
+  const sides = C ? [0, 1].map(p => [C.chara[p], C.moon[p]])
+    : [0, 1].map(p => [s.M.HEAP32[(BSLOT + p * 0x2C + 8) >> 2], s.M.HEAP32[(BSLOT + p * 0x2C + 0x14) >> 2]]);
   const key = JSON.stringify([sides, names]);
   if (key !== plKey && plArt) {
     plKey = key;
@@ -1956,12 +2121,7 @@ async function porShow(p, c) {
   el.dataset.c = c;
   if (!path) { el.hidden = true; document.getElementById('matchcard').classList.toggle('pors', [...document.querySelectorAll('#matchcard .por:not(.xfghost)')].some(e => !e.hidden)); return; }
   try {
-    if (!porUrls.has(path)) {
-      await fetchAll(man, [path], '', true);
-      const d = cache.get(path);
-      if (!d) throw new Error('no data');
-      porUrls.set(path, URL.createObjectURL(new Blob([d], { type: 'image/png' })));
-    }
+    if (!porUrls.has(path)) { const inst = xfInstant; await porLoad(path); xfInstant = inst; }  // (preloaded: no wait)
     if (+el.dataset.c !== c) return;  // (another pick meanwhile)
     xfadeSrc(el, porUrls.get(path)); el.hidden = false;
     porApply(el, path);  // (after the fade's ghost is cloned: the ghost keeps the old character's fit)
@@ -2593,7 +2753,7 @@ async function trimAlpha(blob) {
 const XF_MS = 450;
 function xfadeSrc(img, src, revoke) {
   const prev = img.getAttribute('src');
-  const can = prev && src && prev !== src && !img.hidden && img.offsetWidth > 0 && img.complete && img.naturalWidth > 0
+  const can = !xfInstant && prev && src && prev !== src && !img.hidden && img.offsetWidth > 0 && img.complete && img.naturalWidth > 0
     && !(window.matchMedia && matchMedia('(prefers-reduced-motion: reduce)').matches);
   if (!can) { if (src) img.src = src; else img.removeAttribute('src'); if (revoke) URL.revokeObjectURL(revoke); return; }
   const g = img.cloneNode(false);
@@ -2616,10 +2776,12 @@ function xfadeSrc(img, src, revoke) {
 async function stageShow(s) {
   const box = document.getElementById('stageblk');
   if (porTune && stagePanel && !(s && s.M)) return porTuneStage(box);  // (tuning with no match: a stage picture anyway)
-  if (!stagePanel || !s || !s.M) { box.hidden = true; return; }
-  const id = radio && radio.stageNow ? radio.stageNow : s.M.HEAP32[STAGE_ID >> 2], st = stagePanel.stages[id];  // (an MBAACC pick's stage)
-  const mu = musicNow(), own = musicPick === 'match' ? s.bgmNow : null;
-  const f = mu ? mu.file : trackOf(own || s.bgmNow) || (st && st.track), key = `${id}/${f}/${+stageFollows()}/${radio ? radio.file : ''}/${musicPick}/${liveExt.stage ? liveExt.stage.n : ''}`;
+  const C = cardMetaFor(s);
+  if (!stagePanel || (!C && (!s || !s.M))) { box.hidden = true; return; }
+  // (the click's metadata: the stage and its own track; a radio / extension pick is the match's, after its start)
+  const id = C ? cardStageId(C.stage) : radio && radio.stageNow ? radio.stageNow : s.M.HEAP32[STAGE_ID >> 2], st = stagePanel.stages[id];  // (an MBAACC pick's stage)
+  const mu = C ? null : musicNow(), own = !C && musicPick === 'match' ? s.bgmNow : null;
+  const f = mu ? mu.file : trackOf(own || (C ? null : s.bgmNow)) || (st && st.track), key = `${id}/${f}/${+stageFollows()}/${radio ? radio.file : ''}/${musicPick}/${liveExt.stage ? liveExt.stage.n : ''}`;
   if (key === stageKey) return;
   stageKey = key;
   const tr = mu ? mu : stagePanel.tracks[f];
@@ -2630,7 +2792,7 @@ async function stageShow(s) {
     a.title = 'Raito’s upload of this song on YouTube'; a.setAttribute('aria-label', a.title);
     document.getElementById('trk').append(a);
   }
-  if (liveExt.stage && !radioPickHasStage()) {  // a live match's extension's stage (liveExtApi.stage): its picture and plate over the match's
+  if (!C && liveExt.stage && !radioPickHasStage()) {  // a live match's extension's stage (liveExtApi.stage): its picture and plate over the match's
     // (not while this viewer's own radio stage pick is on: that stage is the one on screen, radioStageSync)
     const X = liveExt.stage;
     for (const k of ['view', 'name']) {
@@ -2643,7 +2805,7 @@ async function stageShow(s) {
     box.hidden = false;
     return;
   }
-  if (radio && stageFollows() && (radio.tile || radio.tileUrl)) {  // an older game's stage: its picture, its name for the plate
+  if (!C && radio && stageFollows() && (radio.tile || radio.tileUrl)) {  // an older game's stage: its picture, its name for the plate
     const view = box.querySelector('.view'), name = box.querySelector('.name'), d = radio.tile && cache.get(radio.tile);
     const old = view.dataset.src && view.dataset.src.startsWith('blob:') ? view.dataset.src : '';
     // (the stage's own render; a track with none shows its community tile)
@@ -2656,16 +2818,32 @@ async function stageShow(s) {
     return;
   }
   box.querySelector('.view').title = '';
-  if (!st) { box.hidden = true; return; }
-  const n = String(id).padStart(2, '0'), paths = st.art.map(k => `web/stage/${k}_${n}.png`);
-  await fetchAll(man, paths, '', true);
-  for (const k of ['view', 'name']) {
-    const img = box.querySelector('.' + k), d = cache.get(`web/stage/${k}_${n}.png`), old = img.dataset.src || '';
-    let blob = d ? new Blob([d], { type: 'image/png' }) : null;
-    // the name plate's text sits left in a wider sheet cell: cropped to its drawn pixels so the plate centres on the card
-    if (blob && k === 'name') try { blob = await trimAlpha(blob); } catch (e) {}
-    img.dataset.src = blob ? URL.createObjectURL(blob) : '';
-    xfadeSrc(img, img.dataset.src, old); img.hidden = !d;
+  const view = box.querySelector('.view');
+  // (no art for the stage, or not loaded yet (a cold cache): the picture's place held by a plain panel, so the card's
+  // layout, the splashes and the names are there at once; was: the block hidden, and the CSS hid the splashes with it)
+  const hold = () => {
+    for (const k of ['view', 'name']) { const img = box.querySelector('.' + k); img.dataset.src = ''; img.removeAttribute('src'); img.hidden = k === 'name'; }
+    view.classList.add('ph'); box.dataset.stage = '';
+    if (box.hidden) requestAnimationFrame(() => marquee(document.getElementById('players')));
+    box.hidden = false;
+  };
+  let art = st ? stageArtGet(id) : null;
+  if (art instanceof Promise) {
+    const inst = xfInstant;
+    if (box.hidden || +box.dataset.stage !== id) hold();
+    art = await art.catch(() => null);
+    xfInstant = inst;
+    if (stageKey !== key) return;  // (another stage meanwhile)
+  }
+  if (!art) { hold(); return; }
+  swMark('stageArt', true, C ? C.id : s.liveSrc && s.liveSrc.id);
+  box.dataset.stage = id;
+  view.classList.remove('ph');
+  for (const k of ['view', 'name']) {  // (cached URLs: kept, never revoked)
+    const img = box.querySelector('.' + k), old = img.dataset.src || '';
+    img.dataset.src = art[k] || '';
+    xfadeSrc(img, img.dataset.src, old.startsWith('blob:') && ![...stageArt.values()].some(a => a && (a.view === old || a.name === old)) ? old : '');
+    img.hidden = !art[k];
   }
   if (box.hidden) requestAnimationFrame(() => marquee(document.getElementById('players')));  // (the card's layout: measured again)
   box.hidden = false;
@@ -2731,6 +2909,7 @@ async function liveListShow() {
   // and hid the whole list for 15 s)
   try { l = await liveList(); } catch (e) { if (ol.children.length) { wTimeout(liveListShow, 5000); return; } }
   try { await playersArt(); } catch (e) {}
+  cardPreload(l);
   sec.hidden = !l.length;
   // a name the watched match didn't have at the join (the list learns it later: the host's GameSetup, a probe) fills in
   // the session's, so the banner and the card show it (was: "Viper" missing for the whole session, user 2026-11-01)
@@ -3293,6 +3472,7 @@ function liveBegin(s) {  // play(): after viewer_play
         if (b.length && (last !== L.since || b.length !== L.recLen)) L.dataAt = performance.now();
         L.recLen = b.length;
         if (b.length && session === s) {
+          swMark('records', true, L.id);
           liveKeep(L, b);
           liveFeed(s, b);
           liveRematch(s, b);
@@ -3452,6 +3632,10 @@ function liveBegin(s) {  // play(): after viewer_play
           hist.length = 0; hist.push(ahead); s.liveJoined = true;
         }
       }
+      // (timing: each poll between the first records and the catch-up, what the jump waits on)
+      if (sw && sw.id === L.id && sw.marks.records != null && sw.marks.cuStart == null && (sw.polls || (sw.polls = [])).length < 12)
+        sw.polls.push({ t: Math.round(performance.now() - sw.t0), ahead, floor, synced: !!s.liveSynced, css: !!s.cssHeld, load: !!s.loadHeld,
+                        retry: call(s, 'viewer_spectate_in_retry'), seeking: !!s.seeking });
       if (s.liveSynced && liveJump() && !hidden() && !s.cssHeld && !s.loadHeld && !call(s, 'viewer_spectate_in_retry')) {
         // (the stream grows while the jump runs: again until it is close)
         // (at the join: a jump past 2 s over; later only a real backlog, 10 s over the floor: a hidden tab, a load. The
@@ -3498,6 +3682,11 @@ function liveBegin(s) {  // play(): after viewer_play
       // target; 2x (CCCaster's spectateFastFwd, with its badge) only for a real backlog past that. (2x from 1 s over
       // flashed "2x catching up" every 30-40 s all match: artifacts/xz_check/live_catchup)
       const excess = Math.min(ahead, floor) - LIVE_BEHIND;
+      if (s.liveSynced && !s.seeking && ahead <= LIVE_BEHIND + 90 && ahead > 0) {
+        if (sw && sw.marks.frame == null) swMark('frame', true, L.id);
+        swMark('live', true, L.id);
+        if (!s.cardLive) { s.cardLive = true; cardDraw(); }  // (the engine's data from here: redrawn only where they differ)
+      }
       const ff = !hold && excess > 180;
       const trim = !hold && !ff && (excess > 30 || (s.liveTrim && excess > 0));
       if (trim !== !!s.liveTrim) { s.liveTrim = trim; call(s, 'viewer_rate', trim ? 1.05 : 1); }
@@ -3531,6 +3720,9 @@ function nextCardHide() {
 // push: a new history entry (a click on the live list or Go now: Back returns to the match before, no reload; user
 // 2026-11-02 "clicking another live match must not reload the page"); the automatic move replaces the entry
 function liveGo(id, push = false) {
+  swBegin(id);
+  cardSet((liveListLast || []).find(m => m.id === id));
+  cardDraw(true);
   nextCardHide();
   try {
     const u = new URL(location.href);
@@ -3547,6 +3739,7 @@ addEventListener('popstate', () => {
   const id = new URLSearchParams(location.search).get('live');
   if (!id) { location.reload(); return; }
   if (session && session.liveSrc && session.liveSrc.id === id) return;
+  cardSet((liveListLast || []).find(m => m.id === id)); cardDraw(true);
   nextCardHide();
   document.body.classList.add('live');
   startLive(id);
@@ -4426,6 +4619,7 @@ async function start(file, quiet = false, liveId = null) {
     status(`stage ${keys.stage}, P1 ${keys.p1[0]}:${keys.p1[1]} vs P2 ${keys.p2[0]}:${keys.p2[1]}: fetching`);
     await fetchAll(man, want, 'match assets');
   }
+  if (liveId) swMark('files', true, liveId);
   window.__mbaaKeys = keys;
   const [, when] = repLabel(file.name);
   document.getElementById('title').textContent = matchTitle(rep) + (when ? ` \u00b7 ${when}` : '');
