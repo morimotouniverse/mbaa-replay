@@ -4659,9 +4659,9 @@
     if (!irc.registered) { sys('not connected yet'); return; }
     const c = chan(shown);
     if (!c.joined) { join(shown); sys('joining, try again in a moment'); return; }
-    const now = performance.now();
-    if (now - irc.lastSend < 700) { sys('slow down a little'); return; }
-    irc.lastSend = now;
+    // (no client-side 'slow down': nico comments are meant to flood; the server's fakelag (burst 5, then 2/s, queued,
+    // never dropped: tools/chat/ergo) paces real floods)
+    irc.lastSend = performance.now();
     const cmd = nicoCmds(cmdIn.value).join(' ');
     // a reply: +draft/reply=<msgid> (IRCv3 client tag), and "@<their nick> " first so plain IRC clients read it as one
     // (an ACTION keeps the reply tag, without the "@nick " (it would land inside the CTCP))
