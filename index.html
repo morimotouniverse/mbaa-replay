@@ -18,7 +18,7 @@
 <meta name="twitter:description" content="Watch Melty Blood Actress Again Current Code replays in your browser, frame-exact.">
 <meta name="twitter:image" content="https://watch.meltyblood.org/preview.png">
 <meta name="mbaa-manifest" content="2a2e2bac19a8">
-<meta name="mbaa-chatjs" content="chat.js?v=3904bee16683">
+<meta name="mbaa-chatjs" content="chat.js?v=1e8ffa64db70">
 <meta name="mbaa-announcer" content="announcer/neco.bin?v=932b15248e89">
 <link rel="manifest" href="site.webmanifest">
 <link rel="icon" href="icon-192.png">
@@ -240,6 +240,15 @@
                align-items: center; justify-content: center; gap: 6px 12px; padding: 6px 10px; box-sizing: border-box;
                background: #12121cf0; border: 1px solid #50c8ff66; border-radius: 10px; box-shadow: 0 8px 24px #000a; font-size: 12px; }
   #clippanel[hidden] { display: none; }
+  #clippanel select { height: 28px; font-size: 12px; padding: 0 4px; background: var(--btn, #1c2230); color: inherit; border: 1px solid var(--line, #3a4050); border-radius: 4px; }
+  body.mob #clippanel select { height: 36px; }
+  .stage.exporting #canvas, .stage.exporting #overlay { visibility: hidden; }
+  #xprog { position: absolute; z-index: 21; left: 50%; top: 50%; transform: translate(-50%, -50%); width: min(420px, 80%); padding: 14px 16px; border-radius: 8px;
+    background: rgba(10, 14, 22, 0.92); color: #e8f2ff; font-size: 13px; text-align: center; box-shadow: 0 4px 24px rgba(0,0,0,0.5); }
+  #xprog[hidden] { display: none; }
+  #xprog .xpb { height: 6px; margin: 10px 0 6px; border-radius: 3px; background: rgba(255,255,255,0.15); overflow: hidden; }
+  #xprog .xpb i { display: block; height: 100%; width: 0; background: #58b8ff; }
+  #xprog .xph { font-size: 11px; color: #9fb0c8; }
   #clippanel .cprange { font-variant-numeric: tabular-nums; white-space: nowrap; color: #d6f2ff; }
   #clippanel .cprange b { font-weight: 700; }  #clippanel #cplen { color: var(--muted); margin-left: 4px; }
   #clippanel .cpg { display: inline-flex; align-items: center; gap: 2px; white-space: nowrap; }
@@ -776,7 +785,7 @@
       <span class="cprange"><b id="cpa">0:00.0</b> &ndash; <b id="cpb">0:00.0</b><span id="cplen"></span></span>
       <span class="cpg"><span class="lbl">in</span><button data-nudge="a,-1" title="In point one frame earlier">&minus;1f</button><button data-nudge="a,1" title="In point one frame later">+1f</button></span>
       <span class="cpg"><span class="lbl">out</span><button data-nudge="b,-1" title="Out point one frame earlier">&minus;1f</button><button data-nudge="b,1" title="Out point one frame later">+1f</button></span>
-      <span class="cpg"><button class="txt" id="cplink" title="Copy a link that plays just this clip (C)"><i class="i i-share"></i>Copy link</button><button class="txt" id="cpsave" title="Save the clip as an MP4 video; again to stop (E)"><i class="i i-film"></i>Save MP4</button><button class="txt" id="cpclear" title="Clear the clip (Esc)"><i class="i i-x"></i>Clear</button></span>
+      <span class="cpg"><button class="txt" id="cplink" title="Copy a link that plays just this clip (C)"><i class="i i-share"></i>Copy link</button><button class="txt" id="cpsave" title="Save the clip as an MP4 video; again to stop (E)"><i class="i i-film"></i>Save MP4</button><select id="cpsize" title="The MP4's size: every game pixel 3x / 2x / 1x, 60 fps. X takes videos up to 1280x1024: save at 1280x960 for X" aria-label="MP4 size"><option value="3">1920&times;1440</option><option value="2">1280&times;960 &middot; for X</option><option value="1">640&times;480</option></select><button class="txt" id="cpclear" title="Clear the clip (Esc)"><i class="i i-x"></i>Clear</button></span>
     </div>
     <div class="tbar">
       <div class="clock"><span id="time">0:00.0</span><span class="hint" id="dur"></span><span id="fc"></span><button id="livebtn" class="livebtn" title="Back to live, ~4 s behind the players (L)" hidden>LIVE</button></div>
@@ -906,6 +915,6 @@
 </div>
 <script src="mbaa.js?v=c7282fdc59cb"></script>
 <script src="bgm_stream.js?v=407ac29e5c89"></script>
-<script src="viewer.js?v=8c5292901406"></script>
+<script src="viewer.js?v=4445d14e3eb3"></script>
 </body>
 </html>

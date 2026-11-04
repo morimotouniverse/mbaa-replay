@@ -63,6 +63,9 @@
   'use strict';
   const api = window.mbaaChatApi;
   if (!api || document.getElementById('chatsec')) return;
+  // a live clip's link page (viewer.js mbaaChatApi.clip: ?r=..&c=<clip id> on the public site): the clip's chat, read
+  // only, in this column and on the picture (the clip section near the end); no IRC, no sign-in, no composer
+  const CLIPM = api.clip ? api.clip() : null;
   const Q = new URLSearchParams(location.search);
   const LOCAL = /^(127\.0\.0\.1|localhost)$/.test(location.hostname);
   const WS_URL = (LOCAL && Q.get('chatUrl')) ||
@@ -1442,7 +1445,8 @@
     const { glow, ...rest } = x.st;
     return rest;
   };
-  const lineStyle = l => (l && l.acct ? styleOf(l.acct) : null);
+  // (a clip's line carries its style as the clip saved it: l.st, the clip section)
+  const lineStyle = l => (l && l.st !== undefined ? l.st : l && l.acct ? styleOf(l.acct) : null);
   const clampI = (v, a, b) => Math.max(a, Math.min(b, Math.round(+v || 0)));
   const ACCT_RE = /^[\p{L}\p{M}\p{N}_-]{1,40}$/u;
   // the bot's canonical spec ("glow=rrggbb.<1-12>,grad=rrggbb-rrggbb[-rrggbb].<1-10>,wave=<1-10>.<1-10>", parts
@@ -3336,7 +3340,7 @@
   function dmMake(l, t) {
     const cmds = nicoCmds(l.cmd);
     // (top / bottom: a channel operator's comment only; anyone else's scrolls)
-    const lc0 = l.chan && chans.get(l.chan), lineOp = !!(lc0 && l.irc && lc0.ops.has(key(l.irc)));
+    const lc0 = l.chan && chans.get(l.chan), lineOp = !!l.op || !!(lc0 && l.irc && lc0.ops.has(key(l.irc)));  // (l.op: a clip's line, as saved)
     const loc = (lineOp && cmds.find(c => c === 'ue' || c === 'shita')) || 'naka';
     const size = cmds.find(c => DM_SIZE[c]) || 'medium', font = cmds.find(c => DM_FONT[c]) || 'defont';
     // (Niconico takes the first colour given; none: the sender's profile colour)
@@ -3480,6 +3484,7 @@
     const cv = document.getElementById('canvas');
     if (!cv) return;
     const dpr = window.devicePixelRatio || 1, w = Math.max(1, Math.round(cv.clientWidth * dpr)), h = Math.max(1, Math.round(cv.clientHeight * dpr));
+    if (api.exporting && api.exporting()) return;  // (an MP4 export draws the canvas at the video's size meanwhile)
     const k = `${w}x${h}`;
     if (glov.cv === k && cv.width === w) return;
     glov.cv = k;
@@ -4020,6 +4025,7 @@
   }
   // position the entries not yet on the overlay (a clock fetch for untagged ones), add the placeable ones
   function tlPlace() {
+    if (CLIPM) return;  // (a clip page: its own timeline, clipTick)
     const lv = api.live(), now = nowOf(lv);
     if (!now || !overOn.checked || document.visibilityState === 'hidden') return;
     if (tl.recs !== lv.recs) { tlDrop(); tl.recs = lv.recs; }  // (a new live session: local frames start again)
@@ -4066,6 +4072,7 @@
   // following live they run on the wall clock (danmaku) and this does nothing but wait)
   function tlFrame() {
     tl.raf = 0;
+    if (CLIPM) return;  // (a clip page: clipTick runs its comments)
     if (!tl.st || over.hidden) return;
     const lv = api.live();
     if (!lv || lv.recs !== tl.recs) { tlDrop(); tlPlace(); return; }
@@ -5235,6 +5242,7 @@
   const safe = v => String(v).replace(/[^A-Za-z0-9_-]/g, '').slice(0, 60);
   let matchPer = false, noneSince = 0;  // matchPer: the channel is the session's own (its history is the match's)
   setInterval(() => {
+    if (CLIPM) return;  // (a clip page: no live match)
     const lv = api.live ? api.live() : null, info = lv && lv.info;
     // (the match on its character select first: the session on screen is still the host's match before; and never the
     // live id's own channel: the id is the host's, kept across its matches, and that channel held old matches' lines,
@@ -5255,8 +5263,132 @@
     tabs(); render();
   }, 1000);
 
-  tabs(); render();
-  start();
-  window.mbaaChat = { nicoMax: n => { NICO_ON_SCREEN = n; }, dmText: t => dmTextOf({}, t), dmLine: l => dmMake(l, 0).text, emotes: () => [...EMOTES.keys()], emoteReady: n => !!(EMOTES.get(n) && emoteReady(EMOTES.get(n))), swellMap: swells, ovReset: () => { dmClear(nico); swellClear(); }, ovRestored: () => { swellClear(); glovReady(); }, irc, auth, nameOk, chans, prof, danmaku, say, nico, tl, clockPos, localOf, posOf, nowOf, feed: raw => on(parse(raw)), spread: () => spread, owner: () => ({ acct: ownAcct, spec: styleSpec(ownStyle) }), styles: () => Object.fromEntries([...styles.values()].map(x => [x.acct, styleSpec(x.st)])), mayStyle: () => mayStyle(), picSet, md: mdPlain, mirc: t => mircNodes(t).map(n => n.outerHTML || n.textContent).join(''),
+  // ---- a live clip's page (?r=..&c=<clip id> on the public site: viewer.js mbaaChatApi.clip) ----
+  // The clip's chat as the live page showed it: this column (the same lines: icons, colours, the stylers' glow /
+  // gradient / shadow / ~wave~, emotes, formatting), read only (no IRC, no composer), a header naming the match; and its
+  // comments on the picture by the same native renderer (overlay_gl) on the replay's own clock (the timeline stage, as a
+  // match channel watched back), so they are where the picture is at any size and in fullscreen. The column holds the
+  // lines said up to the picture's frame and follows the newest; a seek either way, or the loop starting over, redoes
+  // it. The clip JSON (tools/web/live_clip.mjs): chat [{o: frames after the clip's in point, n: name, x: the picture's
+  // text, m: Niconico commands, c: colour, a: an action}] and, from v 2, per line t (the chat's text), s (the sender's
+  // style, the bot's spec), xw (the picture's ~wave~ text), k / mo (character, moon), op (a channel operator's line: top /
+  // bottom comments), and names [P1, P2]. A v 1 clip's lines have their name colours only (that is all it saved).
+  const CLIP_CH = '#clip';
+  const clipFmt = f => { const t = Math.max(0, f) / 60; return `${Math.floor(t / 60)}:${String(Math.floor(t % 60)).padStart(2, '0')}`; };
+  const clip = { all: [], a: null, n: -1, raf: 0, j: null, glov: false };
+  // a clip JSON line -> a chat line (the fields lineEl / dmMake read)
+  function clipLineOf(x, i) {
+    const o = Math.max(0, Math.round(+x.o || 0)), st = typeof x.s === 'string' && x.s ? styleParse(x.s) : null;
+    const pic = flagOff(String(x.x || '')), sty = st && Object.keys(st).length ? st : null;
+    return { o, i, nick: String(x.n || ''), text: flagOff(String(x.t || x.x || '')), pic, picW: sty && typeof x.xw === 'string' && x.xw ? flagOff(x.xw) : null,
+             color: COLOR_RE.test(x.c || '') ? x.c : '', chara: Number.isInteger(x.k) ? x.k : -1, moon: Number.isInteger(x.mo) ? x.mo : -1,
+             action: !!x.a, cmd: String(x.m || ''), op: x.op ? 1 : 0, st: sty, time: new Date(o * 1000 / 60), chan: CLIP_CH };
+  }
+  function clipLi(l) {
+    const li = lineEl(l), tm = li.querySelector('.ctime');
+    if (tm) {  // (the time into the clip; a click goes there)
+      tm.textContent = clipFmt(l.o); tm.classList.add('cts'); tm.setAttribute('role', 'button'); tm.tabIndex = 0; tm.title = 'go to the moment this was said';
+      const go = e => { e.stopPropagation(); if (clip.a != null) api.seek(clip.a + l.o); };
+      tm.onclick = go; tm.onkeydown = e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); go(e); } };
+    }
+    li.dataset.clipI = String(l.i);
+    return li;
+  }
+  function clipHead() {
+    const el = sec.querySelector('.cclip');
+    if (!el || !clip.j) return;
+    const names = (Array.isArray(clip.j.names) ? clip.j.names : []).map(n => disp(String(n || '').trim())).filter(Boolean);
+    const t = document.getElementById('title'), mu = t ? String(t.textContent || '').split(' · ')[0].trim() : '';
+    const who = names.length === 2 ? `${names[0]} vs ${names[1]}` : '';
+    el.querySelector('.cclipm').textContent = who || mu || 'a live match';
+    el.querySelector('.cclipc').textContent = who && mu ? mu : '';
+    el.querySelector('.cclipk').textContent = `${clip.all.length} message${clip.all.length === 1 ? '' : 's'}`;
+    el.title = `the chat said during this clip of ${who || mu || 'a live match'}, as it was said (read only)`;
+  }
+  // the comments on the picture: the clip's lines on the timeline stage at their replay frames
+  function clipOv() {
+    if (!overOn.checked || clip.a == null) return;
+    clip.glov = !!glovReady();
+    const es = [];
+    for (const l of clip.all) { if (!dmText(l)) continue; emotesPending(l); es.push({ l, pos: null, T: 0, c: dmMake(l, (clip.a + l.o) / 60) }); }
+    tl.entries = es;
+    tlRelayout();
+    tl.T = -1;
+  }
+  function clipTick() {
+    clip.raf = requestAnimationFrame(clipTick);
+    const r = api.clipRange && api.clipRange(), f = api.frame();
+    if (!r || f == null || !clip.j) return;
+    if (r.a !== clip.a) { clip.a = r.a; clip.n = -1; clipOv(); }  // (the clip moved to its fight start's frames: viewer.js clipFix)
+    // the column: the lines said up to the picture's frame
+    let n = 0;
+    while (n < clip.all.length && clip.a + clip.all[n].o <= f) n++;
+    if (n !== clip.n) {
+      const c = chan(CLIP_CH);
+      if (clip.n > 0 && n > clip.n) {  // (played on: the new lines appended)
+        const stick = logStick;
+        for (let i = clip.n; i < n; i++) { c.lines.push(clip.all[i]); logEl.append(clipLi(clip.all[i])); }
+        if (stick) { logEl.scrollTop = logEl.scrollHeight; logStick = true; }
+      } else {  // (a seek, the loop's restart, the first frame: the list again)
+        c.lines = clip.all.slice(0, n);
+        if (n) logEl.replaceChildren(...c.lines.map(clipLi));
+        else { const li = document.createElement('li'); li.className = 'sys cclip0'; li.textContent = clip.all.length ? 'the chat said during this clip shows here as it plays' : 'no chat was said during this clip'; logEl.replaceChildren(li); }
+        logEl.scrollTop = logEl.scrollHeight; logStick = true;
+      }
+      ownCap();
+      clip.n = n;
+    }
+    // the picture's comments: the renderer's clock is the picture's time
+    if (!overOn.checked) return;
+    if (!tl.st || (!clip.glov && glovReady())) clipOv();  // (the overlay back on; the renderer's font in: measured with it)
+    const M = glovReady();
+    if (!M) return;
+    if (tl.follow !== 'clip') { tl.follow = 'clip'; M._viewer_ov_show(1, 1); M._viewer_ov_on(overOn.checked && !over.hidden ? 1 : 0); }
+    const T = f / 60;
+    if (T !== tl.T) { tl.T = T; M._viewer_ov_clock(T); }
+  }
+  function clipMode(C) {
+    document.body.classList.add('clipchat');
+    const st = document.createElement('style');
+    st.textContent = `
+  body.clipchat #chatsec :is(.ctabs, .cmembtn, .cspread, .cmemb, .chostp, .ctopic, .cments, .ctyping, .ctool, .cauth, .creply, .ceprev, .cform, details, .cme) { display: none !important; }
+  #chatsec .cclip { display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 6px; font-size: 12px; color: var(--muted); min-width: 0; }
+  #chatsec .cclip .cclipm { color: var(--fg); font-weight: 700; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 100%; }
+  #chatsec .cclip .cclipc:empty { display: none; }
+  #chatsec .cclip .cclipk::before, #chatsec .cclip .cclipc::before, #chatsec .cclip .cclipro::before { content: '\\b7'; margin-right: 6px; color: var(--faint); }
+  #chatsec .cclip .cclipro { color: var(--faint); }
+  #chatlog li.cclip0 { color: var(--faint); font-style: italic; }
+  body.mob #chatsec .cclip { font-size: 11px; }`;
+    document.head.append(st);
+    sec.querySelector('.chead > .lbl').textContent = 'clip chat';
+    const head = document.createElement('div');
+    head.className = 'cclip';
+    head.innerHTML = '<span class="cclipm"></span><span class="cclipc"></span><span class="cclipk"></span><span class="cclipro">read only</span>';
+    sec.querySelector('.chead').after(head);
+    shown = CLIP_CH;
+    chan(CLIP_CH);
+    const t = document.getElementById('title');
+    if (t && window.MutationObserver) new MutationObserver(clipHead).observe(t, { childList: true, characterData: true, subtree: true });
+    Promise.resolve(C.json).then(j => {
+      clip.j = j || {};
+      clip.all = (Array.isArray(clip.j.chat) ? clip.j.chat : []).map(clipLineOf).sort((p, q) => p.o - q.o || p.i - q.i);
+      clipHead();
+      if (!clip.raf) clip.raf = requestAnimationFrame(clipTick);
+    }, e => { console.warn('clip chat:', e); const li = document.createElement('li'); li.className = 'sys cclip0'; li.textContent = 'this clip\'s chat could not be loaded'; logEl.replaceChildren(li); });
+  }
+  // what a clip saves of a chat line besides its text on the picture (viewer.js liveClipChat): the chat's text, the
+  // sender's style (as this page draws it: the bot's spec, glow only where the bot allows it), the ~wave~ text on the
+  // picture, character and moon, a channel operator's line
+  function clipLine(l) {
+    const st = lineStyle(l), lc = l.chan && chans.get(key(l.chan)), op = !!(lc && l.irc && lc.ops.has(key(l.irc)));
+    const out = { t: String(l.text || '').slice(0, 300), s: st ? styleSpec(st) : '', k: validChara(l.chara) ? l.chara : -1, mo: [0, 1, 2].includes(l.moon) ? l.moon : -1, op: op ? 1 : 0 };
+    if (st && l.picW) { const w = l.action ? String(l.picW) : String(l.picW).replace(/^(@\S+[:,]?\s*)+/, '').trim(); if (w) out.xw = w.slice(0, 300); }
+    return out;
+  }
+
+  if (CLIPM) clipMode(CLIPM);
+  else { tabs(); render(); start(); }
+  window.mbaaChat = { clipLine, clipState: () => ({ n: clip.n, a: clip.a, all: clip.all.length, ids: clip.all.map(l => tl.entries.find(e => e.l === l)).map(e => e && e.c ? e.c.gid : 0),
+    lines: [...logEl.querySelectorAll('li[data-clip-i]')].map(li => +li.dataset.clipI) }), nicoMax: n => { NICO_ON_SCREEN = n; }, dmText: t => dmTextOf({}, t), dmLine: l => dmMake(l, 0).text, emotes: () => [...EMOTES.keys()], emoteReady: n => !!(EMOTES.get(n) && emoteReady(EMOTES.get(n))), swellMap: swells, ovReset: () => { dmClear(nico); swellClear(); }, ovRestored: () => { swellClear(); glovReady(); }, irc, auth, nameOk, chans, prof, danmaku, say, nico, tl, clockPos, localOf, posOf, nowOf, feed: raw => on(parse(raw)), spread: () => spread, owner: () => ({ acct: ownAcct, spec: styleSpec(ownStyle) }), styles: () => Object.fromEntries([...styles.values()].map(x => [x.acct, styleSpec(x.st)])), mayStyle: () => mayStyle(), picSet, md: mdPlain, mirc: t => mircNodes(t).map(n => n.outerHTML || n.textContent).join(''),
     idle: ms => { idleMs = ms; }, swells: () => [...swells.values()].filter(x => x.el).map(x => ({ e: x.e, n: x.count, size: parseFloat(x.em.style.fontSize), op: x.el.style.opacity })), typingTimes: { TYPE_EVERY, TYPE_TTL }, show: name => { chan(name); shown = name; tabs(); render(); }, status: () => ({ connected: irc.registered, nick: irc.nick, caps: [...irc.caps], shown, matchChan }) };  // (tests)
 })();

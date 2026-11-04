@@ -758,7 +758,7 @@ function pipSource() {
     if (pipUser() && want !== +vol.value) { vol.value = want; vol.oninput(); }
   });
   for (const ev of ['play', 'pause']) pipVideo.addEventListener(ev, () => {
-    if (pipUser() && session && ui.paused !== pipVideo.paused) setPaused(pipVideo.paused);
+    if (pipUser() && session && ui.paused !== pipVideo.paused) { if (pipVideo.paused) setPaused(true); else playOn(); }
   });
   document.body.append(pipVideo);
   return pipVideo;
@@ -800,7 +800,7 @@ if (document.pictureInPictureEnabled) {
   // (Chrome: the page asks to pop out when it is left while playing)
   try { navigator.mediaSession.setActionHandler('enterpictureinpicture', () => togglePip()); } catch (e) {}
   // (Chrome's window: play / pause buttons)
-  try { navigator.mediaSession.setActionHandler('play', () => setPaused(false)); navigator.mediaSession.setActionHandler('pause', () => setPaused(true)); } catch (e) {}
+  try { navigator.mediaSession.setActionHandler('play', () => { if (ui.paused) playOn(); }); navigator.mediaSession.setActionHandler('pause', () => setPaused(true)); } catch (e) {}
   // (the stream plays from the start, silent, so a tap or an automatic pop-out finds it ready)
   pipSource().play().catch(() => addEventListener('pointerdown', () => pipSource().play().catch(() => {}), { once: true }));
 }
@@ -3779,8 +3779,18 @@ async function copyTimestamp() {
 function togglePlay() {
   const s = session;
   if (inIntro(s)) return skipIntro(s);
-  if (s && s.clip && s.clip.stop && ui.paused && curFrame() >= s.clip.b) { requestSeek(s.clip.a).then(() => setPaused(false)); return; }
-  setPaused(!ui.paused);
+  if (ui.paused) return playOn();
+  setPaused(true);
+}
+// playOn: a clip that stopped at (or was left past) its out point starts over from its in point, as a video player at
+// its end does (the play button, Space, a click on the picture, the media keys and the PiP window's play all come here)
+function playOn() {
+  const s = session, c = s && s.clip;
+  if (c && c.stop && !fx && !rec && curFrame() >= c.b) {
+    requestSeek(c.a).then(() => { if (session === s && s.clip === c) setPaused(false); });
+    return;
+  }
+  setPaused(false);
 }
 function setPaused(p) {
   ui.paused = p;
@@ -3828,8 +3838,22 @@ window.mbaaChatApi = { art: playersArt, iconCell, chara: CHARA, liveId: () => se
   // chat's !song / ^stage mentions: the catalog (v changes as the lists load), a thumbnail's url, a tap's pick, the older
   // games' lists loaded (their names join the catalog)
   mentions: () => mentionCatalog(), mentionThumb, mentionApply: (kind, it) => mentionApply(kind, it).catch(e => console.warn('chat mention:', e)),
-  mentionsMore: () => radioOldLoad().catch(() => null) };
-if (document.querySelector('meta[name="mbaa-chat"]') || (/^(127\.0\.0\.1|localhost)$/.test(location.hostname) && Q.has('chat'))) {
+  mentionsMore: () => radioOldLoad().catch(() => null),
+  // a live clip's link page (not the chat page): its JSON, for chat.js's clip column and its comments on the picture
+  // (drawn by the native renderer there, clipNative), and the clip's frames as this replay has them (clipFix moves them)
+  exporting: () => !!fx, clip: null, clipRange: () => session && session.clip ? { a: session.clip.a, b: session.clip.b } : null };
+// ?c=<clip id> with a replay (?r= / ?rep=): a live clip's link; its JSON fetched once (clipJson), by chat.js and the page
+const CLIP_ID = /^[A-Za-z0-9_-]{8,43}$/.test(Q.get('c') || '') && (Q.get('r') || Q.get('rep')) ? Q.get('c') : null;
+let clipJP = null, clipNative = false;
+const clipJson = () => clipJP || (clipJP = fetch(`${REPLAY_STORE}/c/${CLIP_ID}`).then(r => { if (!r.ok) throw new Error(`HTTP ${r.status}`); return r.json(); }));
+const CHAT_PAGE = !!document.querySelector('meta[name="mbaa-chat"]') || (/^(127\.0\.0\.1|localhost)$/.test(location.hostname) && Q.has('chat'));
+// a clip link on the public site: the chat column with the clip's chat (read only), as the live page's (?clipchat=0: none)
+if (CLIP_ID && !CHAT_PAGE && Q.get('clipchat') !== '0') {
+  const jp = clipJson();
+  jp.catch(() => {});
+  window.mbaaChatApi.clip = () => { clipNative = true; return { json: jp }; };
+}
+if (CHAT_PAGE || window.mbaaChatApi.clip) {
   document.body.classList.add('haschat');  // (the chat layout from the start: fitStage)
   const el = document.createElement('script');
   el.src = (document.querySelector('meta[name="mbaa-chatjs"]') || { content: 'chat.js' }).content;
@@ -3861,24 +3885,27 @@ let overlayClear = false;  // (the overlay canvas holds nothing: nothing to clea
 function drawOverlay() {
   const c = document.getElementById('overlay'), gc = document.getElementById('canvas');
   // hitboxes and inputs off: one clear when they go off, then nothing per frame (no layout reads, no full-canvas clear)
-  if (!ui.boxes && !ui.inputs && !clipChat) {
+  if (!ui.boxes && !ui.inputs && !(clipChat && !clipNative)) {
     if (!overlayClear) { c.getContext('2d').clearRect(0, 0, c.width, c.height); overlayClear = true; }
     return;
   }
   overlayClear = false;
   // (exactly over the picture: in fullscreen the picture is not where a centred overlay would be once the controls
   // column sits beside it)
-  const L = `${gc.offsetLeft}px`, T = `${gc.offsetTop}px`;
+  // and as large as the picture: its CSS box was the stage's (100% x 100%), which is taller than the picture whenever
+  // the stage holds more (the bar over it, a notice), so what was drawn for the picture's box was stretched past it
+  const L = `${gc.offsetLeft}px`, T = `${gc.offsetTop}px`, CW = `${gc.clientWidth}px`, CH = `${gc.clientHeight}px`;
   if (c.style.left !== L || c.style.top !== T) { c.style.left = L; c.style.top = T; }
+  if (c.style.width !== CW || c.style.height !== CH) { c.style.width = CW; c.style.height = CH; }
   const dpr = window.devicePixelRatio || 1, w = Math.round(gc.clientWidth * dpr), h = Math.round(gc.clientHeight * dpr);
   if (c.width !== w || c.height !== h) { c.width = w; c.height = h; }
   const g = c.getContext('2d');
   g.clearRect(0, 0, w, h);
-  paintOverlay(g, w, h, dpr);
+  paintOverlay(g, w, h, dpr, true);
 }
 // the hitboxes, inputs and clip chat painted into g over a w x h picture (dpr: device pixels per CSS pixel; the video
 // export paints them straight into its 1920x1440 frame, crisp, not the screen's overlay scaled)
-function paintOverlay(g, w, h, dpr) {
+function paintOverlay(g, w, h, dpr, screen = false) {
   const s = session;
   if (!s || !s.tl || s.seeking) return;
   const M = s.M, sx = w / 640, sy = h / 480;
@@ -3926,7 +3953,8 @@ function paintOverlay(g, w, h, dpr) {
       });
     }
   }
-  clipChatDraw(g, w, h, M._viewer_frame());  // (a live clip's chat: ?c=)
+  // (a live clip's chat: ?c=; on screen the native renderer draws it where chat.js runs the clip's column: clipNative)
+  if (!clipNative) clipChatDraw(g, w, h, M._viewer_frame());
 }
 
 // ---- controls ----
@@ -4031,7 +4059,7 @@ function controls() {
   addEventListener('pointerup', () => { if (seekDragging) { seekDragging = false; seek.blur(); } });
   seek.addEventListener('input', () => requestSeek(+seek.value));
   const btn = (id, fn) => { document.getElementById(id).onclick = e => { fn(); e.currentTarget.blur(); }; };
-  btn('pause', () => setPaused(!ui.paused));
+  btn('pause', togglePlay);
   btn('copyt', copyTimestamp);
   const sc = document.getElementById('scale');
   sc.value = scaleMode;
@@ -4749,6 +4777,8 @@ function clipControls() {
   }
   const on = (id, f) => { document.getElementById(id).onclick = e => { e.currentTarget.blur(); f(); }; };
   on('cplink', copyTimestamp); on('cpsave', exportVideo); on('cpclear', clearClip);
+  { const sz = document.getElementById('cpsize');
+    if (sz) { sz.value = String(exportScale); sz.addEventListener('change', () => { exportScaleSet(+sz.value); sz.blur(); }); } }
 }
 
 // ---- live clip links: a clip of a live match as a replay link (?r=<id>&t=<in>&e=<out>&c=<clip id>&loop=1) ----
@@ -4832,7 +4862,9 @@ async function liveClipChat(s, c, p) {
       const f = loc - c.loc0;
       if (f < c.a || f > c.b) continue;
       out.push({ o: f - c.a, n: String(l.nick || '').slice(0, 40), x: x.slice(0, 300), m: String(l.cmd || '').slice(0, 80),
-                 c: /^#[0-9a-f]{6}$/i.test(l.color || '') ? l.color : '', a: l.action ? 1 : 0 });
+                 c: /^#[0-9a-f]{6}$/i.test(l.color || '') ? l.color : '', a: l.action ? 1 : 0,
+                 // (the chat's text, the sender's name style, the ~wave~ text, icon, an operator's line: chat.js clipLine)
+                 ...(C.clipLine ? C.clipLine(l) : {}) });
     }
   }
   return out.sort((p, q) => p.o - q.o).slice(0, 500);
@@ -5069,9 +5101,53 @@ function clipChatDraw(g, w, h, f) {
 // H.264 encoder), the sound events of those frames are logged and rendered in an OfflineAudioContext, and both go into an
 // MP4 (vendor/mp4-muxer). Without WebCodecs the range is played at 1x and recorded with MediaRecorder.
 let rec = null, fx = null;
+// Firefox's H.264 encoder hands over a malformed avcC (every SPS/PPS NAL header byte doubled, reserved bits missing):
+// strict players and upload sites reject the file ("SPS decoding failure"). A config that does not check out is rebuilt
+// from the keyframe's own in-band SPS/PPS (the chunk is length-prefixed, format 'avc').
+function avcOk(d) {
+  if (!d || d.length < 11 || d[0] !== 1 || (d[4] & 0xFC) !== 0xFC || (d[5] & 0xE0) !== 0xE0 || !(d[5] & 0x1F)) return false;
+  const n = d[6] << 8 | d[7];
+  return n > 3 && 8 + n <= d.length && (d[8] & 0x1F) === 7 && d[9] === d[1] && d[10] === d[2] && d[11] === d[3];
+}
+function avcFix(ch, meta) {
+  const dc = meta && meta.decoderConfig;
+  if (!dc || !dc.description || !String(dc.codec || '').startsWith('avc1')) return meta;
+  const d = new Uint8Array(dc.description instanceof ArrayBuffer ? dc.description : dc.description.buffer.slice(dc.description.byteOffset, dc.description.byteOffset + dc.description.byteLength));
+  if (avcOk(d) || ch.type !== 'key') return meta;
+  const b = new Uint8Array(ch.byteLength); ch.copyTo(b);
+  const sps = [], pps = [];
+  for (let i = 0; i + 4 <= b.length;) {
+    const n = (b[i] << 24 | b[i + 1] << 16 | b[i + 2] << 8 | b[i + 3]) >>> 0; i += 4;
+    if (!n || i + n > b.length) break;
+    const t = b[i] & 0x1F;
+    if (t === 7) sps.push(b.subarray(i, i + n)); else if (t === 8) pps.push(b.subarray(i, i + n));
+    i += n;
+  }
+  if (!sps.length || !pps.length) return meta;
+  const s0 = sps[0], parts = [1, s0[1], s0[2], s0[3], 0xFF, 0xE0 | sps.length];
+  for (const x of sps) parts.push(x.length >> 8, x.length & 255, ...x);
+  parts.push(pps.length);
+  for (const x of pps) parts.push(x.length >> 8, x.length & 255, ...x);
+  // High and up: chroma format / bit depths / no SPS-ext (4:2:0, 8-bit, what the encoder makes)
+  if (![66, 77, 88].includes(s0[1])) parts.push(0xFC | 1, 0xF8, 0xF8, 0);
+  return { ...meta, decoderConfig: { ...dc, description: new Uint8Array(parts) } };
+}
 const REC_TYPES = ['video/mp4;codecs=avc1.640033,mp4a.40.2', 'video/mp4;codecs=avc1.640033,opus', 'video/mp4;codecs=avc1.640028,mp4a.40.2', 'video/mp4', 'video/webm;codecs=vp9,opus', 'video/webm'];
-// 1920x1440: exactly 3x the game's 640x480, nearest neighbour (user 2026-11-03: high quality, true 60 fps, ~30 Mbps)
-const EXPORT_W = 1920, EXPORT_H = 1440, EXPORT_BPS = 30e6, EXPORT_SR = 48000, EXPORT_PREROLL = 180;  // pre-roll: sounds already playing at the in point
+// Sizes (user 2026-11-04): every one an exact whole multiple of the game's 640x480, nearest neighbour, 60 fps; the
+// bitrate grows with the size (1440p ~30 Mbps as 2026-11-03's ruling). X takes at most 1280x1024
+// (docs.x.com/x-api/media/quickstart/best-practices): 1280x960 is the size for X. The viewer's last pick is kept.
+const EXPORT_SIZES = { 1: [640, 480, 8e6], 2: [1280, 960, 16e6], 3: [1920, 1440, 30e6] };
+let exportScale = 3;
+try { const v = +localStorage.getItem('mbaaExportScale'); if (EXPORT_SIZES[v]) exportScale = v; } catch (e) {}
+function exportScaleSet(v) {
+  if (!EXPORT_SIZES[v]) return;
+  exportScale = v;
+  try { localStorage.setItem('mbaaExportScale', String(v)); } catch (e) {}
+  const el = document.getElementById('cpsize');
+  if (el && +el.value !== v) el.value = String(v);
+}
+const exportDims = () => EXPORT_SIZES[exportScale];
+const EXPORT_SR = 48000, EXPORT_ABPS = 192000, EXPORT_PREROLL = 180;  // pre-roll: sounds already playing at the in point
 const IS_FIREFOX = /Firefox\//.test(navigator.userAgent);
 async function exportVideo() {
   const s = session;
@@ -5087,12 +5163,15 @@ async function exportVideo() {
   }
   if (window.VideoEncoder && window.VideoFrame && Q.get('exportMode') !== 'realtime') {
     try {
-      const codecs = await exportCodecs();
-      // each encoder setup in turn: one that emits B-frames (frames out of order, which the muxer cannot take) is
-      // dropped for the next
+      const codecs = await exportCodecs(exportScale);
+      // each encoder setup in turn: one that fails (a hardware encoder that will not start, or one that emits B-frames:
+      // frames out of order, which the muxer cannot take) is dropped for the next
       for (let i = 0; i < codecs.videos.length; i++) {
         try { if (await fastExport(s, c, codecs.videos[i], codecs.audio)) return; }
-        catch (e) { if (!e.bframes || i === codecs.videos.length - 1) throw e; console.warn(`${codecs.videos[i].codec}: B-frames, next encoder setup`); }
+        catch (e) {
+          if (e.message === 'cancelled' || i === codecs.videos.length - 1) throw e;
+          console.warn(`${codecs.videos[i].codec} (${codecs.videos[i].hardwareAcceleration || 'any'}): ${e.message || e}; next encoder setup`);
+        }
       }
     } catch (e) { console.error('video export failed:', e); status(`video export failed: ${e.message || e}`); return; }
   }
@@ -5102,31 +5181,80 @@ function loadScript(src) {
   return new Promise((res, rej) => { const e = document.createElement('script'); e.src = src; e.onload = res;
     e.onerror = () => rej(new Error(`could not load ${src}`)); document.head.append(e); });
 }
-// The video encoder setups this browser takes, best first, all 1920x1440 at 60 fps and ~30 Mbps (level 5.1: 1920x1440
-// is 10800 macroblocks, 648000 a second at 60 fps; 5.0 allows 589824). H.264 High (Chrome; Firefox's High profile
-// encoder emits B-frames, out of decode order, which the muxer cannot take, so Firefox gets Constrained Baseline at the
-// same size and rate), then Constrained Baseline, then VP9 (level 5.0) where there is no H.264 encoder; 1280x960 only
-// where nothing takes 1920x1440.
-async function exportCodecs() {
+// The video encoder setups this browser takes for that size, best first, at 60 fps. H.264 at the level the size needs
+// (640x480: 3.1, 1280x960: 4.2, 1920x1440: 5.1 (10800 macroblocks, 648000 a second; 5.0 allows 589824)): High (Chrome;
+// Firefox's High profile encoder emits B-frames, out of decode order, which the muxer cannot take, so Firefox gets
+// Constrained Baseline), then Main and Constrained Baseline, then VP9 where there is no H.264 encoder; each with a
+// hardware encoder first where the browser has one (much faster; the same bitrate). A smaller size only where nothing
+// takes the one asked for. Audio: AAC-LC always (X and Windows Media Player take no Opus in MP4): the browser's
+// AudioEncoder where it has one, else FFmpeg's (vendor/aac_enc.js, aacSoft).
+const EXPORT_AVC = { 1: ['1F', '20'], 2: ['2A', '32'], 3: ['33', '34'] }, EXPORT_VP9 = { 1: '31', 2: '40', 3: '50' };
+async function exportCodecs(scale) {
   const videos = [];
-  let audio = null;
-  const avc = IS_FIREFOX ? ['avc1.42E033', 'avc1.42E034'] : ['avc1.640033', 'avc1.640034', 'avc1.4D0033', 'avc1.42E033', 'avc1.42E034'];
-  for (const [w, h, bps, list] of [[EXPORT_W, EXPORT_H, EXPORT_BPS, [...avc, 'vp09.00.50.08']], [1280, 960, 16e6, ['avc1.42E02A', 'vp09.00.40.08']]]) {
-    for (const codec of list) {
+  for (let sc = scale; sc >= 1 && !videos.length; sc--) {
+    const [w, h, bps] = EXPORT_SIZES[sc], lv = EXPORT_AVC[sc];
+    const avc = [];
+    for (const p of IS_FIREFOX ? ['42E0'] : ['6400', '4D00', '42E0']) for (const l of lv) avc.push(`avc1.${p}${l}`);
+    for (const codec of [...avc, `vp09.00.${EXPORT_VP9[sc]}.08`]) {
       const cfg = { codec, width: w, height: h, bitrate: bps, framerate: 60, latencyMode: 'quality' };
       if (codec.startsWith('avc1')) cfg.avc = { format: 'avc' };
-      try { if ((await VideoEncoder.isConfigSupported(cfg)).supported) videos.push(cfg); } catch (e) {}
+      for (const hw of ['prefer-hardware', null]) {
+        const x = hw ? { ...cfg, hardwareAcceleration: hw } : cfg;
+        try { if ((await VideoEncoder.isConfigSupported(x)).supported) videos.push(x); } catch (e) {}
+      }
     }
-    if (videos.length) break;
   }
-  if (window.AudioEncoder) for (const codec of ['mp4a.40.2', 'opus']) {
-    const cfg = { codec, sampleRate: EXPORT_SR, numberOfChannels: 2, bitrate: 192000 };
-    try { if ((await AudioEncoder.isConfigSupported(cfg)).supported) { audio = cfg; break; } } catch (e) {}
+  let audio = null;
+  if (window.AudioEncoder) {
+    const cfg = { codec: 'mp4a.40.2', sampleRate: EXPORT_SR, numberOfChannels: 2, bitrate: EXPORT_ABPS };
+    try { if ((await AudioEncoder.isConfigSupported(cfg)).supported) audio = cfg; } catch (e) {}
   }
-  return { videos, audio };
+  return { videos, audio: audio || { codec: 'mp4a.40.2', soft: true } };
+}
+// AAC-LC by FFmpeg's native encoder (web/aac: built to vendor/aac_enc.{js,wasm}, loaded on the first export that needs
+// it): planar stereo pcm from sample `skip` on -> the muxer's AAC chunks, sample exact with the video: the encoder
+// delays its output by its priming (aac_delay) and its first packet needs the one before for its overlap, so it is fed
+// from (priming + one packet) before `skip` (the pre-roll's sound) and those packets dropped: the first kept packet
+// decodes to the samples from `skip` (its first 1024 samples without the overlap of the packet before: a ~21 ms fade
+// in; the muxer writes no edit list).
+let aacMod = null;
+async function aacSoft(pcm, skip, add) {
+  if (!aacMod) aacMod = (async () => {
+    if (!window.AACENC) await loadScript('vendor/aac_enc.js');
+    return AACENC({ locateFile: f => `vendor/${f}` });
+  })();
+  let A;
+  try { A = await aacMod; } catch (e) { aacMod = null; throw e; }
+  if (!A._aac_open(EXPORT_SR, 2, EXPORT_ABPS)) throw new Error('AAC encoder: open failed');
+  try {
+    const F = A._aac_frame(), D = A._aac_delay(), asc = A.HEAPU8.slice(A._aac_asc(), A._aac_asc() + A._aac_asc_len());
+    const L = pcm.getChannelData(0), R = pcm.getChannelData(1), n0 = skip - D - F, end = pcm.length;
+    const buf = A._malloc(2 * F * 4);
+    const meta = { decoderConfig: { codec: 'mp4a.40.2', sampleRate: EXPORT_SR, numberOfChannels: 2, description: asc } };
+    let j = 0, first = true;
+    const take = n => {
+      for (let i = 0; i < n; i++, j++) {
+        const d = A.HEAPU8.slice(A._aac_pkt(i), A._aac_pkt(i) + A._aac_pkt_len(i));
+        if (j < 1) continue;  // (the packet before the first kept one)
+        const ts = Math.round((j - 1) * F * 1e6 / EXPORT_SR), dur = Math.round(F * 1e6 / EXPORT_SR);
+        if ((j - 1) * F >= end - skip) return;  // (past the pcm's end: the encoder's tail)
+        add(d, ts, dur, first ? meta : undefined); first = false;
+      }
+    };
+    for (let p = n0; p < end; p += F) {
+      const n = Math.min(F, end - p), f32 = A.HEAPF32.subarray(buf >> 2, (buf >> 2) + 2 * n);
+      for (let i = 0; i < n; i++) { const q = p + i; f32[i] = q >= 0 ? L[q] : 0; f32[n + i] = q >= 0 ? R[q] : 0; }
+      const k = A._aac_encode(buf, n);
+      if (k < 0) throw new Error('AAC encoder: encode failed');
+      take(k);
+      if (p + F >= end) break;
+    }
+    for (let k; (k = A._aac_encode(0, 0)) > 0;) take(k);
+    A._free(buf);
+  } finally { A._aac_close(); }
 }
 function exportName(c, ext) {
-  return `${document.getElementById('title').textContent.replace(/[\\/:*?"<>|\u00b7]+/g, ' ').replace(/\s+/g, ' ').trim()} ${fmtTime(c.a).replace(/[:.]/g, '-')}.${ext}`;
+  return `${document.getElementById('title').textContent.replace(/[\\/:*?"<>|·]+/g, ' ').replace(/\s+/g, ' ').trim()} ${fmtTime(c.a).replace(/[:.]/g, '-')}.${ext}`;
 }
 function saveBlob(blob, name) {
   const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = name;
@@ -5134,93 +5262,182 @@ function saveBlob(blob, name) {
   setTimeout(() => URL.revokeObjectURL(a.href), 60000);
   window.__mbaaLastExport = { name, size: blob.size, type: blob.type };
 }
+// the export's progress over the picture (the picture itself is hidden while the video's frames are drawn: they are
+// drawn as fast as the machine goes, not as playback)
+function exportProgress(on, frac, text) {
+  const stage = document.querySelector('.stage');
+  let el = document.getElementById('xprog');
+  if (!on) { if (el) el.hidden = true; if (stage) stage.classList.remove('exporting'); return; }
+  if (!el && stage) {
+    el = document.createElement('div'); el.id = 'xprog';
+    el.innerHTML = '<div class="xpt"></div><div class="xpb"><i></i></div><div class="xph">E or Esc cancels</div>';
+    stage.append(el);
+  }
+  if (!el) return;
+  if (stage) stage.classList.add('exporting');
+  el.hidden = false;
+  el.querySelector('.xpt').textContent = text;
+  el.querySelector('.xpb i').style.width = `${(100 * Math.max(0, Math.min(1, frac))).toFixed(1)}%`;
+}
+// The fast path. The game's canvas is drawn at the video's size while exporting: the page's own present blits the
+// 640x480 back buffer into it by whole pixels (exactly 2x / 3x, nearest) and the native comment renderer draws a clip
+// page's comments into it at that size with their live styles (the clock: the frame's time; the wall clock of their
+// animations pinned to video time); each frame is the canvas itself (no 2D copy) unless the hitboxes / inputs (or the
+// 2D clip chat) are on, which are painted over a copy. Frames are encoded with a few in flight (the next frame is
+// simulated while the encoder works); the pre-roll is simulated without drawing.
 async function fastExport(s, c, vcfg, acfg) {
   if (!vcfg) return false;
   const codecs = { video: vcfg, audio: acfg }, W = vcfg.width, H = vcfg.height;
   if (!window.Mp4Muxer) await loadScript('vendor/mp4-muxer.min.js');
-  const M = s.M, t0 = performance.now(), pre = Math.max(1, c.a - EXPORT_PREROLL);
+  const M = s.M, t0 = performance.now(), pre = Math.max(1, c.a - EXPORT_PREROLL), N = c.b - c.a;
+  const P = { seek: 0, preroll: 0, step: 0, copy: 0, vframe: 0, encode: 0, wait: 0, ui: 0, loop: 0, flush: 0, audioRender: 0, audioEnc: 0, mux: 0 };
   fx = { cancel: false };
-  if (M._viewer_ov_on) M._viewer_ov_on(0);  // (the chat's comments stay out of the video)
+  const ovNative = clipNative && !!M._viewer_ov_on;  // (a clip page: its comments are drawn by the renderer, into the video too)
+  if (M._viewer_ov_on && !ovNative) M._viewer_ov_on(0);  // (the chat page's live comments stay out of the video)
   document.getElementById('clipexp').classList.add('on');
   setPaused(true);
   const hooks = ['mbaaVoicePlay', 'mbaaVoiceParam', 'mbaaVoiceStop', 'mbaaBgmStart', 'mbaaBgmStop'], orig = {};
-  let venc = null;
+  const cv = document.getElementById('canvas'), keep = { w: cv.width, h: cv.height };
+  let venc = null, sized = false;
+  const pinned = ovNative && M._viewer_ov_wall_pin;
   try {
+    exportProgress(true, 0, 'Saving MP4: seeking');
     await requestSeek(pre);
+    P.seek = performance.now() - t0;
     const muxer = new Mp4Muxer.Muxer({ target: new Mp4Muxer.ArrayBufferTarget(), fastStart: 'in-memory',
       video: { codec: codecs.video.codec.startsWith('avc1') ? 'avc' : 'vp9', width: W, height: H, frameRate: 60 },
       ...(codecs.audio ? { audio: { codec: codecs.audio.codec === 'opus' ? 'opus' : 'aac', sampleRate: EXPORT_SR, numberOfChannels: 2 } } : {}) });
     // every frame has to land: one chunk per frame, timestamps 1/60 s apart in order (a decreasing one is a B-frame)
-    let encErr = null, nOut = 0, lastTs = -1, nIn = 0;
+    let encErr = null, nOut = 0, lastTs = -1, nIn = 0, wake = null;
     venc = new VideoEncoder({ output: (ch, meta) => {
       if (ch.timestamp <= lastTs && !encErr) { encErr = new Error(`${codecs.video.codec}: frames out of order (B-frames)`); encErr.bframes = true; }
       lastTs = ch.timestamp; nOut++;
-      if (!encErr) muxer.addVideoChunk(ch, meta);
-    }, error: e => { encErr = e; } });
+      if (!encErr) muxer.addVideoChunk(ch, avcFix(ch, meta));
+      if (wake) wake();
+    }, error: e => { encErr = e; if (wake) wake(); } });
     venc.configure(codecs.video);
+    venc.addEventListener && venc.addEventListener('dequeue', () => { if (wake) wake(); });
+    // the encoder's queue kept at most this deep: the next frames are simulated while it works
+    const DEPTH = 8, room = () => new Promise(r => {
+      if (venc.encodeQueueSize < DEPTH || encErr) return r();
+      const t = setInterval(() => { if (venc.encodeQueueSize < DEPTH || encErr) done(); }, 4);  // (no dequeue event: polled)
+      const done = () => { clearInterval(t); wake = null; r(); };
+      wake = () => { if (venc.encodeQueueSize < DEPTH || encErr) done(); };
+    });
     // the sound events of every stepped frame, with the frame they happen in
     const ev = [];
     for (const h of hooks) { orig[h] = M[h]; M[h] = (...a) => { ev.push([M._viewer_frame(), h, ...a]); return orig[h](...a); }; }
-    const out = document.createElement('canvas'); out.width = W; out.height = H;
-    const g = out.getContext('2d', { alpha: false }); g.imageSmoothingEnabled = false;
-    const cv = document.getElementById('canvas');
-    let lastUi = 0;
-    for (let k = pre; k < c.b; k++) {
+    // the pre-roll: simulated for its sounds, nothing drawn
+    let q = performance.now();
+    call(s, 'viewer_suppress', 1);
+    try {
+      for (let k = M._viewer_frame(); k < c.a; k++) {
+        const k0 = M._viewer_frame();
+        call(s, 'viewer_step', 1);
+        if (M._viewer_frame() === k0) break;
+      }
+    } finally { call(s, 'viewer_suppress', 0); }
+    P.preroll = performance.now() - q;
+    if (M._viewer_frame() !== c.a) throw new Error(`the pre-roll ended at frame ${M._viewer_frame()}, not ${c.a}`);
+    cv.width = W; cv.height = H; sized = true;
+    if (M._viewer_ov_canvas) M._viewer_ov_canvas(W, H);
+    const over = () => ui.boxes || ui.inputs || (clipChat && !clipNative);
+    let out = null, g = null;
+    const wall0 = performance.now() / 1000;
+    let lastUi = performance.now();
+    for (let k = c.a; k < c.b; k++) {
       if (fx.cancel || session !== s) throw new Error('cancelled');
       if (encErr) throw encErr;
       const k0 = M._viewer_frame();
+      if (ovNative) { M._viewer_ov_clock((k0 + 1) / 60); if (pinned) M._viewer_ov_wall_pin(wall0 + (k - c.a) / 60); }
+      q = performance.now();
       call(s, 'viewer_step', 1);
+      P.step += performance.now() - q;
       if (M._viewer_frame() === k0) break;  // the end of the replay (or of the live stream received)
-      if (k < c.a) continue;
-      g.imageSmoothingEnabled = false; g.drawImage(cv, 0, 0, W, H);
-      if (ui.boxes || ui.inputs || clipChat) paintOverlay(g, W, H, W / 960);  // (drawn at the video's size: crisp)
-      const vf = new VideoFrame(out, { timestamp: Math.round((k - c.a) * 1e6 / 60), duration: Math.round(1e6 / 60) });
+      q = performance.now();
+      let src = cv;
+      if (over()) {  // the hitboxes / inputs painted over a copy, at the video's size (crisp)
+        if (!out) { out = document.createElement('canvas'); out.width = W; out.height = H; g = out.getContext('2d', { alpha: false }); }
+        g.drawImage(cv, 0, 0);
+        paintOverlay(g, W, H, W / 960);
+        src = out;
+      }
+      P.copy += performance.now() - q; q = performance.now();
+      const vf = new VideoFrame(src, { timestamp: Math.round((k - c.a) * 1e6 / 60), duration: Math.round(1e6 / 60), alpha: 'discard' });
+      P.vframe += performance.now() - q; q = performance.now();
       venc.encode(vf, { keyFrame: (k - c.a) % 120 === 0 }); vf.close(); nIn++;
-      while (venc.encodeQueueSize > 6) await new Promise(r => setTimeout(r, 1));
+      P.encode += performance.now() - q; q = performance.now();
+      if (venc.encodeQueueSize >= DEPTH) await room();
+      P.wait += performance.now() - q;
       if (performance.now() - lastUi > 150) {  // let the page breathe and show progress
         lastUi = performance.now();
-        const done = (k - c.a + 1) / (c.b - c.a), speed = (k - c.a + 1) / 60 / ((lastUi - t0) / 1000);
+        const done = (k - c.a + 1) / N, speed = (k - c.a + 1) / 60 / ((lastUi - t0) / 1000);
+        exportProgress(true, done * 0.95, `Saving MP4 ${W}x${H}: ${Math.round(100 * done)}% (${speed.toFixed(1)}x real time)`);
         status(`exporting ${Math.round(100 * done)}% (${speed.toFixed(1)}x real time; E or Esc cancels)`);
-        overlayDirty = true;
+        q = performance.now();
         await new Promise(r => setTimeout(r, 0));
+        P.ui += performance.now() - q;
       }
     }
+    P.loop = performance.now() - t0;
     for (const h of hooks) M[h] = orig[h];
+    q = performance.now();
+    exportProgress(true, 0.95, 'Saving MP4: finishing the video');
     await venc.flush(); venc.close();
+    P.flush = performance.now() - q; q = performance.now();
     if (encErr) throw encErr;
     if (nOut !== nIn) throw new Error(`the encoder gave ${nOut} frames for ${nIn}`);
+    let audioCodec = null;
     if (codecs.audio) {
-      status('exporting: sound');
+      status('exporting: sound'); exportProgress(true, 0.97, 'Saving MP4: sound');
       const pcm = await renderExportAudio(s, ev, pre, c);
-      let aerr = null;
-      const aenc = new AudioEncoder({ output: (ch, meta) => muxer.addAudioChunk(ch, meta), error: e => { aerr = e; } });
-      aenc.configure(codecs.audio);
-      const skip = Math.round((c.a - pre) / 60 * EXPORT_SR), L = pcm.getChannelData(0), R = pcm.getChannelData(1), step = 4800;
-      for (let i = skip; i < pcm.length; i += step) {
-        const n = Math.min(step, pcm.length - i), data = new Float32Array(2 * n);
-        data.set(L.subarray(i, i + n), 0); data.set(R.subarray(i, i + n), n);
-        const ad = new AudioData({ format: 'f32-planar', sampleRate: EXPORT_SR, numberOfFrames: n, numberOfChannels: 2,
-                                   timestamp: Math.round((i - skip) * 1e6 / EXPORT_SR), data });
-        aenc.encode(ad); ad.close();
+      P.audioRender = performance.now() - q; q = performance.now();
+      const skip = Math.round((c.a - pre) / 60 * EXPORT_SR);
+      if (codecs.audio.soft) {
+        await aacSoft(pcm, skip, (d, ts, dur, meta) => muxer.addAudioChunkRaw(d, 'key', ts, dur, meta));
+        audioCodec = 'mp4a.40.2 (ffmpeg aac)';
+      } else {
+        let aerr = null;
+        const aenc = new AudioEncoder({ output: (ch, meta) => muxer.addAudioChunk(ch, meta), error: e => { aerr = e; } });
+        aenc.configure(codecs.audio);
+        const L = pcm.getChannelData(0), R = pcm.getChannelData(1), step = 4800;
+        for (let i = skip; i < pcm.length; i += step) {
+          const n = Math.min(step, pcm.length - i), data = new Float32Array(2 * n);
+          data.set(L.subarray(i, i + n), 0); data.set(R.subarray(i, i + n), n);
+          const ad = new AudioData({ format: 'f32-planar', sampleRate: EXPORT_SR, numberOfFrames: n, numberOfChannels: 2,
+                                     timestamp: Math.round((i - skip) * 1e6 / EXPORT_SR), data });
+          aenc.encode(ad); ad.close();
+        }
+        await aenc.flush(); aenc.close();
+        if (aerr) throw aerr;
+        audioCodec = 'mp4a.40.2';
       }
-      await aenc.flush(); aenc.close();
-      if (aerr) throw aerr;
+      P.audioEnc = performance.now() - q; q = performance.now();
     }
     muxer.finalize();
     const blob = new Blob([muxer.target.buffer], { type: 'video/mp4' }), name = exportName(c, 'mp4');
+    P.mux = performance.now() - q;
     saveBlob(blob, name);
     const secs = (performance.now() - t0) / 1000;
-    status(`saved ${name} (${(blob.size / 1048576).toFixed(1)} MB, ${((c.b - c.a) / 60).toFixed(1)} s of video in ${secs.toFixed(1)} s)`);
-    window.__mbaaLastExport.ms = Math.round(secs * 1000);
-    Object.assign(window.__mbaaLastExport, { codecs: [codecs.video.codec, codecs.audio && codecs.audio.codec], width: W, height: H,
-      bitrate: codecs.video.bitrate, frames: nIn, chunks: nOut, clipFrames: c.b - c.a, mode: 'webcodecs' });
+    status(`saved ${name} (${W}x${H}, ${(blob.size / 1048576).toFixed(1)} MB, ${(N / 60).toFixed(1)} s of video in ${secs.toFixed(1)} s)`);
+    for (const k in P) P[k] = Math.round(P[k]);
+    Object.assign(window.__mbaaLastExport, { ms: Math.round(secs * 1000), prof: P, codecs: [codecs.video.codec, audioCodec],
+      hw: codecs.video.hardwareAcceleration || 'no-preference', width: W, height: H, bitrate: codecs.video.bitrate, frames: nIn,
+      chunks: nOut, clipFrames: N, mode: 'webcodecs' });
   } catch (e) {
     if (e.message !== 'cancelled') throw e;
     status('export cancelled');
   } finally {
     for (const h of hooks) if (orig[h]) M[h] = orig[h];
     if (venc && venc.state !== 'closed') try { venc.close(); } catch (e) {}
+    if (pinned) M._viewer_ov_wall_pin(-1);
+    if (sized) {  // the canvas back at its own size, the picture on it again
+      cv.width = keep.w; cv.height = keep.h;
+      if (M._viewer_ov_canvas) M._viewer_ov_canvas(keep.w, keep.h);
+      if (M._viewer_represent) M._viewer_represent();
+    }
     fx = null; overlayDirty = true;
+    exportProgress(false);
     if (window.mbaaOvSync) window.mbaaOvSync();
     document.getElementById('clipexp').classList.remove('on');
   }
@@ -5299,7 +5516,7 @@ async function exportRealtime(s, c) {
   if (!window.MediaRecorder || !REC_TYPES.some(t => MediaRecorder.isTypeSupported(t))) { status('this browser cannot record video'); return; }
   setPaused(true);
   await requestSeek(c.a);
-  const out = document.createElement('canvas'); out.width = EXPORT_W; out.height = EXPORT_H;
+  const [EW, EH, EB] = exportDims(), out = document.createElement('canvas'); out.width = EW; out.height = EH;
   const g = out.getContext('2d', { alpha: false }); g.imageSmoothingEnabled = false;
   // a frame per game frame (requestFrame); where the capture track has no requestFrame, the canvas is captured at 60 fps
   let stream = out.captureStream(0);
@@ -5310,7 +5527,7 @@ async function exportRealtime(s, c) {
   stream.addTrack(dest.stream.getAudioTracks()[0]);
   let mr = null, type = '';
   for (const t of REC_TYPES.filter(t => MediaRecorder.isTypeSupported(t))) {  // the first format whose recorder starts
-    try { mr = new MediaRecorder(stream, { mimeType: t, videoBitsPerSecond: EXPORT_BPS, audioBitsPerSecond: 192e3 }); mr.start(1000); type = t; break; }
+    try { mr = new MediaRecorder(stream, { mimeType: t, videoBitsPerSecond: EB, audioBitsPerSecond: 192e3 }); mr.start(1000); type = t; break; }
     catch (e) { console.warn(`recorder ${t} failed:`, e); mr = null; }
   }
   if (!mr) { master.disconnect(dest); status('video export failed: no recorder format would start'); return; }
@@ -5327,8 +5544,9 @@ async function exportRealtime(s, c) {
 }
 function recDraw() {
   const r = rec;
-  r.g.imageSmoothingEnabled = false; r.g.drawImage(document.getElementById('canvas'), 0, 0, EXPORT_W, EXPORT_H);
-  if (ui.boxes || ui.inputs || clipChat) paintOverlay(r.g, EXPORT_W, EXPORT_H, EXPORT_W / 960);
+  const W = r.out.width, H = r.out.height;
+  r.g.imageSmoothingEnabled = false; r.g.drawImage(document.getElementById('canvas'), 0, 0, W, H);
+  if (ui.boxes || ui.inputs || (clipChat && !clipNative)) paintOverlay(r.g, W, H, W / 960);
   if (r.track.requestFrame) r.track.requestFrame();
   r.frames++;
 }
@@ -5361,7 +5579,7 @@ function stopRecording(save) {
     if (!save) { if (!/failed/.test(document.getElementById('status').textContent)) status('recording cancelled'); return; }
     const blob = new Blob(r.chunks, { type: r.type.split(';')[0] }), name = exportName(r, r.type.startsWith('video/mp4') ? 'mp4' : 'webm');
     saveBlob(blob, name);
-    Object.assign(window.__mbaaLastExport, { mode: 'realtime', width: EXPORT_W, height: EXPORT_H, frames: r.frames, clipFrames: r.b - r.a, type: r.type });
+    Object.assign(window.__mbaaLastExport, { mode: 'realtime', width: r.out.width, height: r.out.height, frames: r.frames, clipFrames: r.b - r.a, type: r.type });
     status(`saved ${name} (${(blob.size / 1048576).toFixed(1)} MB)`);
   };
   if (r.mr.state === 'inactive') r.mr.onstop(); else r.mr.stop();
@@ -5698,8 +5916,7 @@ async function main() {
   const autoload = /^[0-9a-f]{64}$/.test(rq) ? `${REPLAY_STORE}/rep/${rq}.rep`  // links from before short ids
                  : /^[A-Za-z0-9_-]{8,43}$/.test(rq) ? `${REPLAY_STORE}/s/${rq}` : Q.get('rep');
   // a live clip (?c=): its JSON (the chat said during it, and the game's live forcing, which the replay is played with)
-  const clipJ = /^[A-Za-z0-9_-]{8,43}$/.test(Q.get('c') || '') && autoload
-    ? fetch(`${REPLAY_STORE}/c/${Q.get('c')}`).then(r => { if (!r.ok) throw new Error(`HTTP ${r.status}`); return r.json(); }) : null;
+  const clipJ = CLIP_ID && autoload ? clipJson() : null;
   if (clipJ) clipChatLoad(clipJ, +(Q.get('t') || 0));
   liveJumpInit();
   fsOfferInit();
