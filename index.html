@@ -18,7 +18,7 @@
 <meta name="twitter:description" content="Watch Melty Blood Actress Again Current Code replays in your browser, frame-exact.">
 <meta name="twitter:image" content="https://watch.meltyblood.org/preview.png">
 <meta name="mbaa-manifest" content="2a2e2bac19a8">
-<meta name="mbaa-chatjs" content="chat.js?v=c09f8eaed542">
+<meta name="mbaa-chatjs" content="chat.js?v=5a5b5d8d36a0">
 <meta name="mbaa-announcer" content="announcer/neco.bin?v=932b15248e89">
 <link rel="manifest" href="site.webmanifest">
 <link rel="icon" href="icon-192.png">
@@ -315,7 +315,7 @@
   body.mob .sizeseg, body.mob .sizeseg + .lbl { display: none; }
   #setpop .row { flex-wrap: wrap; }
   /* (in the popover: skip intro and the size; the overlay toggles and music are the bar's chips) */
-  #setpop label:has(:is(#boxes, #inputs, #hud, #music, #names)) { display: none; }
+  #setpop label:has(:is(#boxes, #inputs, #hitstun, #hud, #music, #names)) { display: none; }
   body.mob #setpop, body.mob #setb { display: none !important; }
   /* (panel sections left with nothing in them once their controls moved: the clip row, the view settings) */
   body:not(.mob) #toolsec, body:not(.mob) #viewsec:not(:has(#sound:not([hidden]))) { display: none; }
@@ -778,6 +778,7 @@
           <table>
             <tr><td><kbd>H</kbd></td><td>hitboxes</td></tr>
             <tr><td><kbd>I</kbd></td><td>input display</td></tr>
+            <tr><td><kbd>K</kbd></td><td>hitstun bar under the combo counter (ETM's)</td></tr>
             <tr><td><kbd>U</kbd></td><td>HUD (health, meter, timer)</td></tr>
             <tr class="liveonly"><td><kbd>T</kbd></td><td>players' names on the CHALLENGER / WINS banners</td></tr>
             <tr><td><kbd>B</kbd></td><td>music on / off (sound effects stay)</td></tr>
@@ -822,6 +823,7 @@
         <span class="hbwrap"><button class="vchip" data-flip="boxes" title="Hitboxes (H)" aria-pressed="false">HB</button>
           <span class="hblegend" role="tooltip"><span class="hbkey" style="--c:#30e030">hurt</span><span class="hbkey" style="--c:#ff2828">attack</span><span class="hbkey" style="--c:#ffe020">clash</span><span class="hbkey" style="--c:#40a0ff">shield</span><span class="hbkey" style="--c:#d8d8d8">collision</span><span class="hbkey" style="--c:#c878e6">special</span></span></span>
         <button class="vchip" data-flip="inputs" title="Input display (I)" aria-pressed="false">IN</button>
+        <button class="vchip" data-flip="hitstun" title="Hitstun bar under the combo counter, ETM's: white = hitstun left; behind it blue, cyan, grey, black as untech decay grows; orange = max bounces (K)" aria-pressed="true">HS</button>
         <button class="vchip" data-flip="hud" title="HUD: health, meter, timer, combo counters (U)" aria-pressed="true">HUD</button>
         <button class="vchip liveonly" data-flip="names" title="Players' names on the CHALLENGER / WINS banners (T)" aria-pressed="true">NAMES</button>
         <button class="vchip" data-flip="music" title="Music; sound effects stay (B)" aria-pressed="true"><i class="i i-music"></i></button>
@@ -889,6 +891,7 @@
       <button type="button" class="chip" id="slogcopy" title="Copy this page's session log (what loaded when, each phase, holds, errors) to paste to us">copy session log</button>
       <label class="chip" title="Hitboxes (H)"><input id="boxes" type="checkbox">hitboxes</label>
       <label class="chip" title="Input display (I)"><input id="inputs" type="checkbox">inputs</label>
+      <label class="chip" title="Hitstun bar under the combo counter, ETM's (K)"><input id="hitstun" type="checkbox" checked>hitstun bar</label>
       <label class="chip" title="HUD: health, meter, timer, combo counters (U)"><input id="hud" type="checkbox" checked>HUD</label>
       <label class="chip liveonly" title="Players' names on the CHALLENGER / WINS banners (T)"><input id="names" type="checkbox" checked>names</label>
       <label class="chip" title="Music; sound effects stay (B)"><input id="music" type="checkbox" checked>music</label>
@@ -929,8 +932,8 @@
   </div>
 </div>
 </div>
-<script src="mbaa.js?v=c7282fdc59cb"></script>
+<script src="mbaa.js?v=d8c0236c3052"></script>
 <script src="bgm_stream.js?v=407ac29e5c89"></script>
-<script src="viewer.js?v=87f982aca78f"></script>
+<script src="viewer.js?v=adb4eda36e81"></script>
 </body>
 </html>

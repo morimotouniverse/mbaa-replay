@@ -28,6 +28,131 @@
 // read game memory (viewer_boxes / viewer_inputs).
 const KEY_HEX = '6d626161636377656272657061796b65792d6e6f742d612d7365637265742121';
 const Q = new URLSearchParams(location.search);
+// ---- name styles: one system (user 2026-11-04: "the nico text gradient animated the same way as in the chat") ----
+// The stylers' look (the bot's spec: glow, a 2-3 colour gradient, ~wave~, shadow) is parsed here once and its motion
+// computed here once, for every place it is drawn: the chat column (chat.js styleApply: CSS custom properties and the
+// ogslide / owave animations), the picture's comments (overlay_gl: the gradient's colours, period and phase as shader
+// uniforms, the ~wave~ per quad; the same numbers from chat.js glovStyle) and the 2D clip chat (clipChatDraw, also in
+// the MP4 export). The motion:
+//   gradient  the chat's linear-gradient(90deg, c0, c1[, c2], c0) at 200% of the text's width, its background-position
+//             0 -> 200% over the period 16 / speed s, linear: the colour at place u (0..1 across the text) at time t
+//             is the cycle's at fract(u / 2 + t / period) (gradAt); half the cycle shows at a time
+//   ~wave~    letter i: translateY from +a to -a over the half period 2.2 - 0.18 * speed s, ease-in-out, alternate,
+//             i * 0.6 rad ahead (waveY; overlay_gl waveY is the same curve)
+//   glow      a still halo (no pulse in the chat either: text-shadow r and 2r)
+// One clock (now(), seconds): performance.now() / 1000, the CSS animations' document timeline (lock(): each style
+// animation's startTime 0, so a line made at any moment is in phase with every other and with the renderer, whose wall
+// clock is the same performance.now()); a clip page (chat.js clip mode) puts it on the picture's time (picClock): the
+// renderer's wall clock pinned to it (viewer_ov_wall_pin) and the column's animations held at it (tick), so a pause
+// holds both and a seek moves both; the MP4 export pins the renderer to the video's own frame time (deterministic).
+window.mbaaNameFx = (() => {
+  const clampI = (v, a, b) => Math.max(a, Math.min(b, Math.round(+v || 0)));
+  // the bot's canonical spec ("glow=rrggbb.<1-12>,grad=rrggbb-rrggbb[-rrggbb].<1-10>,wave=<1-10>.<1-10>,
+  // shadow=rrggbb.<1-4>.<o|d>", parts optional) -> {glow: {c, r}, grad: {cs, s}, wave: {a, s}, shadow: {c, s, k}};
+  // null if any part is off (the bot's styleCanon rules, tools/chat/meltybot.mjs)
+  function parse(spec) {
+    const t = String(spec || '').toLowerCase(), out = {};
+    if (!t) return out;
+    if (t.length > 120) return null;
+    for (const part of t.split(',')) {
+      let mm;
+      if ((mm = /^glow=([0-9a-f]{6})\.(\d{1,2})$/.exec(part))) out.glow = { c: `#${mm[1]}`, r: clampI(mm[2], 1, 12) };
+      else if ((mm = /^grad=([0-9a-f]{6})-([0-9a-f]{6})(?:-([0-9a-f]{6}))?\.(\d{1,2})$/.exec(part))) out.grad = { cs: [mm[1], mm[2], mm[3]].filter(Boolean).map(c => `#${c}`), s: clampI(mm[4], 1, 10) };
+      else if ((mm = /^wave=(\d{1,2})\.(\d{1,2})$/.exec(part))) out.wave = { a: clampI(mm[1], 1, 10), s: clampI(mm[2], 1, 10) };
+      else if ((mm = /^shadow=([0-9a-f]{6})\.(\d{1,2})\.([od])$/.exec(part))) out.shadow = { c: `#${mm[1]}`, s: clampI(mm[2], 1, 4), k: mm[3] };
+      else return null;
+    }
+    return out;
+  }
+  const spec = st => [st.glow && `glow=${st.glow.c.slice(1)}.${st.glow.r}`, st.grad && `grad=${st.grad.cs.map(c => c.slice(1)).join('-')}.${st.grad.s}`,
+    st.wave && `wave=${st.wave.a}.${st.wave.s}`, st.shadow && `shadow=${st.shadow.c.slice(1)}.${st.shadow.s}.${st.shadow.k}`].filter(Boolean).join(',');
+  // the motion's numbers: the gradient's period (s); the wave's amplitude (px at the chat's font size), half period (s)
+  // and phase a letter (rad); a style without a wave part waves at the default
+  const gradPeriod = st => 16 / st.grad.s;
+  const WAVE_STEP = 0.6;
+  const waveOf = st => { const w = st.wave || { a: 4, s: 5 }; return { a: w.a, dur: 2.2 - w.s * 0.18, step: WAVE_STEP }; };
+  // the chat's CSS gradient image (one cycle: the first colour again at its end)
+  const gradCss = st => `linear-gradient(90deg, ${[...st.grad.cs, st.grad.cs[0]].join(', ')})`;
+  // the clock
+  let pic = null;
+  const now = () => { const t = pic ? pic() : null; return t != null && Number.isFinite(t) ? t : performance.now() / 1000; };
+  const gradPhase = (st, t) => { const p = t / gradPeriod(st); return p - Math.floor(p); };
+  const rgb = c => [parseInt(c.slice(1, 3), 16), parseInt(c.slice(3, 5), 16), parseInt(c.slice(5, 7), 16)];
+  // the colour [r, g, b] at place u across the text at time t (the shader's, overlay_gl / SHADER_GRAD below)
+  function gradAt(st, u, t) {
+    const cs = st.grad.cs, n = cs.length, v = Math.min(1, Math.max(0, u)) * 0.5 + gradPhase(st, t);
+    const s = (v - Math.floor(v)) * n, i = Math.floor(s), f = s - i, a = rgb(cs[i % n]), b = rgb(cs[(i + 1) % n]);
+    return a.map((x, k) => Math.round(x + (b[k] - x) * f));
+  }
+  // the gradient over [0, 1] at t as stops [u, '#rrggbb'] (a canvas gradient: the cycle's colours where they fall)
+  function gradStops(st, t) {
+    const n = st.grad.cs.length, p = gradPhase(st, t), out = [[0, gradAt(st, 0, t)]];
+    for (let k = 1; k <= 2 * n; k++) { const u = (k / n - p) * 2; if (u > 0 && u < 1) out.push([u, gradAt(st, u, t)]); }
+    out.push([1, gradAt(st, 1, t)]);
+    return out.map(([u, c]) => [u, `rgb(${c.join(',')})`]);
+  }
+  // CSS ease-in-out (cubic-bezier(.42, 0, .58, 1)) and the ~wave~ letter i's offset at t, in amplitudes (+ down)
+  function ease(x) {
+    let s = x;
+    for (let k = 0; k < 6; k++) {
+      const bx = 3 * (1 - s) * (1 - s) * s * 0.42 + 3 * (1 - s) * s * s * 0.58 + s * s * s;
+      const d = 3 * (1 - s) * (1 - s) * 0.42 + 6 * (1 - s) * s * 0.16 + 3 * s * s * 0.42;
+      if (Math.abs(d) < 1e-5) break;
+      s = Math.min(1, Math.max(0, s - (bx - x) / d));
+    }
+    return s * s * (3 - 2 * s);
+  }
+  function waveY(st, i, t) {
+    const w = waveOf(st), u = ((t + i * w.step / Math.PI * w.dur) / w.dur) % 2, uu = u < 0 ? u + 2 : u;
+    return 1 - 2 * ease(uu < 1 ? uu : 2 - uu);
+  }
+  // ---- the chat column's CSS animations on the clock ----
+  const ANIMS = new Set(['ogslide', 'owave']);
+  let held = [];  // (on the picture's clock: the animations held at it, tick())
+  function lock(root) {
+    if (!root || !root.getAnimations) return;
+    let as;
+    try { as = root.getAnimations({ subtree: true }).filter(a => ANIMS.has(a.animationName)); } catch (e) { return; }
+    if (pic) { held = as; tick(true); return; }
+    for (const a of as) if (a.startTime !== 0) { try { a.startTime = 0; } catch (e) {} }
+  }
+  let lockRoot = null, lockRaf = 0;
+  // (batched: every styled element made this frame, after it is in the page)
+  function lockSoon(root) {
+    if (root) lockRoot = root;
+    if (!lockRaf) lockRaf = requestAnimationFrame(() => { lockRaf = 0; lock(lockRoot); });
+  }
+  let heldT = NaN;
+  function tick(force) {
+    const t = now();
+    if (!force && t === heldT) return;
+    heldT = t;
+    for (const a of held) { try { if (a.playState !== 'paused') a.pause(); a.currentTime = t * 1000; } catch (e) {} }
+  }
+  // the picture's clock (a function giving seconds, or null for performance.now())
+  function picClock(fn) { pic = fn || null; heldT = NaN; if (!pic) { for (const a of held) { try { a.play(); a.startTime = 0; } catch (e) {} } held = []; } }
+  // ---- the picture's gradient (overlay_gl's fragment shader) ----
+  // The renderer already sends each gradient slot's phase now, fract(wall / period) (u_g[s * 3 + 1].w; wall: pinned or
+  // performance.now() / 1000), but the mbaa.wasm of 2026-11-02 to 11-04 drew the colours still across the string. Its
+  // shader is rewritten here as the renderer compiles it, to the chat's sliding cycle (gradAt); a renderer that already
+  // draws it so (overlay_gl.cpp from nico-grad on) does not match and is left alone.
+  const SHADER_OLD = /float f = clamp\(v_gx, 0\.0, 1\.0\) \* \(A\.w - 1\.0\), t = fract\(f\);[\s\S]*?fill = A\.w > 2\.5 \? mix\(a, b, f >= 2\.0 \? 1\.0 : t\) : mix\(A\.rgb, B\.rgb, clamp\(f, 0\.0, 1\.0\)\);/;
+  const SHADER_GRAD = 'float n = A.w, s = fract(clamp(v_gx, 0.0, 1.0) * 0.5 + B.w) * n, t = fract(s);' +
+    ' vec3 a = s < 1.0 ? A.rgb : s < 2.0 ? B.rgb : C.rgb;' +
+    ' vec3 b = s < 1.0 ? B.rgb : s < 2.0 && n > 2.5 ? C.rgb : A.rgb;' +
+    ' fill = mix(a, b, t);';
+  let patched = 0;
+  const G2 = window.WebGL2RenderingContext;
+  if (G2 && G2.prototype.shaderSource && Q.get('nicograd') !== 'still') {
+    const orig = G2.prototype.shaderSource;
+    G2.prototype.shaderSource = function (sh, src) {
+      if (typeof src === 'string' && src.includes('uniform vec4 u_g[') && SHADER_OLD.test(src)) { src = src.replace(SHADER_OLD, SHADER_GRAD); patched++; }
+      return orig.call(this, sh, src);
+    };
+  }
+  return { parse, spec, clampI, gradPeriod, gradCss, gradPhase, gradAt, gradStops, waveOf, waveY, now, lock, lockSoon, tick, picClock,
+    patched: () => patched };
+})();
 // the private live-spectate test copy (live.meltyblood.org/<secret>/, tools/web/cc_live.mjs) loads the public bundle
 const BUNDLE = Q.get('bundle') || (/^(live|spectate)\.meltyblood\.org$/.test(location.hostname) ? 'https://watch.meltyblood.org/bundle/' : 'bundle/');
 const HASH = Q.get('hash') === '1', PERF = Q.get('perf') === '1', CAPTURE = Q.get('capture') === '1';
@@ -950,6 +1075,7 @@ async function play(rep, name, catchUp = 0, want = null) {
   swMark('play'); swMark('load');
   if (liveSrc && Q.get('live')) { liveBegin(s); swMark('boot', true, liveSrc.id); }
   call(s, 'viewer_hud', ui.hud ? 1 : 0);
+  hitstunApply(s);
   window.__mbaa = { Module: s.M, man };
   if (!HASH || CAPTURE) timelineInit(s);
   swMark('timeline', s);
@@ -1047,7 +1173,13 @@ async function hashRun(s) {
   status(`state hash done: ${h.frames} frames in ${(h.ms / 1000).toFixed(1)} s`);
 }
 // ---- timeline: keyframes, seek, frame step ----
-const ui = { paused: false, speed: 1, boxes: false, inputs: false, skipIntro: false, hud: true, music: true };
+const ui = { paused: false, speed: 1, boxes: false, inputs: false, skipIntro: false, hud: true, music: true, hitstun: true };
+// ETM's hitstun bar (engine-drawn under the combo counter, so in exports too): on unless this browser turned it off;
+// ?hitstun=0/1 overrides; capture mode (CE-parity pictures) has it off unless asked for
+try { ui.hitstun = localStorage.getItem('mbaaHitstun') !== '0'; } catch (e) {}
+if (CAPTURE) ui.hitstun = false;
+if (Q.get('hitstun') === '0' || Q.get('hitstun') === '1') ui.hitstun = Q.get('hitstun') === '1';
+const hitstunApply = s => { if (s.M._viewer_hitstun_bar) call(s, 'viewer_hitstun_bar', ui.hitstun ? 1 : 0); };  // (an engine without it: nothing)
 try { ui.hud = localStorage.getItem('mbaaHud') !== '0'; ui.music = localStorage.getItem('mbaaMusic') !== '0'; } catch (e) {}
 try { ui.skipIntro = localStorage.getItem('mbaaSkipIntro') === '1'; } catch (e) {}
 try { ui.names = localStorage.getItem('mbaaNames') !== '0'; } catch (e) { ui.names = true; }
@@ -1057,6 +1189,7 @@ function uiApply(s) {
   call(s, 'viewer_speed', ui.speed);
   call(s, 'viewer_boxes_enable', ui.boxes ? 1 : 0);
   call(s, 'viewer_hud', ui.hud ? 1 : 0);
+  hitstunApply(s);
 }
 function timelineInit(s) {
   const M = s.M;
@@ -4597,7 +4730,7 @@ const ACT = {
   end: () => { if (session && session.tl) requestSeek(tlMax(session.tl)); },
   back5: () => stepBy(-300, false), back1s: () => stepBy(-60, false), fwd1s: () => stepBy(60, false), fwd5: () => stepBy(300, false),
 };
-const VIEW_TOGGLES = ['boxes', 'inputs', 'hud', 'names', 'music'];
+const VIEW_TOGGLES = ['boxes', 'inputs', 'hitstun', 'hud', 'names', 'music'];
 function flipView(id) { const el = document.getElementById(id); el.checked = !el.checked; el.onchange(); }
 function syncChips() {
   for (const b of document.querySelectorAll('[data-flip]')) {
@@ -4696,6 +4829,14 @@ function controls() {
     try { localStorage.setItem('mbaaMusic', ui.music ? '1' : '0'); } catch (e) {}
     if (musicGain) musicGain.gain.value = musicLevel();
   };
+  const hsEl = document.getElementById('hitstun');
+  hsEl.checked = ui.hitstun;
+  hsEl.onchange = () => {
+    ui.hitstun = hsEl.checked; hsEl.blur();
+    try { localStorage.setItem('mbaaHitstun', ui.hitstun ? '1' : '0'); } catch (e) {}
+    const s = session;
+    if (s) { hitstunApply(s); if (ui.paused && s.tl) requestSeek(curFrame()); }  // paused: draw the frame again
+  };
   const namesEl = document.getElementById('names');
   namesEl.checked = ui.names;
   namesEl.onchange = () => {
@@ -4747,6 +4888,7 @@ function controls() {
     else if ((k === 'p' || k === 'P') && !live) startItem(pl.i - 1);
     else if (k === 'h' || k === 'H') flip('boxes');
     else if (k === 'i' || k === 'I') flip('inputs');
+    else if (k === 'k' || k === 'K') flip('hitstun');
     else return;
     e.preventDefault();
   });
@@ -5566,7 +5708,7 @@ const LIVE_CLIP_SITE = Q.get('clipSite') || (/^(127\.0\.0\.1|localhost)$/.test(l
 // the chat's Niconico overlay draws them (its 1920x1080 stage scaled to the picture's height; scrolling (naka) comments
 // cross in (1725 + width) / v s, ue / shita stay 3 s), at the replay's frames, so pauses, seeks and the loop show them
 // where they were said; Save MP4 draws them too (drawOverlay)
-let clipChat = null;  // [{f, x, col, px, row, loc, w, v, life, y}] or null
+let clipChat = null;  // [{f, x, col, px, row, loc, w, v, life, y, st, grad, segs}] or null
 const CC_SIZE = { small: [51, 51], medium: [76, 82], big: [110, 129] };
 const CC_COLOR = { white: '#FFFFFF', red: '#FF0000', pink: '#FF8080', orange: '#FFC000', yellow: '#FFFF00', green: '#00FF00',
   cyan: '#00FFFF', blue: '#0000FF', purple: '#C000FF', black: '#000000', white2: '#CCCC99', niconicowhite: '#CCCC99',
@@ -5586,6 +5728,21 @@ async function clipChatLoad(jp, t) {
       const [px, row] = CC_SIZE[size];
       ms.font = `600 ${px}px ${CC_FONT}`;
       const w = Math.ceil(ms.measureText(text).width) + 8, c = { f: base + (+l.o || 0), text, col, px, row, loc, w, y: 0 };
+      // (a styler's line: their look as the chat's and the native renderer's, mbaaNameFx; the gradient when no colour
+      // command is given; ~wave~ from the picture's wave text (segments between U+E000 / U+E001), letter by letter)
+      const st = typeof l.s === 'string' && l.s ? mbaaNameFx.parse(l.s) : null;
+      if (st && Object.keys(st).length) {
+        c.st = st; c.grad = !!st.grad && !cmds.some(k => CC_COLOR[k] || /^#[0-9a-f]{6}$/.test(k));
+        const xw = typeof l.xw === 'string' && l.xw.includes('\uE000') ? (l.a ? `${l.n} ${l.xw}` : l.xw) : null;
+        if (xw) {
+          c.segs = [];
+          xw.split('\uE000').forEach((piece, n) => {
+            const [inside, after] = n === 0 ? ['', piece] : piece.includes('\uE001') ? piece.split('\uE001', 2) : [piece, ''];
+            if (inside) c.segs.push({ t: inside, wave: true });
+            if (after) c.segs.push({ t: after.replace(/[\uE000\uE001]/g, ''), wave: false });
+          });
+        }
+      }
       if (loc === 'naka') { c.v = (1530 + 0.95 * w) / 4; c.life = (1725 + w) / c.v; } else c.life = 3;
       out.push(c);
     }
@@ -5651,11 +5808,35 @@ function clipChatDraw(g, w, h, f) {
     const x = c.loc === 'naka' ? 1725 - c.v * dt : (1920 - c.w) / 2;
     const y = c.loc === 'shita' ? 1080 - c.y - c.row / 2 : c.y + c.row / 2;
     g.font = `600 ${(c.px * k).toFixed(2)}px ${CC_FONT}`;
+    if (c.st) { clipChatStyled(g, c, x0 + (x + 4) * k, y * k, k, T); continue; }
     g.lineWidth = Math.max(1, 4 * k); g.strokeStyle = c.col === '#000000' ? '#FFFFFF' : '#000000';
     g.strokeText(c.text, x0 + (x + 4) * k, y * k);
     g.fillStyle = c.col; g.fillText(c.text, x0 + (x + 4) * k, y * k);
   }
   g.restore();
+}
+// a styler's comment in 2D at x, y (device px; k device px a stage unit; T the picture's time, the clip page's style
+// clock): the same numbers as overlay_gl's (chat.js glovStyle): the gradient's colours where the cycle has them at T,
+// the glow (radius r * px / 18, in place of the outline), the shadow (s px at the chat's ~15 px font, scaled gently), the
+// ~wave~ letters' offsets (mbaaNameFx.waveY, amplitude a * px / 15)
+function clipChatStyled(g, c, x, y, k, T) {
+  const F = mbaaNameFx, st = c.st, segs = c.segs || [{ t: c.text, wave: false }];
+  const parts = [];  // [char, dx, wave index or -1]
+  let dx = 0;
+  for (const sg of segs) Array.from(sg.t).forEach((ch, i) => { parts.push([ch, dx, sg.wave ? i : -1]); dx += g.measureText(ch).width; });
+  const tw = Math.max(1, dx), amp = (st.wave || { a: 4 }).a * c.px / 15 * k;
+  let fill = c.col;
+  if (c.grad) { const gr = g.createLinearGradient(x, 0, x + tw, 0); for (const [u, col] of F.gradStops(st, T)) gr.addColorStop(u, col); fill = gr; }
+  const yOf = p => y + (p[2] >= 0 ? Math.round(F.waveY(st, p[2], T) * amp) : 0);
+  const draw = (ox, oy, style) => { g.fillStyle = style; for (const p of parts) g.fillText(p[0], x + p[1] + ox, yOf(p) + oy); };
+  if (st.shadow) {
+    const full = st.shadow.s * c.px / 15 * k, r = Math.max(0.5, st.shadow.s * Math.pow(Math.max(1, full / st.shadow.s), 0.3)), d = r * Math.SQRT1_2;
+    const offs = st.shadow.k === 'd' ? [[r, r]] : [[r, 0], [-r, 0], [0, r], [0, -r], [d, d], [-d, d], [d, -d], [-d, -d]];
+    for (const [ox, oy] of offs) draw(ox, oy, st.shadow.c);
+  }
+  if (st.glow) { g.shadowColor = st.glow.c; g.shadowBlur = st.glow.r * c.px / 18 * k; }
+  draw(0, 0, fill);
+  if (st.glow) { g.shadowBlur = 0; g.shadowColor = 'transparent'; }
 }
 
 // ---- video export: the clip, or the round being watched, as a 1280x960 60 fps video (every game frame drawn 2x,
@@ -5972,13 +6153,14 @@ async function fastExport(s, c, vcfg, acfg) {
       if (M._viewer_ov_canvas) M._viewer_ov_canvas(W, H);
     }
     let out = null, g = null;
-    const wall0 = performance.now() / 1000;
     let lastUi = performance.now();
     for (let k = c.a; k < c.b; k++) {
       if (fx.cancel || session !== s) throw new Error('cancelled');
       if (encErr) throw encErr;
       const k0 = M._viewer_frame();
-      if (ovNative) { M._viewer_ov_clock((k0 + 1) / 60); if (pinned) M._viewer_ov_wall_pin(wall0 + (k - c.a) / 60); }
+      // (the renderer's wall clock, which the name styles' gradient and the emotes' frames run on, pinned to the frame's
+      // own time: the clip page's clock (mbaaNameFx), so every export of a range animates alike)
+      if (ovNative) { M._viewer_ov_clock((k0 + 1) / 60); if (pinned) M._viewer_ov_wall_pin((k0 + 1) / 60); }
       q = performance.now();
       call(s, 'viewer_step', 1);
       P.step += performance.now() - q;

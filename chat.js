@@ -1447,26 +1447,11 @@
   };
   // (a clip's line carries its style as the clip saved it: l.st, the clip section)
   const lineStyle = l => (l && l.st !== undefined ? l.st : l && l.acct ? styleOf(l.acct) : null);
-  const clampI = (v, a, b) => Math.max(a, Math.min(b, Math.round(+v || 0)));
+  // (one parser, one clock, one motion for the column, the picture and the 2D clip chat: viewer.js mbaaNameFx)
+  const NFX = window.mbaaNameFx;
+  const clampI = NFX.clampI;
   const ACCT_RE = /^[\p{L}\p{M}\p{N}_-]{1,40}$/u;
-  // the bot's canonical spec ("glow=rrggbb.<1-12>,grad=rrggbb-rrggbb[-rrggbb].<1-10>,wave=<1-10>.<1-10>", parts
-  // optional) -> {glow: {c, r}, grad: {cs, s}, wave: {a, s}}; null if any part is off (the bot's styleCanon rules)
-  function styleParse(spec) {
-    const t = String(spec || '').toLowerCase(), out = {};
-    if (!t) return out;
-    if (t.length > 120) return null;
-    for (const part of t.split(',')) {
-      let mm;
-      if ((mm = /^glow=([0-9a-f]{6})\.(\d{1,2})$/.exec(part))) out.glow = { c: `#${mm[1]}`, r: clampI(mm[2], 1, 12) };
-      else if ((mm = /^grad=([0-9a-f]{6})-([0-9a-f]{6})(?:-([0-9a-f]{6}))?\.(\d{1,2})$/.exec(part))) out.grad = { cs: [mm[1], mm[2], mm[3]].filter(Boolean).map(c => `#${c}`), s: clampI(mm[4], 1, 10) };
-      else if ((mm = /^wave=(\d{1,2})\.(\d{1,2})$/.exec(part))) out.wave = { a: clampI(mm[1], 1, 10), s: clampI(mm[2], 1, 10) };
-      else if ((mm = /^shadow=([0-9a-f]{6})\.(\d{1,2})\.([od])$/.exec(part))) out.shadow = { c: `#${mm[1]}`, s: clampI(mm[2], 1, 4), k: mm[3] };
-      else return null;
-    }
-    return out;
-  }
-  const styleSpec = st => [st.glow && `glow=${st.glow.c.slice(1)}.${st.glow.r}`, st.grad && `grad=${st.grad.cs.map(c => c.slice(1)).join('-')}.${st.grad.s}`,
-    st.wave && `wave=${st.wave.a}.${st.wave.s}`, st.shadow && `shadow=${st.shadow.c.slice(1)}.${st.shadow.s}.${st.shadow.k}`].filter(Boolean).join(',');
+  const styleParse = NFX.parse, styleSpec = NFX.spec;
   // a shadow part's CSS (the name in the log; user 2026-11-02): o an outline all round (8 copies at s px, no blur), d a
   // drop shadow s px down-right; as text-shadow and, for a gradient name (clipped text: a text-shadow shows through
   // it), as drop-shadow filters (4 chained: a square dilation of s px)
@@ -1476,8 +1461,7 @@
     return { ts: [[s, 0], [-s, 0], [0, s], [0, -s], [d, d], [-d, d], [d, -d], [-d, -d]].map(([x, y]) => `${x}px ${y}px 0 ${c}`).join(', '),
       f: [[s, 0], [-s, 0], [0, s], [0, -s]].map(([x, y]) => `drop-shadow(${x}px ${y}px 0 ${c})`).join(' ') };
   };
-  // the wave's numbers (a style without a wave part waves at the default): amplitude px, half period s
-  const waveOf = st => { const w = st.wave || { a: 4, s: 5 }; return { a: w.a, dur: 2.2 - w.s * 0.18 }; };
+  const waveOf = NFX.waveOf;
   // (on the element holding a styled line or name: the line, my name, or the panel's preview; values already numbers /
   // #rrggbb)
   function styleApply(el, st) {
@@ -1485,9 +1469,10 @@
     el.classList.toggle('og-glow', !!st.glow); el.classList.toggle('og-grad', !!st.grad); el.classList.toggle('og-sh', !!st.shadow);
     if (st.shadow) { const x = shadowCss(st.shadow); S.setProperty('--os-ts', x.ts); S.setProperty('--os-f', x.f); }
     if (st.glow) { S.setProperty('--og-c', st.glow.c); S.setProperty('--og-r', `${st.glow.r}px`); S.setProperty('--og-r2', `${st.glow.r * 2}px`); }
-    if (st.grad) { const cs = st.grad.cs; S.setProperty('--og-g', `linear-gradient(90deg, ${[...cs, cs[0]].join(', ')})`); S.setProperty('--og-p', `${(16 / st.grad.s).toFixed(2)}s`); }
-    // (alternate + ease-in-out: a half period per run; phase 0.6 rad a character)
-    S.setProperty('--ow-a', `${w.a}px`); S.setProperty('--ow-p', `${dur.toFixed(2)}s`); S.setProperty('--ow-d', `${(-0.6 / Math.PI * dur).toFixed(3)}s`);
+    if (st.grad) { S.setProperty('--og-g', NFX.gradCss(st)); S.setProperty('--og-p', `${NFX.gradPeriod(st).toFixed(3)}s`); }
+    // (alternate + ease-in-out: a half period per run; phase w.step rad a character)
+    S.setProperty('--ow-a', `${w.a}px`); S.setProperty('--ow-p', `${dur.toFixed(3)}s`); S.setProperty('--ow-d', `${(-w.step / Math.PI * dur).toFixed(4)}s`);
+    NFX.lockSoon(sec);  // (its animations on the one clock, in phase with every other name and the picture's)
   }
   // (the stylers changed: the log drawn again, my name, the panel)
   function stylesChanged() { renderSoon(); myNameStyle(); ownPanelHook(); try { if (membOpen) membersShow(); } catch (e) {} }
@@ -1538,6 +1523,7 @@
   function ownCapNow() {
     const a = logEl.querySelectorAll('li.oown');
     for (let i = 0; i < a.length; i++) a[i].classList.toggle('ostill', i < a.length - OWN_LIVE || ownOff.has(a[i]));
+    NFX.lockSoon(sec);  // (a line animating again: its new animations on the clock)
   }
   function ownCap() {
     if (ownIO) for (const li of logEl.querySelectorAll('li.oown')) if (!ownWatched.has(li)) { ownWatched.add(li); ownIO.observe(li); }
@@ -3227,7 +3213,7 @@
     oPan.querySelectorAll('.oon').forEach(o => { o.textContent = o.closest('.osec').classList.contains('off') ? 'off' : 'on'; });
     const cs = [oIn('c1').value, oIn('c2').value, ...(oIn('c3on').checked ? [oIn('c3').value] : [])], strip = oPan.querySelector('.ostrip');
     strip.style.backgroundImage = `linear-gradient(90deg, ${[...cs, cs[0]].join(', ')})`;
-    strip.style.setProperty('--og-p', `${(16 / clampI(oIn('gs').value, 1, 10)).toFixed(2)}s`);
+    strip.style.setProperty('--og-p', `${(16 / clampI(oIn('gs').value, 1, 10)).toFixed(3)}s`); NFX.lockSoon(sec);
     oIn('c3').style.opacity = oIn('c3on').checked ? '' : '.4';
     const out = (k, t) => { oPan.querySelector(`[data-o="${k}"]`).textContent = t; };
     out('gr', `${oIn('gr').value} px`); out('gs', `${oIn('gs').value} · ${(16 / clampI(oIn('gs').value, 1, 10)).toFixed(1)} s loop`);
@@ -3649,7 +3635,7 @@
     // (the wave's amplitude as the same fraction of the em as in the chat: a px of the log's font size; overlay_gl
     // waveY draws the chat's ease-in-out alternate curve, its half period and phase step)
     M._viewer_ov_style(c.gid, glow, st.glow ? st.glow.r * c.px / 18 : 0, g.length, g[0] || 0, g[1] || 0, g[2] || 0,
-      c.grad ? (still ? 0 : 16 / st.grad.s) : 0, n ? w.a * c.px / logEm() : 0, Math.PI / w.dur, 0.6, n);
+      c.grad ? (still ? 0 : NFX.gradPeriod(st)) : 0, n ? w.a * c.px / logEm() : 0, Math.PI / w.dur, w.step, n);
     // (the shadow: s px at the log's font size (stage units s * px / em), drawn s * (that on screen / s)^0.3 wide, a
     // gentle scale: s=3 ~5 px at 1080p; nearly opaque)
     if (st.shadow && M._viewer_ov_shadow) M._viewer_ov_shadow(c.gid, ((glovRgba(st.shadow.c) & 0xFFFFFF00) | 0xE6) >>> 0, st.shadow.s * c.px / logEm(), st.shadow.k === 'd' ? 1 : 0, st.shadow.s);
@@ -5320,6 +5306,7 @@
     const r = api.clipRange && api.clipRange(), f = api.frame();
     if (!r || f == null || !clip.j) return;
     if (r.a !== clip.a) { clip.a = r.a; clip.n = -1; clipOv(); }  // (the clip moved to its fight start's frames: viewer.js clipFix)
+    NFX.tick();  // (the column's name styles at the picture's time: NFX.picClock, clipMode)
     // the column: the lines said up to the picture's frame
     let n = 0;
     while (n < clip.all.length && clip.a + clip.all[n].o <= f) n++;
@@ -5346,6 +5333,9 @@
     if (tl.follow !== 'clip') { tl.follow = 'clip'; M._viewer_ov_show(1, 1); M._viewer_ov_on(overOn.checked && !over.hidden ? 1 : 0); }
     const T = f / 60;
     if (T !== tl.T) { tl.T = T; M._viewer_ov_clock(T); }
+    // (the styles' clock on the picture too: the gradient's phase and the emotes' frames at the picture's time, as the
+    // column's; the video export pins it itself, to the same frame time, and lets it go after)
+    if (M._viewer_ov_wall_pin && !(api.exporting && api.exporting())) M._viewer_ov_wall_pin(T);
   }
   function clipMode(C) {
     document.body.classList.add('clipchat');
@@ -5367,6 +5357,9 @@
     sec.querySelector('.chead').after(head);
     shown = CLIP_CH;
     chan(CLIP_CH);
+    // (the name styles' one clock is the picture's here: a pause holds the column's gradients and ~waves~ with the
+    // picture's comments, a seek moves both; viewer.js mbaaNameFx)
+    NFX.picClock(() => { const f = api.frame(); return f == null ? null : f / 60; });
     const t = document.getElementById('title');
     if (t && window.MutationObserver) new MutationObserver(clipHead).observe(t, { childList: true, characterData: true, subtree: true });
     Promise.resolve(C.json).then(j => {
