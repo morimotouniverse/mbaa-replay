@@ -396,25 +396,36 @@ function withSiblings(man, paths) {
 
 // ---- files: fetched once per page, written into every session's MEMFS ----
 const cache = new Map();  // game path -> Uint8Array
+// files being fetched (path -> promise): a second fetchAll asking for one waits for that fetch (a live switch starts its
+// match's files with the boot tape's request, and start() asks for them again)
+const inflight = new Map();
 async function fetchAll(man, paths, label, quiet = false) {
   const net0 = net.bytes;  // the counter shows what came over the network (objects are deflated; the game sees ~4x that)
   const queue = [...paths].filter(p => !cache.has(p));
   let done = 0, bytes = 0;
   const n = queue.length, packs = new Map();  // pack -> its bytes (one fetch for all of its files in this call)
+  const one = async p => {
+    const f = man.files[p];
+    let data;
+    if (f.plain) {
+      const r = await fetch(f.plain);
+      if (!r.ok) { console.warn(`${p}: HTTP ${r.status}`); return; }
+      data = new Uint8Array(await r.arrayBuffer());
+    } else if (f.pk) {
+      const [h, off, len] = f.pk;
+      if (!packs.has(h)) packs.set(h, fetchRaw(h));
+      data = await openObject((await packs.get(h)).slice(off, off + len), f.z);
+    } else data = await fetchObject(f.o, f.z);
+    cache.set(p, data);
+  };
   async function worker() {
     for (let p; (p = queue.shift());) {
-      const f = man.files[p];
-      let data;
-      if (f.plain) {
-        const r = await fetch(f.plain);
-        if (!r.ok) { console.warn(`${p}: HTTP ${r.status}`); continue; }
-        data = new Uint8Array(await r.arrayBuffer());
-      } else if (f.pk) {
-        const [h, off, len] = f.pk;
-        if (!packs.has(h)) packs.set(h, fetchRaw(h));
-        data = await openObject((await packs.get(h)).slice(off, off + len), f.z);
-      } else data = await fetchObject(f.o, f.z);
-      cache.set(p, data);
+      if (inflight.has(p)) await inflight.get(p);
+      else if (!cache.has(p)) {
+        const job = one(p);
+        inflight.set(p, job);
+        try { await job; } finally { inflight.delete(p); }
+      }
       if ((++done % 10 === 0 || done === n) && !quiet) status(`${label} ${done}/${n} (${((net.bytes - net0) / 1e6).toFixed(1)} MB downloaded${net.cached ? `, ${net.cached} files from cache` : ''})`);
     }
   }
@@ -767,6 +778,7 @@ function cacheDrop(p) { cache.delete(p); bgmDecoded.delete(p); bgmParsedMap.dele
 function cachePinned() {
   const out = new Set();
   for (const t of [radio, musicSel, liveExt.music]) if (t && t.path) out.add(t.path.replace(/^\/game\//, ''));
+  for (const p of livePreKeep) out.add(p);  // (the likeliest next live match's files: livePreTick)
   if (radio && radio.dat) out.add(radio.dat);
   if (radio && radio.stages && man) for (const id of radio.stages) for (const p of radioStageFiles(id)) out.add(p);
   return out;
@@ -1933,7 +1945,7 @@ const LIVE_IDLE = 300, liveIdle = m => m.age > LIVE_IDLE, liveGone = m => m.sile
 // painted for the clicked match), live (following at 1x within LIVE_BEHIND + 90). Read by tools/web/live_switch_time_check.py.
 let sw = null;
 function swBegin(id) {
-  const m = (liveListLast || []).find(x => x.id === id) || null;
+  const m = ((liveListLast && liveListLast.l) || []).find(x => x.id === id) || null;
   const st = m && m.chara ? (stageOk(m.stage) ? m.stage : stageStandIn(m.stage)) : null;
   sw = window.__mbaaSwitch = { id, t0: performance.now(), marks: {}, want: m && m.chara ? { stage: st, chara: m.chara.slice() } : null, n: ((sw && sw.n) || 0) + 1 };
   const me = sw;
@@ -1967,20 +1979,102 @@ function swCard() {
   if (trOk) swMark('cardTrack');
   if (sw.marks.cardPlayers != null && stOk && porOk && trOk) swMark('card');
 }
-let liveListLast = null;  // (the newest list read)
 async function liveList() {
   const r = await liveFetch(`${LIVE}/live/list`);
   if (!r.ok) throw new Error(`HTTP ${r.status}`);
-  return (liveListLast = await r.json());
+  const l = await r.json();
+  liveListLast = { at: performance.now(), l };
+  return l;
 }
+let liveListLast = null;  // {at, l}: the newest list read (an entry from it is fresh for LIVE_FRESH ms)
+const LIVE_FRESH = 3000;
+// The bridge's one-request join (cc_live.mjs /join: the entry, the newest game's boot tape and its records; have / since:
+// only the records after those the page holds). null: no answer, or a bridge without the route (liveJoinOk goes off for
+// the page: the old requests from then on); {entry: null}: the match is not live
+let liveJoinOk = Q.get('liveJoin') !== '0';
+async function liveJoin(id, { have = null, since = null, v = false } = {}) {
+  if (!liveJoinOk) return null;
+  const q = new URLSearchParams();
+  if (have != null) { q.set('have', have); q.set('since', since); }
+  if (v) q.set('v', VIEWER);
+  const r = await liveFetch(`${LIVE}/live/${id}/join?${q}`).catch(() => null);
+  if (!r) return null;
+  if (!r.headers.get('X-Live-Join')) { if (r.status === 404) liveJoinOk = false; return null; }
+  if (r.status === 404) return { entry: null };
+  if (!r.ok) return null;
+  const b = new Uint8Array(await r.arrayBuffer()), n = new DataView(b.buffer).getUint32(0, true);
+  const h = JSON.parse(new TextDecoder().decode(b.subarray(4, 4 + n)));
+  return { ...h, boot: b.slice(4 + n, 4 + n + h.boot), rec: b.subarray(4 + n + h.boot), ext: r.headers.get('X-Live-Ext') };
+}
+// a list entry's boot tape header (cc_live.mjs bootRep: the stage and both sides' chara / moon / palette): enough for
+// its files (wantFor) before the tape itself has come
+function liveHeadOf(info) {
+  const rep = new Uint8Array(0x5C), dv = new DataView(rep.buffer);
+  rep.set(new TextEncoder().encode('MBAAReplayFile'));
+  dv.setInt32(0x28, info.stage, true);
+  for (const q of [0, 1]) [info.chara[q], info.moon[q], info.color[q]].forEach((v, k) => dv.setInt32(0x40 + 0x10 * q + 4 * k, v, true));
+  repStageFix(rep);
+  return rep;
+}
+// the files start() fetches for a live game of this setup (its plan and the retry menu's BGM)
+function liveWantOf(info) {
+  if (!man || !info || info.css || !info.chara) return null;
+  const want = wantFor(liveHeadOf(info));
+  if (want) for (const p of liveCssFiles(man)) if (/^bgm\//.test(p)) want.add(p);
+  return want;
+}
+// records (rec's format) into a map index -> record, a later copy of an index (longer: more frames) over an earlier one
+function liveRecsPut(map, b) {
+  const dv = new DataView(b.buffer, b.byteOffset, b.byteLength);
+  for (let o = 0; o + 244 <= b.length;) {
+    const n = 244 + 4 * dv.getUint32(o + 240, true), i = dv.getUint32(o, true), old = map.get(i);
+    if (o + n > b.length) break;
+    if (!old || old.length <= n) map.set(i, b.slice(o, o + n));
+    o += n;
+  }
+}
+const liveRecsBytes = map => {
+  const parts = [...map.keys()].sort((x, y) => x - y).map(i => map.get(i)), out = new Uint8Array(parts.reduce((n, p) => n + p.length, 0));
+  let o = 0;
+  for (const p of parts) { out.set(p, o); o += p.length; }
+  return out;
+};
 // id: the host's live id. match: the match key the start must be (a fallback start of the session's own match, a game
-// it fell behind on): the host on another match by then is not that match, so ours has ended: the next-match card
-async function startLive(id, match = null) {
-  let info;
-  let all;
+// it fell behind on): the host on another match by then is not that match, so ours has ended: the next-match card.
+// entry: the list entry the click came from (the live list, the next-match card): no list read before the start.
+// The requests that do not depend on each other go out together: the join (or the boot tape and the first records), the
+// match's files (known from the entry's setup), and a check of a stale entry against the list
+async function startLive(id, match = null, entry = null) {
+  let info = null, all = null, boot = null, first = null, ext = null;
   liveWant = id;
-  try { all = await liveList(); info = all.find(m => m.id === id); swMark('list', true, id); } catch (e) { status(`live feed unreachable: ${e.message}`); return liveRetry(id, match); }
-  if (liveWant !== id) return;  // (another match asked for meanwhile)
+  if (entry && entry.id === id && !entry.css) liveFiles(entry);  // (with the join: the setup is the entry's but after a select)
+  const pre = livePre.get(id);
+  const j = await liveJoin(id, pre && pre.recs.size ? { have: pre.game, since: pre.last, v: true } : { v: true });
+  if (liveWant !== id) return;
+  if (j && j.entry) {
+    info = j.entry; ext = j.ext;
+    if (!info.css) {
+      boot = j.boot;
+      const map = pre && pre.game === j.game && j.from > j.game ? new Map(pre.recs) : new Map();
+      liveRecsPut(map, j.rec);
+      first = Promise.resolve({ bytes: liveRecsBytes(map), ext });
+    }
+  } else if (j && !j.entry) {
+    try { all = await liveList(); } catch (e) {}
+    if (liveWant !== id) return;
+  } else {
+    const fresh = entry && entry.id === id && liveListLast && performance.now() - liveListLast.at < LIVE_FRESH;
+    const listP = fresh ? null : liveList();
+    if (fresh || entry) info = { ...entry };
+    if (!fresh) {
+      // (a stale entry: its game's tape, records and files are asked for meanwhile; the list's game decides)
+      if (info && !info.css) liveStartReqs(id, info);
+      try { all = await listP; info = all.find(m => m.id === id); } catch (e) { status(`live feed unreachable: ${e.message}`); return liveRetry(id, match); }
+      if (liveWant !== id) return;
+      if (info && entry && (info.game !== entry.game || info.css)) liveReqs = null;  // (another game by now)
+    }
+  }
+  swMark('list', true, id);
   {  // (the card: the match's newest entry, a later game than the click's; none, a select: the engine's)
     const was = JSON.stringify(cardMeta);
     cardSet(info && !(match && info.match && info.match !== match) ? info : null);
@@ -1988,6 +2082,7 @@ async function startLive(id, match = null) {
   }
   if (info && match && info.match && info.match !== match) {
     status('the match has ended');
+    if (!all) try { all = await liveList(); } catch (e) { all = []; }
     if (session && session.liveSrc && session.liveSrc.id === id) { nextCardShow(session, all, 'Match over'); return; }
     info = null;
   }
@@ -1998,11 +2093,11 @@ async function startLive(id, match = null) {
     if (!session) {
       // (after an update reload: the match it was on, so the card features a set of the same players: the host's next one)
       liveSrc = { id, info: { names: (liveResume && liveResume.id === id && liveResume.names) || [], match }, since: 0 };
-      if (nextCardShow(null, all, 'That match has ended')) return;
+      if (nextCardShow(null, all || [], 'That match has ended')) return;
     }
     return liveNet.recent() ? liveRetry(id, match) : undefined;
   }
-  // the same match again (a fallback start): the streaks go on from the session's where the bridge has none for the game
+  // (the same match again (a fallback start): the streaks go on from the session's where the bridge has none for the game
   // (its game over: not mid-battle of an older one)
   // (on its first character select: no game to play yet; waits on the list until the first game loads)
   // (liveCss: the match key on its character select, for chat's channel: the session still on screen is the host's match
@@ -2011,8 +2106,8 @@ async function startLive(id, match = null) {
     liveCss = { id, match: info.match || null };
     status('on character select: the match starts with its first game');
     // (counted as its viewer meanwhile: the bridge counts the tabs asking for a match's records, and a tab waiting on a
-    // character select asked for none, so the count halved at every new set until its first game loaded)
-    liveFetch(`${LIVE}/live/${id}/rec?from=-1&v=${VIEWER}` + (info.match ? `&match=${encodeURIComponent(info.match)}` : '')).catch(() => {});
+    // character select asked for none, so the count halved at every new set until its first game loaded. The join counted it)
+    if (!j) liveFetch(`${LIVE}/live/${id}/rec?from=-1&v=${VIEWER}` + (info.match ? `&match=${encodeURIComponent(info.match)}` : '')).catch(() => {});
     return liveRetry(id, match);
   }
   liveCss = null;
@@ -2027,20 +2122,42 @@ async function startLive(id, match = null) {
   // (the same match: the host's next match on the same id has its own streaks)
   if (!info.streak && prev && prev.M && liveOurs(info, prev.liveSrc) && prev.streakKnown && prev.M.HEAP32[0x54EEE8 >> 2] !== 1)
     info.streak = STREAK.map(a => prev.M.HEAP32[a >> 2]);
-  const r = await liveFetch(`${LIVE}/live/${id}/boot.rep?game=${info.game}`).catch(() => null);
-  if (r && r.ok) liveExtSet(id, r.headers.get('X-Live-Ext'));
-  if (liveWant !== id) return;
-  if (!r || !r.ok) { status(`live match: ${r ? `HTTP ${r.status}` : 'unreachable'}`); return !r || r.status >= 500 ? liveRetry(id, match) : undefined; }
-  const bytes = await r.arrayBuffer();
+  if (!boot) {
+    const q = liveReqs && liveReqs.id === id && liveReqs.game === info.game ? liveReqs : liveStartReqs(id, info);
+    liveReqs = null;
+    const r = await q.boot;
+    if (r && r.ok) liveExtSet(id, ext = r.headers.get('X-Live-Ext'));
+    if (liveWant !== id) return;
+    if (!r || !r.ok) { status(`live match: ${r ? `HTTP ${r.status}` : 'unreachable'}`); return !r || r.status >= 500 ? liveRetry(id, match) : undefined; }
+    boot = new Uint8Array(await r.arrayBuffer());
+    first = q.first;
+  } else {
+    liveExtSet(id, ext);
+    liveFiles(info);  // (the files: from the setup, while start() reads the tape)
+  }
+  swMark('bootRep', true, id);
   if (liveWant !== id) return;
   // (the live match being left for another: kept warm for a switch back)
   if (prev && prev.liveSrc && prev.liveSrc.id !== id) liveKeepTake(prev);
-  liveSrc = { id, info, since: info.game };
+  liveSrc = { id, info, since: info.game, first, fresh: true };
   window.__mbaaRepUrl = null;
-  swMark('bootRep', true, id);
   // (a switch from a match on screen: quiet, the old picture held until the new match's first frame is drawn and
   // crossfaded into it, not the opening movie; a first load: the movie)
-  await start(new File([bytes], `LIVE ${info.names.map(n => n.trim()).join(' vs ')}`), !CU_OLD && session && session.M ? 'switch' : false, id);
+  await start(new File([boot], `LIVE ${info.names.map(n => n.trim()).join(' vs ')}`), !CU_OLD && session && session.M ? 'switch' : false, id);
+}
+// a start's requests without the join: the boot tape, the first records (the poll's first request, sent now) and the files
+let liveReqs = null;
+function liveStartReqs(id, info) {
+  const rec = `${LIVE}/live/${id}/rec?from=${info.game}&since=${info.game}&v=${VIEWER}` + (info.match ? `&match=${encodeURIComponent(info.match)}` : '');
+  const q = liveReqs = { id, game: info.game, boot: liveFetch(`${LIVE}/live/${id}/boot.rep?game=${info.game}`).catch(() => null),
+    first: liveFetch(rec).then(async r => r.ok ? { bytes: new Uint8Array(await r.arrayBuffer()), ext: r.headers.get('X-Live-Ext') } : null).catch(() => null) };
+  liveFiles(info);
+  return q;
+}
+// the match's files, from its setup, into the cache (start() waits on the same fetches)
+function liveFiles(info) {
+  const want = liveWantOf(info);
+  if (want) fetchAll(man, want, '', true).catch(() => {});
 }
 // the last index number in a block of .ccs records (u32 index, u32 kind, rng 12 + ring 220, u32 frames, u16 x 2 x frames)
 function liveLastIndex(b) {
@@ -3238,7 +3355,7 @@ async function liveListShow() {
       if (e.button || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
       e.preventDefault();
       if (session && session.liveSrc && session.liveSrc.id === m.id) return;
-      liveGo(m.id, true);
+      liveGo(m.id, true, m);
     };
     li.append(a);
     return li;
@@ -3898,7 +4015,61 @@ async function liveGoLive() {
     await liveCatchUp(s, ahead - LIVE_BEHIND);
   }
 }
+// ---- the likely next matches kept warm (SWITCH_PLAN.md Phase 6): a switch to one of them finds its files in the page's
+// memory (the likeliest, desktop) or Cache Storage, and its game's records up to a few seconds ago (the join then brings
+// only the rest). Candidates: the next-match card's (liveNextCands, the likeliest first: liveNextMatch), from the newest
+// list read. Desktop: files for 4, records for 2; a phone (low memory): one, its files on disk only. Never on Save-Data /
+// 2G, never while the page is hidden, the session is loading or catching up. Records every PRE_EVERY ms per candidate
+// (a join answer: a few KB), so a viewer's Worker requests grow by at most 2 per PRE_EVERY
+const livePre = new Map();  // id -> {game, recs: Map index -> record, last, at, files: the setup whose files are warm}
+let livePreKeep = new Set(), livePreRun = false;
+const PRE_EVERY = 10000, PRE_FILES = LOWMEM ? 1 : 4, PRE_RECS = LOWMEM ? 1 : 2;
+const livePreOff = () => { const c = navigator.connection; return !LIVE_FEED || Q.get('livePre') === '0' || !!(c && (c.saveData || /2g/.test(c.effectiveType || ''))); };
+function livePreStart() {
+  if (livePreRun || livePreOff()) return;
+  livePreRun = true;
+  const tick = async () => {
+    try { await livePreTick(); } catch (e) { console.warn('live prefetch:', e); }
+    setTimeout(tick, PRE_EVERY);
+  };
+  setTimeout(tick, 3000);
+}
+async function livePreTick() {
+  const s = session, L = s && s.liveSrc, ll = liveListLast;
+  if (!L || hidden() || !ll || performance.now() - ll.at > 30000) return;
+  if (s.seeking || !s.liveSynced || inflight.size) return;  // (the session's own load and catch-up first)
+  const cands = liveNextCands(ll.l, L).filter(m => !m.css && !liveIdle(m) && m.chara);
+  const top = liveNextMatch(cands, L);
+  const order = [...(top ? [top] : []), ...cands.filter(m => m !== top).sort((a, b) => (b.viewers || 0) - (a.viewers || 0))].slice(0, PRE_FILES);
+  for (const id of [...livePre.keys()]) if (!order.some(m => m.id === id)) livePre.delete(id);
+  for (const [k, m] of order.entries()) {
+    if (session !== s || s.seeking) return;
+    const pre = livePre.get(m.id) || { game: null, recs: new Map(), last: null, at: 0, files: '' };
+    livePre.set(m.id, pre);
+    const key = JSON.stringify([m.stage, m.chara, m.moon, m.color]);
+    if (pre.files !== key) {
+      const want = liveWantOf(m);
+      if (want) {
+        // (the likeliest on desktop: in memory, kept through the session's cache prunes; the others: on disk)
+        if (k === 0 && !LOWMEM) { livePreKeep = want; await fetchAll(man, want, '', true); }
+        else await warmDisk(man, want);
+      }
+      pre.files = key;
+    }
+    if (k < PRE_RECS && liveJoinOk) {
+      const j = await liveJoin(m.id, pre.game != null && pre.recs.size ? { have: pre.game, since: pre.last } : {});
+      if (!j || !j.entry || j.entry.css) { if (j && !j.entry) livePre.delete(m.id); continue; }
+      if (j.game !== pre.game || j.from <= j.game) pre.recs = new Map();
+      pre.game = j.game;
+      liveRecsPut(pre.recs, j.rec);
+      pre.last = pre.recs.size ? Math.max(...pre.recs.keys()) : null;
+      pre.at = performance.now();
+    }
+  }
+  if (!LOWMEM && !(top && livePre.has(top.id))) livePreKeep = new Set();
+}
 function liveBegin(s) {  // play(): after viewer_play
+  livePreStart();
   const L = liveSrc;
   s.liveSrc = L;
   s.M.mbaaLoaderGate = () => liveLoaderGate(s);
@@ -3907,6 +4078,9 @@ function liveBegin(s) {  // play(): after viewer_play
   s.streakSent = -1; s.streakAt = null; s.streakAhead = null; s.bannerKey = null;
   L.since = L.info.game;
   L.recs = new Map();
+  // (a start whose entry is fresh (the join, a list read just now): the first poll goes straight to the records and the
+  // jump; its list read comes with the poll after (was: awaited before the catch-up could start)
+  if (L.fresh) { L.fresh = false; L.listAt = performance.now(); }
   L.next = false;
   // (the session's finished games' replays, for clip links: liveTapes; a reused instance's older ones go)
   L.tapes = new Map(); L.firstGame = L.info.game; L.clipPend = null;
@@ -3932,7 +4106,12 @@ function liveBegin(s) {  // play(): after viewer_play
     try {
       // (match: our match's key; the bridge answers 404 once the host is on another match, and so does the page itself
       // once the list has said so (L.moved): another match's records fed into ours hung the picture, user 2026-11-02)
-      const r = L.moved ? { ok: false, status: 404 } : await liveFetch(`${LIVE}/live/${L.id}/rec?from=${L.info.game}&since=${L.since}&v=${VIEWER}` +
+      // (the first answer: the records startLive asked for with the boot tape or the join, the same request)
+      const f0 = L.first;
+      L.first = null;
+      const f = f0 && !L.moved ? await f0 : null;
+      const r = f ? { ok: true, status: 200, headers: { get: () => f.ext }, arrayBuffer: async () => f.bytes }
+        : L.moved ? { ok: false, status: 404 } : await liveFetch(`${LIVE}/live/${L.id}/rec?from=${L.info.game}&since=${L.since}&v=${VIEWER}` +
         (L.info.match ? `&match=${encodeURIComponent(L.info.match)}` : ''),
         AbortSignal.timeout ? { signal: AbortSignal.timeout(5000) } : undefined);
       if (r.ok && session === s) liveExtSet(L.id, r.headers.get('X-Live-Ext'));
@@ -4206,9 +4385,10 @@ function nextCardHide() {
 }
 // push: a new history entry (a click on the live list or Go now: Back returns to the match before, no reload; user
 // 2026-11-02 "clicking another live match must not reload the page"); the automatic move replaces the entry
-function liveGo(id, push = false) {
+// entry: the list entry clicked (startLive starts from it)
+function liveGo(id, push = false, entry = null) {
   swBegin(id);
-  cardSet((liveListLast || []).find(m => m.id === id));
+  cardSet(((liveListLast && liveListLast.l) || []).find(m => m.id === id));
   cardDraw(true);
   liveClickAt = performance.now();
   nextCardHide();
@@ -4219,7 +4399,7 @@ function liveGo(id, push = false) {
     if (push && u.href !== location.href) history.pushState({ live: id }, '', u); else history.replaceState({ live: id }, '', u);
   } catch (e) {}
   document.body.classList.add('live');
-  return startLive(id);
+  return startLive(id, null, entry);
 }
 // Back / Forward between matches switched in place: the match of that entry, again in place; an entry that is not a
 // live match (the replay page the viewer came from) loads as a page
@@ -4227,11 +4407,11 @@ addEventListener('popstate', () => {
   const id = new URLSearchParams(location.search).get('live');
   if (!id) { location.reload(); return; }
   if (session && session.liveSrc && session.liveSrc.id === id) return;
-  cardSet((liveListLast || []).find(m => m.id === id)); cardDraw(true);
+  cardSet(((liveListLast && liveListLast.l) || []).find(m => m.id === id)); cardDraw(true);
   liveClickAt = performance.now();
   nextCardHide();
   document.body.classList.add('live');
-  startLive(id);
+  startLive(id, null, liveListLast && liveListLast.l.find(m => m.id === id));
 });
 // list: the live list as just read (the watched match may be in it). title: what happened ("Match over", ...)
 function nextCardShow(s, list, title) {
@@ -4253,7 +4433,7 @@ function nextCardShow(s, list, title) {
     const vs = document.createElement('span'); vs.className = 'lvs'; vs.textContent = 'vs';
     b.append(liveSide(m, 0), vs, liveSide(m, 1), v);
     b.title = liveName(m);
-    b.onclick = e => { e.stopPropagation(); liveGo(m.id, true); };
+    b.onclick = e => { e.stopPropagation(); liveGo(m.id, true, m); };
     return b;
   };
   const others = el.querySelector('.nc-o');
@@ -4263,7 +4443,7 @@ function nextCardShow(s, list, title) {
   const feat = el.querySelector('.nc-m');
   feat.textContent = '';
   if (next) feat.append(row(next, 'nc-row nc-next'));
-  el.querySelector('.nc-go').onclick = e => { e.stopPropagation(); if (nextCard.id) liveGo(nextCard.id, true); };
+  el.querySelector('.nc-go').onclick = e => { e.stopPropagation(); if (nextCard.id) liveGo(nextCard.id, true, nextCard.m); };
   el.querySelector('.nc-stay').onclick = e => { e.stopPropagation(); nextCard.stay = s; nextCardHide(); status('staying on this match (the live list has the others)'); };
   for (const ev of ['pointerdown', 'click', 'touchend']) el['on' + ev] = e => e.stopPropagation();  // (never the picture's)
   el.classList.toggle('wait', !next);
@@ -4286,7 +4466,7 @@ function nextCardShow(s, list, title) {
   el.hidden = false;
   if (nextCard.s === s && nextCard.id === next.id && nextCard.auto === auto) return true;  // (counting down to it already)
   wClear(nextCard.timer); cancelAnimationFrame(nextCard.raf);
-  nextCard.s = s; nextCard.id = next.id; nextCard.at = performance.now() + NEXT_SECS * 1000; nextCard.auto = auto;
+  nextCard.s = s; nextCard.id = next.id; nextCard.m = next; nextCard.at = performance.now() + NEXT_SECS * 1000; nextCard.auto = auto;
   const bar = el.querySelector('.nc-bar i'), go = el.querySelector('.nc-go');
   el.querySelector('.nc-bar').hidden = !auto;
   if (!auto) { go.textContent = 'Go now'; return true; }
@@ -4298,7 +4478,7 @@ function nextCardShow(s, list, title) {
     nextCard.raf = requestAnimationFrame(tick);
   };
   tick();
-  nextCard.timer = wTimeout(() => { if (session === s && nextCard.s === s && nextCard.id) liveGo(nextCard.id); }, NEXT_SECS * 1000);
+  nextCard.timer = wTimeout(() => { if (session === s && nextCard.s === s && nextCard.id) liveGo(nextCard.id, false, nextCard.m); }, NEXT_SECS * 1000);
   return true;
 }
 // a list entry with either of the session's players (a new set of theirs: the host's next match)
