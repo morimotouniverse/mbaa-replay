@@ -1185,14 +1185,18 @@ async function hashRun(s) {
   status(`state hash done: ${h.frames} frames in ${(h.ms / 1000).toFixed(1)} s`);
 }
 // ---- timeline: keyframes, seek, frame step ----
-const ui = { paused: false, speed: 1, boxes: false, inputs: false, skipIntro: false, hud: true, music: true, hitstun: false };
-// ETM's hitstun bar (engine-drawn under the combo counter, so in exports too): off unless this browser turned it on (user
-// 2026-11-04: off by default until it is drawn the way ETM does);
+const ui = { paused: false, speed: 1, boxes: false, inputs: false, skipIntro: false, hud: true, music: true, hitstun: true };
+// ETM's hitstun bar (engine-drawn on the combo counter's underline, so in exports too): on unless this browser turned it
+// off (user 2026-11-04, after the ETM+ redesign);
 // ?hitstun=0/1 overrides; capture mode (CE-parity pictures) has it off unless asked for
-try { ui.hitstun = localStorage.getItem('mbaaHitstun') === '1'; } catch (e) {}
+try { ui.hitstun = localStorage.getItem('mbaaHitstun') !== '0'; } catch (e) {}
 if (CAPTURE) ui.hitstun = false;
 if (Q.get('hitstun') === '0' || Q.get('hitstun') === '1') ui.hitstun = Q.get('hitstun') === '1';
-const hitstunApply = s => { if (s.M._viewer_hitstun_bar) call(s, 'viewer_hitstun_bar', ui.hitstun ? 1 : 0); };  // (an engine without it: nothing)
+const HS_STYLE = Q.get('hitstunStyle');  // (the bar's look while it is designed: 0 ETM, 1 ETM+, 2 UNI, 3 UNI + bounce diamonds)
+const hitstunApply = s => {  // (an engine without it: nothing)
+  if (s.M._viewer_hitstun_style && HS_STYLE != null) call(s, 'viewer_hitstun_style', +HS_STYLE);
+  if (s.M._viewer_hitstun_bar) call(s, 'viewer_hitstun_bar', ui.hitstun ? 1 : 0);
+};
 try { ui.hud = localStorage.getItem('mbaaHud') !== '0'; ui.music = localStorage.getItem('mbaaMusic') !== '0'; } catch (e) {}
 try { ui.skipIntro = localStorage.getItem('mbaaSkipIntro') === '1'; } catch (e) {}
 try { ui.names = localStorage.getItem('mbaaNames') !== '0'; } catch (e) { ui.names = true; }
