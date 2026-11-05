@@ -1060,7 +1060,7 @@ function fillSession(s, want, had) {
 const call = (s, f, ...a) => s.M.ccall(f, 'number', a.map(() => 'number'), a);
 
 // play from the start; with catchUp = k, step to frame k first (no pacing) and continue from there
-async function play(rep, name, catchUp = 0, want = null) {
+async function play(rep, name, catchUp = 0, want = null, liveId = null) {
   { const b = document.getElementById('ffbadge'); if (b) b.hidden = true; } catchUpShow(null);  // (a new session: its own state)
   misses.clear();
   const s = await newSession(rep, name, want);
@@ -1085,7 +1085,9 @@ async function play(rep, name, catchUp = 0, want = null) {
   if (HASH || CU_HASH) s.M.ccall('viewer_hash_enable', null, [], []);
   call(s, 'viewer_play', 0);
   swMark('play'); swMark('load');
-  if (liveSrc && Q.get('live')) { liveBegin(s); swMark('boot', true, liveSrc.id); }
+  // (a live start: start()'s liveId, not the page's ?live=: a chat page joins a match in place (pushState), and with the
+  // URL's parameters as loaded it played the boot tape as a replay, the players idle until a reload; user 2026-11-04)
+  if (liveSrc && liveId && liveSrc.id === liveId) { liveBegin(s); swMark('boot', true, liveSrc.id); }
   call(s, 'viewer_hud', ui.hud ? 1 : 0);
   hitstunApply(s);
   window.__mbaa = { Module: s.M, man };
@@ -5316,7 +5318,7 @@ async function start(file, quiet = false, liveId = null) {
   document.getElementById('title').textContent = matchTitle(rep) + (when ? ` \u00b7 ${when}` : '');
   const next = pl.items[pl.i + 1];
   if (CAPTURE) await movieLoad();
-  await play(rep, file.name, 0, want);
+  await play(rep, file.name, 0, want, liveId);
   if (want && next) prefetch(next, want);
   else if (want) cachePrune(new Set([...want, ...(cssBg || [])]));  // the last match: the previous one's files go
   if (cssBg && session && session.liveSrc) liveCssBg(session, cssBg);
