@@ -170,7 +170,8 @@ const KZ = Q.get('kz') !== '0';  // keyframe pages zlib-compressed (?kz=0: zero-
 const KF_VERIFY = Q.get('kfverify') === '1';  // checks: a commit's reused pre-pass copies compared word for word with the page at the commit (window.__kfVerify)
 const KF_BUDGET = +(Q.get('kfmb') || (LOWMEM ? 40 : 450)) * 1e6;
 // the store textures the kept keyframes pin (kfTexBytes) have a budget of their own: over it, keyframes thin as over KF_BUDGET
-const KF_TEX_BUDGET = +(Q.get('kftexmb') || (LOWMEM ? 64 : 256)) * 1e6;
+// (low memory: beyond the newest keyframe's own textures, kfTexBytes)
+const KF_TEX_BUDGET = +(Q.get('kftexmb') || (LOWMEM ? 32 : 256)) * 1e6;
 const STORE_GC = Q.get('storegc') !== '0';  // texture store eviction (storeGc; ?storegc=0: off, every sealed texture kept for the match)
 
 const hex = h => new Uint8Array(h.match(/../g).map(x => parseInt(x, 16)));
@@ -474,6 +475,9 @@ function freeLoaded(s, keep = null) {
     cache.delete(p); s.freed.add(p);
   }
   s.freedAt = s.M._viewer_frame();
+  // the newest round start reached: the load that read the freed files is before it, so a restore from a keyframe at or
+  // after it re-reads none of them (seekTo: kfSafe); one before it re-simulates that load
+  if (s.tl) { const m = s.tl.marks.filter(m => m[0] <= s.freedAt).pop(); s.tl.safeFrom = m ? m[0] : s.freedAt; }
 }
 // a game file into MEMFS sharing the fetched buffer (MEMFS write with canOwn keeps the array instead of copying it; the
 // game root is read-only and nothing writes the cache's arrays)
@@ -1142,7 +1146,7 @@ function watch(s) {
     if (s !== session) return clearInterval(t);
     if (misses.size && s.liveSrc) { liveMissed(s); }
     else if (misses.size) { clearInterval(t); refetchAndReplay(s, call(s, 'viewer_frame')); return; }
-    if (LOWMEM && FREE_FILES && s.freedAt < 0 && s.tl && s.tl.marks.some(m => m[0] > (s.freeArm ?? -1)) && !s.seeking && !call(s, 'viewer_files_open')) freeLoaded(s);
+    if (LOWMEM && FREE_FILES && s.freedAt < 0 && s.tl && s.tl.marks.some(m => m[0] > (s.freeArm ?? -1) && m[0] <= s.M._viewer_frame()) && !s.seeking && !call(s, 'viewer_files_open')) freeLoaded(s);
     // a playlist skips the win screen (scene 5: the winner's quote, which runs to the replay's end): the next match
     // starts as the battle ends
     const winScreen = pl.i >= 0 && pl.i + 1 < pl.items.length && !s.seeking && s.M.HEAP32[0x54EEE8 >> 2] === SCENE_WIN;
@@ -1245,8 +1249,10 @@ function timelineInit(s) {
     } else if (s.liveSrc) { liveCssWatch(s); liveRematchHold(s); liveBanner(s); liveStreak(s); slogWatch(s); }
     else if (TUNE) liveBanner(s);
     if (!s.seeking) incTick(s, f);
-    // (a live catch-up: a keyframe every CU_KF_EVERY frames, every KF_EVERY in its last CU_KF_TAIL)
-    else if (f >= t.lastKf + (cu && f < cu.T - CU_KF_TAIL ? CU_KF_EVERY : KF_EVERY) && f >= t.simMax && !M._viewer_files_open() && !(LOWMEM && !t.marks.length)) keyframe(s, f);  // phones: none in the intro (incTick)
+    // (a live catch-up: a keyframe every CU_KF_EVERY frames, every KF_EVERY in its last CU_KF_TAIL; low memory: none,
+    // CU_KF_LOW, s.cuNoKf: also not in its last drawn frames, ~2 s at 4x against the frame-0 keyframe; the first is the
+    // incremental one after the landing, incTick's slices)
+    else if (!s.cuNoKf && f >= t.lastKf + (cu && f < cu.T - CU_KF_TAIL ? CU_KF_EVERY : KF_EVERY) && f >= t.simMax && !M._viewer_files_open() && !(LOWMEM && !t.marks.length)) keyframe(s, f);  // phones: none in the intro (incTick)
   };
   if (!M._viewer_files_open()) keyframe(s, M._viewer_frame());
 }
@@ -1381,11 +1387,19 @@ function kfTexDrop(t, kf) {
 // Bytes of the store entries the kept keyframes name (GPU textures and SYSTEMMEM data; perm and stale entries are kept
 // anyway, so not counted). A live set's keyframes span many games, each pinning that game's composed frames and images:
 // without a bound on these, thinning by page bytes alone kept a game's textures for every game it had a keyframe in.
+// Low memory: only the entries the newest keyframe does not name (that one's are the match's live textures, ~75-90 MB
+// in a battle, kept by the store anyway): counted with them, one post-load keyframe alone was over the 64 MB budget, so
+// a phone kept 3-4 keyframes whatever their page bytes (perf_plan R1, replay_load/r1/tex_probe.log)
 function kfTexBytes(t) {
   const M = t.M, ref = M && M.mbaaTexKfRef, S = M && M.mbaaTexStore;
   let n = 0;
   const hold = M && M.mbaaTexHold;
-  if (ref && S) for (const k of ref.keys()) { const e = S.get(k); if (e && !e.perm && !e.stale && !(hold && hold.has(k))) n += e.bytes || 0; }
+  let live = null;
+  if (LOWMEM) {
+    const kf = t.kfs.find(k => k.frame === t.kfNewFrame) || t.kfs[t.kfs.length - 1];
+    if (kf && kf.tex) { live = new Set(); for (let i = 0; i + 2 < kf.tex.length; i += 3) live.add(kf.tex[i] + ':' + kf.tex[i + 1] + ':' + kf.tex[i + 2]); }
+  }
+  if (ref && S) for (const k of ref.keys()) { const e = S.get(k); if (e && !e.perm && !e.stale && !(hold && hold.has(k)) && !(live && live.has(k))) n += e.bytes || 0; }
   return n;
 }
 function storeGc(t) {
@@ -1416,17 +1430,42 @@ function keyframe(s, f) {
   kfTexAdd(t, kf);
   t.kfs.splice(at, 0, kf);
   t.lastKf = t.kfs[t.kfs.length - 1].frame;
+  t.kfNewFrame = f;
   thin(t);
   storeGc(t);
 }
-// over the memory budget (keyframe pages, or the store textures they pin): drop every second keyframe (never the first, the newest or a pending one)
+// The first keyframe after the match's load (its first round start; low memory: the round start the freed files were
+// freed after, t.safeFrom): restoring it re-simulates no load, so it is never thinned. Without it a phone's back seek
+// past the thinned keyframes went to frame 0 and re-ran the load with its files freed (a stage .dat read as its 1-byte
+// stand-in): the renderer crashed (perf_plan R1)
+function kfPinned(t) {
+  const from = t.safeFrom ?? (t.marks.length ? t.marks[0][0] : -1);
+  return from < 0 ? null : t.kfs.find(k => k.frame >= from && !k.pending) || null;
+}
+// Over the memory budget (keyframe pages, or the store textures they pin): keyframes dropped one at a time, each time
+// the one whose neighbours are closest (the spacing stays even: a back seek's re-simulation stays short everywhere),
+// never the first, the last, a pending one, the pinned post-load one or the one just made (a seek's refinement keyframe
+// near its target). Was: every second one dropped at once, so a phone kept a power-of-two spread and a back seek
+// re-simulated up to 1,700 frames (perf_plan R1)
+const kfOver = t => t.bytes > KF_BUDGET || (STORE_GC && kfTexBytes(t) > KF_TEX_BUDGET);
 function thin(t) {
-  if ((t.bytes > KF_BUDGET || (STORE_GC && kfTexBytes(t) > KF_TEX_BUDGET)) && t.kfs.length > 4) {
-    const keep = t.kfs.filter((k, i) => i === 0 || i === t.kfs.length - 1 || i % 2 === 0 || k.pending);
-    for (const k of t.kfs) if (!keep.includes(k)) { for (const p of k.pages) pageRef(t, p, -1); kfTexDrop(t, k); }
-    t.kfs = keep;
-    t.thinned = (t.thinned || 0) + 1;
+  let dropped = 0;
+  while (t.kfs.length > 4 && kfOver(t)) {
+    const pin = kfPinned(t);
+    let best = -1, gap = Infinity;
+    for (let i = 1; i < t.kfs.length - 1; i++) {
+      const k = t.kfs[i];
+      if (k.pending || k === pin || k.frame === t.kfNewFrame) continue;
+      const g = t.kfs[i + 1].frame - t.kfs[i - 1].frame;
+      if (g < gap) { gap = g; best = i; }
+    }
+    if (best < 0) break;
+    const [k] = t.kfs.splice(best, 1);
+    for (const p of k.pages) pageRef(t, p, -1);
+    kfTexDrop(t, k);
+    dropped++;
   }
+  if (dropped) t.thinned = (t.thinned || 0) + dropped;
 }
 // Put a keyframe's memory back: only the pages whose hash differs from the keyframe's are copied.
 // Incremental keyframe (playback): a whole-memory hash pass at one frame would stall it for tens of ms, so the work
@@ -1546,7 +1585,7 @@ function incTick(s, f) {
         if (at >= 0) { t.kfs.splice(at, 1); for (const p of c.kf.pages) pageRef(t, p, -1); kfTexDrop(t, c.kf); }
         t.lastKf = t.kfs.length ? t.kfs[t.kfs.length - 1].frame : -1;
         t.incDropped = (t.incDropped || 0) + 1;
-      } else { c.kf.pending = false; c.kf.ms = c.ms; thin(t); }
+      } else { c.kf.pending = false; c.kf.ms = c.ms; t.kfNewFrame = c.kf.frame; thin(t); }
       t.inc = null;
       storeGc(t);
       // every raw page has been packed or copied out: a commit buffer grown by a big commit (the one after the match
@@ -1669,6 +1708,21 @@ async function runSeeks(s) {
     while (t.want !== null && session === s) { const T = t.want; t.want = null; await seekTo(s, T); }
   } finally { t.running = false; }
 }
+// a keyframe a restore can re-simulate from: none of the files the game would read from there was freed
+const kfSafe = (s, kf) => !kf || !s.freed || !s.freed.size || s.tl.safeFrom == null || kf.frame >= s.tl.safeFrom;
+// a replay's freed files back into MEMFS (a seek to before the match's load); freed again once playback passes a round
+// start (watch, freeArm)
+async function filesBack(s) {
+  const back = [...s.freed];
+  status(`seeking: reloading ${back.length} files`);
+  try { await fetchAll(man, back, 'seeking: reloading files', true); }
+  catch (e) { console.warn('seek: freed files:', e); status(`seek: the match's files did not load (${e.message})`); return false; }
+  if (session !== s) return false;
+  for (const p of back) { const d = cache.get(p); if (!d) return false; fsPut(s.M.FS, '/game/' + p, d); s.freed.delete(p); }
+  s.M._viewer_resolve_reset();
+  s.freedAt = -1; s.freeArm = -1; s.tl.safeFrom = null;
+  return true;
+}
 async function seekTo(s, T) {
   const t = s.tl, M = s.M, t0 = performance.now();
   if (t.end !== null) T = Math.min(T, t.end);
@@ -1677,6 +1731,20 @@ async function seekTo(s, T) {
   // the nearest keyframe strictly before T (at least one step is drawn), unless the current state is nearer
   let kf = null;
   for (const k of t.kfs) if (k.frame < T) { if (!k.pending) kf = k; } else break;
+  // low memory: a restore from before the freed files' load (kfSafe) re-simulates it. A replay gets the files back
+  // first (the browser's cache has them); live goes back no further than its pinned keyframe (re-simulating a set from
+  // its first game would take minutes on a phone)
+  const from = kf || t.kfs[0], pinned = kfPinned(t);
+  // (live, low memory: never from before the pinned keyframe, freed files or not: the frame-0 keyframe re-simulates the
+  // whole catch-up, ~20 s at phone speed)
+  if (!(T > cur && (!kf || cur >= kf.frame)) && (!kfSafe(s, from) || (s.liveSrc && LOWMEM && (!pinned || from.frame < pinned.frame)))) {
+    if (s.liveSrc) {
+      const pin = pinned;
+      if (!pin || !kfSafe(s, pin) || pin.frame >= cur) { status('live: not kept this far back on this device'); return; }
+      if (T <= pin.frame) { T = pin.frame + 1; status('live: back to the earliest point kept on this device'); }
+      kf = pin;
+    } else if (!await filesBack(s)) return;
+  }
   if (t.inc) {  // an incremental keyframe in progress: its passes assume the timeline goes on from here
     if (t.inc.kf) { const at = t.kfs.indexOf(t.inc.kf); if (at >= 0) { t.kfs.splice(at, 1); for (const p of t.inc.kf.pages) pageRef(t, p, -1); kfTexDrop(t, t.inc.kf); } }
     t.inc = null;
@@ -1693,7 +1761,9 @@ async function seekTo(s, T) {
   call(s, 'viewer_suppress', 1);
   // refinement keyframe KF_NEAR frames before T (or the first frame after it with no game file open): stepping back
   // from T stays cheap
-  let near = T - f > 3 * KF_NEAR ? T - KF_NEAR : -1;
+  // (low memory: none before the match's first round start: the intro's frames hold its files as the game reads them,
+  // ~20 MB of pages, and thinning then dropped the match's keyframes to make room)
+  let near = T - f > 3 * KF_NEAR && !(LOWMEM && T <= (t.marks.length ? t.marks[0][0] : Infinity)) ? T - KF_NEAR : -1;
   while (f < T - DRAW) {
     const g = call(s, 'viewer_step', Math.min(T - DRAW - f, 600, near > f ? near - f : 1e9));
     if (near >= 0 && g >= near) { if (M._viewer_files_open()) near = g + 1; else { keyframe(s, g); near = -1; } }
@@ -2228,7 +2298,12 @@ const CU_OLD = Q.get('cuOld') === '1', CU_HASH = Q.get('cuhash') === '1';
 // apart land on the same frame)
 const CU_ROUND = +(Q.get('cuRound') || 0);
 const cuTarget = (M, n) => { const f = M._viewer_frame(), T = f + n; return CU_ROUND && Math.floor(T / CU_ROUND) * CU_ROUND > f + 2 ? Math.floor(T / CU_ROUND) * CU_ROUND : T; };
-const CU_SLICE_MS = +(Q.get('cuSlice') || 50), CU_SHOW_MS = +(Q.get('cuShow') ?? 200), CU_KF_EVERY = 1800, CU_KF_TAIL = 600, CU_WATCH = 30;
+// Phones (low memory): one frame drawn every 1.5 s (each costs ~100 ms at phone speed, texture uploads: 23% of a join),
+// and no keyframes during the catch-up (21%: ~4 s of a 21 s join at 4x; the one against the frame-0 keyframe alone,
+// 69 MB raw, ~424 ms): a rewind right after the join goes back to the landing keyframe at most (seekTo, kfPinned).
+// ?cuKf=1: the keyframes as on desktop (the checks); ?cuShow=: the cadence (perf_plan L2 + L3)
+const CU_SLICE_MS = +(Q.get('cuSlice') || 50), CU_SHOW_MS = +(Q.get('cuShow') ?? (LOWMEM ? 1500 : 200)), CU_KF_EVERY = 1800, CU_KF_TAIL = 600, CU_WATCH = 30;
+const CU_KF_LOW = !LOWMEM || Q.get('cuKf') === '1';
 const cuTurn = () => new Promise(r => { const ch = new MessageChannel(); ch.port1.onmessage = () => { ch.port1.close(); r(); }; ch.port2.postMessage(0); });
 // marks of a match switch (performance.now(); window.__mbaaSwitch, the checks): click, picture (the new match's first
 // frame drawn), cuStart / cuEnd (catch-up), live (caught up)
@@ -2241,6 +2316,7 @@ async function liveCatchUp(s, n) {
   uiApply(s);
   call(s, 'viewer_suppress', 1);
   s.cu = { T, scene: -1, retry: -1, full: -1e9 };
+  s.cuNoKf = !CU_KF_LOW;
   swMark('cuStart', true, s.liveSrc && s.liveSrc.id);
   if (sw && s.liveSrc && sw.id === s.liveSrc.id) sw.cuFrames = (sw.cuFrames || 0) + (T - f0);
   let f = f0, per = 0.5, shown = -1e9, said = 0, stalled = false, drawn = 0;
@@ -2280,8 +2356,11 @@ async function liveCatchUp(s, n) {
   } finally { if (s.cu && s.cu.T === T) s.cu = null; }
   catchUpShow(null);
   call(s, 'viewer_suppress', 0);
+  const tl0 = performance.now();
   if (f < T) call(s, 'viewer_step', T - f);
   else call(s, 'viewer_represent');
+  s.cuLandMs = performance.now() - tl0;  // (the landing frames' time, drawn: the checks)
+  s.cuNoKf = false;
   if (session === s && s.liveSrc) { liveCssWatch(s); liveRematchHold(s); liveBanner(s); liveStreak(s); slogWatch(s); }  // (the watchers once at the end)
   s.seeking = false; s.mute = ui.paused;
   uiApply(s);
@@ -2295,7 +2374,7 @@ async function liveCatchUp(s, n) {
 function cuDone(s, f0, t0, drawn) {
   const M = s.M, f = M._viewer_frame(), ms = performance.now() - t0;
   const r = { frames: f - f0, ms, fps: (f - f0) / (ms / 1000), from: f0, frame: f, drawn, kfs: s.tl ? s.tl.kfs.length : 0, old: CU_OLD, prof: s.cuProf || null,
-             kfMs: s.tl ? s.tl.kfs.filter(k => k.frame >= f0).map(k => Math.round(k.ms)) : [] };
+             kfMs: s.tl ? s.tl.kfs.filter(k => k.frame >= f0).map(k => Math.round(k.ms)) : [], landMs: s.cuLandMs ?? null };
   s.cuProf = null;
   if (CU_HASH) {
     const rows = M.ccall('viewer_hash_take', 'string', [], []);
@@ -4862,11 +4941,14 @@ function uiLoop() {
     clipTick(s, f);
     if (rec) { try { recTick(s, f); } catch (e) { recFail(e); } }
     const seek = document.getElementById('seek');
-    if (+seek.max !== max) seek.max = max;
+    // (the slider spans the timeline's view: the whole replay, or zoomed in while clipping, tlView)
+    const { lo, hi } = tlView(s, max), span = Math.max(1, hi - lo);
+    // (a new view: the thumb placed again; a min raised past the value had clamped it to the edge)
+    if (+seek.min !== lo || +seek.max !== hi) { seek.min = lo; seek.max = hi; uiLast.vpx = uiLast.px = -1; seek.value = t.want !== null ? t.want : f; }
     // (the slider's value only when its thumb moves a whole pixel: a new value every frame re-laid the thumb every frame)
     if (!uiLast.measured) { uiLast.measured = true; uiMeasure(); }
     if (!seekDragging) {
-      const v = t.want !== null ? t.want : f, vpx = Math.round((uiLast.sw || 1000) * v / Math.max(1, max));
+      const v = t.want !== null ? t.want : f, vpx = Math.round((uiLast.sw || 1000) * (v - lo) / span);
       if (vpx !== uiLast.vpx || t.want !== null) { uiLast.vpx = vpx; if (+seek.value !== v) seek.value = v; }
     }
     setText('time', 'time', fmtTime(f));
@@ -4875,8 +4957,8 @@ function uiLoop() {
     if (uiLast.fcShown && !document.body.classList.contains('mob') && (ui.paused || f - (uiLast.fcF ?? -99) >= 6 || f < uiLast.fcF)) {
       uiLast.fcF = f; setText('fc', 'fc', `frame ${f}`);
     }
-    const px = Math.round((uiLast.sw || 1000) * seek.value / Math.max(1, max));
-    if (px !== uiLast.px) { uiLast.px = px; seek.style.setProperty('--p', `${(100 * seek.value / Math.max(1, max)).toFixed(2)}%`); }
+    const px = Math.round((uiLast.sw || 1000) * (seek.value - lo) / span);
+    if (px !== uiLast.px) { uiLast.px = px; seek.style.setProperty('--p', `${(100 * (seek.value - lo) / span).toFixed(2)}%`); }
     drawMarks(t, max);
     if (f !== lastDrawnFrame || overlayDirty) { lastDrawnFrame = f; overlayDirty = false; drawOverlay(); }
   }
@@ -4884,22 +4966,24 @@ function uiLoop() {
 }
 // round starts over the slider; the explored part (seeks inside it restore a keyframe) is shaded
 function drawMarks(t, max) {
-  const c = session && session.clip;
-  const key = `${t.marks.length}/${max}/${Math.round(t.simMax / 60)}/${c ? c.a + ':' + c.b : ''}`;
+  const c = session && session.clip, v = tlView(session, max), { lo, hi } = v, span = Math.max(1, hi - lo);
+  const key = `${t.marks.length}/${max}/${Math.round(t.simMax / 60)}/${c ? c.a + ':' + c.b : ''}/${lo}:${hi}`;
   if (key === marksKey) return;
   marksKey = key;
   clipUi(max);
+  const tlEl = document.querySelector('#transportsec .timeline');
+  if (tlEl) tlEl.classList.toggle('zoom', v.zoom);
   const cv = document.getElementById('marks'), dpr = window.devicePixelRatio || 1;
   cv.width = Math.round(cv.clientWidth * dpr); cv.height = Math.round(cv.clientHeight * dpr);
-  const g = cv.getContext('2d');
+  const g = cv.getContext('2d'), X = f => cv.width * (f - lo) / span;
   g.clearRect(0, 0, cv.width, cv.height);
   g.fillStyle = '#2c3350';
-  g.fillRect(0, 0, cv.width * Math.min(1, t.simMax / max), cv.height);
-  if (c) { g.fillStyle = 'rgba(80, 200, 255, 0.45)'; g.fillRect(cv.width * c.a / max, 0, Math.max(2, cv.width * (c.b - c.a) / max), cv.height); }
+  g.fillRect(0, 0, Math.max(0, Math.min(cv.width, X(t.simMax))), cv.height);
+  if (c) { g.fillStyle = 'rgba(80, 200, 255, 0.45)'; g.fillRect(X(c.a), 0, Math.max(2, X(c.b) - X(c.a)), cv.height); }
   // A live session (or any replay with several games) as games: a game starts at each round 1, every other game a
   // lighter band, its number (G2, G3, ...) at its start; rounds as short ticks, labelled only where the label fits
   // before the next mark (a long session's "R1 R2 R3 R1 R2 ..." ran together)
-  const xs = t.marks.map(([f]) => Math.round(cv.width * f / max)), H = cv.height, room = 22 * dpr;
+  const xs = t.marks.map(([f]) => Math.round(X(f))), H = cv.height, room = 22 * dpr;
   const starts = t.marks.map(([, r], i) => r === 0 || i === 0);
   const games = starts.filter(Boolean).length;
   g.font = `${Math.round(10 * dpr)}px system-ui, sans-serif`; g.textBaseline = 'top';
@@ -4908,11 +4992,14 @@ function drawMarks(t, max) {
     t.marks.forEach(([f], i) => {
       if (!starts[i]) return;
       n++;
-      const x = i === 0 ? 0 : xs[i], end = xs.find((x2, j) => j > i && starts[j]) ?? Math.round(cv.width * Math.min(1, t.simMax / max));
+      const x = i === 0 ? Math.round(X(0)) : xs[i], end = xs.find((x2, j) => j > i && starts[j]) ?? Math.round(Math.min(cv.width, X(t.simMax)));
+      if (end < 0 || x > cv.width) return;  // (zoomed: a game outside the view)
       if (n % 2 === 0) { g.fillStyle = 'rgba(255, 255, 255, 0.07)'; g.fillRect(x, 0, Math.max(0, end - x), H); }
       g.fillStyle = '#ffe9a8';
       g.fillRect(xs[i], 0, Math.max(1, 1.5 * dpr), H);
-      if (end - x >= room) { g.font = `600 ${Math.round(10 * dpr)}px system-ui, sans-serif`; g.fillText(`G${n}`, xs[i] + 3 * dpr, 1 * dpr); }
+      // (zoomed in past a game's start: its number at the view's left edge)
+      const lx = Math.max(0, xs[i]);
+      if (end - lx >= room) { g.font = `600 ${Math.round(10 * dpr)}px system-ui, sans-serif`; g.fillText(`G${n}`, lx + 3 * dpr, 1 * dpr); }
     });
   }
   g.font = `${Math.round(9 * dpr)}px system-ui, sans-serif`;
@@ -4920,9 +5007,46 @@ function drawMarks(t, max) {
     if (games > 1 && starts[i]) return;
     g.fillStyle = '#ffcc40';
     g.fillRect(xs[i], games > 1 ? H * 0.45 : 0, Math.max(1, dpr), games > 1 ? H * 0.55 : H);
-    const next = i + 1 < xs.length ? xs[i + 1] : cv.width;
-    if (next - xs[i] >= room) g.fillText(`R${r + 1}`, xs[i] + 2 * dpr, games > 1 ? H * 0.42 : 0);
+    const next = i + 1 < xs.length ? xs[i + 1] : cv.width, lx = Math.max(0, xs[i]);
+    if (next - lx >= room && lx < cv.width) g.fillText(`R${r + 1}`, lx + 2 * dpr, games > 1 ? H * 0.42 : 0);
   });
+}
+// ---- the timeline's view: the frames the seek bar, its marks and the clip handles span (one mapping for all) ----
+// The whole replay (live: the session so far), or, while the clip panel is open and zoomed (clipZoom; Z or the panel's
+// Whole set / Zoom button), the round the clip was taken in (the round holding the playhead then) widened to keep the
+// clip and a margin inside: a 30 s clip in a long set was a sliver its handles could not be set on. The zoomed view only
+// ever widens (a handle dragged past an edge pans it out, clipControls); Clear or closing the panel shows the whole bar.
+let clipZoom = true;
+function clipViewFor(s, f) {
+  const m = s.tl.marks;
+  let k = -1;
+  for (let i = 0; i < m.length; i++) if (m[i][0] <= f) k = i;
+  const a = k >= 0 ? m[k][0] : 0, b = k + 1 < m.length ? m[k + 1][0] : Infinity;
+  const pad = Math.max(30, Math.round(((b === Infinity ? tlMax(s.tl) : b) - a) * 0.02));
+  return { lo: Math.max(0, a - pad), hi: b === Infinity ? Infinity : b + pad };
+}
+function tlView(s, max) {
+  const c = s && s.clip;
+  if (!clipPanel || !clipZoom || !c || !s.tl) { if (s) s.clipView = null; return { lo: 0, hi: max, zoom: false }; }
+  const v = s.clipView || (s.clipView = clipViewFor(s, curFrame()));
+  // the clip always inside, with a margin (8% of the view, at least 1 s: the handles clear the bar's ends and their
+  // time labels; live: an out point near the newest frame keeps the view's end on it)
+  // The margin is worked out again only when the clip moves: from the view's width, which on a live set grows with every
+  // frame received, it pushed the view's start back a little every frame while the clip stood still
+  const ck = c.a + ':' + c.b;
+  if (v.padFor !== ck) { v.padFor = ck; v.pad = Math.max(60, Math.round((Math.max(Math.min(v.hi, max), c.b) - Math.min(v.lo, c.a)) * 0.08)); }
+  const pad = v.pad;
+  if (c.a - pad < v.lo) v.lo = Math.max(0, c.a - pad);
+  if (c.b + pad > v.hi) v.hi = c.b + pad >= max ? Infinity : c.b + pad;
+  const lo = v.lo, hi = Math.max(lo + 1, Math.min(v.hi, max));
+  return lo <= 0 && hi >= max ? { lo: 0, hi: max, zoom: false } : { lo, hi, zoom: true };
+}
+function toggleClipZoom() {
+  const s = session;
+  clipZoom = !clipZoom;
+  if (s) s.clipView = null;
+  marksKey = ''; clipPanelKey = '';
+  status(clipZoom ? 'timeline zoomed to the clip\'s round (Z: whole set)' : 'timeline: the whole set (Z: zoom to the clip\'s round)');
 }
 // the seek actions with a key and a button (the bar, the phone sheet): 1 s = 60 frames, 5 s = 300
 const ACT = {
@@ -4955,10 +5079,11 @@ function controls() {
   document.getElementById('marks').addEventListener('click', e => {
     const s = session;
     if (!s || !s.tl) return;
-    const r = e.currentTarget.getBoundingClientRect(), max = tlMax(s.tl), x = (e.clientX - r.left) / r.width * max;
+    const r = e.currentTarget.getBoundingClientRect(), { lo, hi } = tlView(s, tlMax(s.tl)), span = Math.max(1, hi - lo);
+    const x = lo + (e.clientX - r.left) / r.width * span;
     let best = null;
     for (const [f] of s.tl.marks) if (best === null || Math.abs(f - x) < Math.abs(best - x)) best = f;
-    if (best !== null && Math.abs(best - x) / max < 0.04) requestSeek(best); else requestSeek(Math.round(x));
+    if (best !== null && Math.abs(best - x) / span < 0.04) requestSeek(best); else requestSeek(Math.round(x));
   });
   btn('prevr', () => jumpRound(-1)); btn('nextr', () => jumpRound(1));
   btn('clipnow', clipNow); clipControls();
@@ -5072,6 +5197,7 @@ function controls() {
     else if (k === '[' || k === 'PageUp') jumpRound(-1);
     else if (k === ']' || k === 'PageDown') jumpRound(1);
     else if (k === 'x' || k === 'X') clipNow();
+    else if ((k === 'z' || k === 'Z') && clipPanel) toggleClipZoom();
     else if (k === '{') setClip('a');
     else if (k === '}') setClip('b');
     else if (k === 'Escape') { if (fx) fx.cancel = true; else if (rec) stopRecording(false); else if (!document.getElementById('help').hidden) toggleHelp(); else if (!document.fullscreenElement && document.querySelector('.stage.fs')) setFs(false); else clearClip(); }
@@ -5588,6 +5714,7 @@ function clipNow() {
   const lo = clipFirst(s), b = Math.max(lo + 1, s.liveSrc ? s.M._viewer_frame() : curFrame()), a = Math.max(lo, b - CLIP_LEN);
   s.clip = { a, b, stop: false, round: false, preview: true, wasLive: !!(s.liveSrc && s.liveFollow) };
   if (s.liveSrc) Object.assign(s.clip, liveClipWhere(s));
+  s.clipView = clipViewFor(s, b);  // (the timeline zooms to the round the clip ends in, tlView)
   marksKey = '';
   clipPanelShow(true);
   status(`clip ${fmtTime(a)} – ${fmtTime(b)} (${((b - a) / 60).toFixed(1)} s): drag the handles to trim; ` +
@@ -5608,13 +5735,19 @@ function clipUi(max) {
   if (!clipPanel) return;
   const s = session, c = s && s.clip;
   if (!c) { clipPanelShow(false); return; }
-  const pa = `${(100 * c.a / Math.max(1, max)).toFixed(3)}%`, pb = `${(100 * c.b / Math.max(1, max)).toFixed(3)}%`;
+  const { lo, hi, zoom } = tlView(s, max), span = Math.max(1, hi - lo);
+  const pa = `${(100 * (c.a - lo) / span).toFixed(3)}%`, pb = `${(100 * (c.b - lo) / span).toFixed(3)}%`;
   const ha = document.getElementById('chA'), hb = document.getElementById('chB');
   if (ha.style.left !== pa) ha.style.left = pa;
   if (hb.style.left !== pb) hb.style.left = pb;
-  const live = clipIsLive(s), can = live && liveClipCan(), pend = live && liveClipPending(s), key = `${c.a}:${c.b}:${live}:${can}:${pend}`;
+  const live = clipIsLive(s), can = live && liveClipCan(), pend = live && liveClipPending(s), key = `${c.a}:${c.b}:${live}:${can}:${pend}:${clipZoom}:${zoom}`;
   if (key === clipPanelKey) return;
   clipPanelKey = key;
+  const zb = document.getElementById('cpzoom');
+  zb.classList.toggle('on', clipZoom);
+  zb.querySelector('.zl').textContent = clipZoom ? 'Whole set' : 'Zoom in';
+  zb.querySelector('.i-smaller').hidden = !clipZoom; zb.querySelector('.i-full').hidden = clipZoom;
+  zb.title = clipZoom ? 'Show the whole set on the timeline (Z)' : 'Zoom the timeline to the clip\'s round (Z)';
   document.getElementById('cpa').textContent = fmtTime(c.a);
   document.getElementById('cpb').textContent = fmtTime(c.b);
   document.getElementById('cplen').textContent = `${((c.b - c.a) / 60).toFixed(1)} s`;
@@ -5651,9 +5784,46 @@ function clipResume(w, playing) {
 }
 function clipControls() {
   const tl = document.querySelector('#transportsec .timeline');
+  // A handle dragged past the zoomed view's edge: the handle goes on past it, faster the further out the pointer is (the
+  // view widens with the clip, tlView), until the pointer comes back in or lets go. The rate is in replay time per wall
+  // second, from the clock (not per tick: a page busy seeking or drawing moved it at another speed): just past the edge
+  // 1.5 s/s, a bar's width out 60 s/s (PAN_FPS), however long the page's seeks keep its timers waiting (a live set's DVR
+  // seek re-simulates for a second or more: a cap of 250 ms per step ran the pan at a fifth of its speed); only a stall
+  // over 10 s is not caught up. While panning the picture follows when no seek is running, at most twice a
+  // second (each move a seek, the heavy part), and lands on the handle at the end.
+  const PAN_FPS = out => Math.min(3600, 90 + 3510 * Math.abs(out));  // frames of replay per second held
+  let pan = null;
+  const panStop = () => { if (pan) { clearInterval(pan.t); pan = null; } };
   for (const [id, w] of [['chA', 'a'], ['chB', 'b']]) {
     const h = document.getElementById(id);
-    const at = e => { const r = tl.getBoundingClientRect(); return (e.clientX - r.left) / Math.max(1, r.width) * tlMax(session.tl); };
+    // the pointer's place on the bar (0..1; outside: past an edge) and the view it maps into
+    const at = e => { const r = tl.getBoundingClientRect(), v = tlView(session, tlMax(session.tl));
+      return { fr: (e.clientX - r.left) / Math.max(1, r.width), v }; };
+    const move = e => {
+      const { fr, v } = at(e), span = Math.max(1, v.hi - v.lo);
+      const out = fr < 0 ? fr : fr > 1 ? fr - 1 : 0;
+      // (out past an edge, the pan below moves the handle: set to the edge on every move, the view widened by its margin
+      // each time and ran away)
+      if (!out || !v.zoom) clipSet(w, v.lo + Math.max(0, Math.min(1, fr)) * span, true);
+      if (!out || !v.zoom) { panStop(); return; }
+      if (pan) { pan.out = out; return; }
+      // (window.__clipPan: the pan's ticks, for tests: tools/web/clip_zoom_check.py / clip_zoom_live_check.py)
+      window.__clipPan = { ticks: 0, dtMax: 0, frames: 0, seeks: 0, out, t0: performance.now() };
+      pan = { out, last: performance.now(), acc: 0, seekAt: 0, moved: false, t: setInterval(() => {
+        const s = session;
+        if (!pan || !clipDrag || !s || !s.clip || !s.tl) { panStop(); return; }
+        const now = performance.now(), dt = Math.min(10000, now - pan.last);
+        pan.last = now; pan.acc += PAN_FPS(pan.out) * dt / 1000;
+        const st = window.__clipPan; st.ticks++; st.dtMax = Math.max(st.dtMax, now - (st.lastAt || now)); st.lastAt = now; st.out = pan.out;
+        const step = Math.floor(pan.acc);
+        if (!step) return;
+        pan.acc -= step;
+        const seek = now - pan.seekAt >= 500 && !s.tl.running;
+        if (seek) pan.seekAt = now;
+        clipSet(w, s.clip[w] + Math.sign(pan.out) * step, seek);
+        pan.moved = !seek; st.frames += step; st.seeks += seek ? 1 : 0;
+      }, 30) };
+    };
     h.addEventListener('pointerdown', e => {
       const s = session;
       if (!s || !s.clip || !s.tl || e.button > 0) return;
@@ -5665,11 +5835,14 @@ function clipControls() {
     });
     h.addEventListener('pointermove', e => {
       if (!clipDrag || clipDrag.w !== w || clipDrag.id !== e.pointerId || !session || !session.tl) return;
-      clipSet(w, at(e), true);
+      move(e);
     });
     const end = e => {
       if (!clipDrag || clipDrag.w !== w || clipDrag.id !== e.pointerId) return;
+      const last = pan && pan.moved;  // (the pan's last step not shown yet: the picture to the handle)
+      panStop();
       const d = clipDrag; clipDrag = null; h.classList.remove('drag');
+      if (last && session && session.clip && !d.playing) requestSeek(session.clip[d.w]);
       clipResume(d.w, d.playing);
     };
     h.addEventListener('pointerup', end); h.addEventListener('pointercancel', end);
@@ -5683,7 +5856,7 @@ function clipControls() {
     b.onclick = e => { e.currentTarget.blur(); const [w, d] = b.dataset.nudge.split(','); clipNudge(w, +d); };
   }
   const on = (id, f) => { document.getElementById(id).onclick = e => { e.currentTarget.blur(); f(); }; };
-  on('cplink', copyTimestamp); on('cpsave', exportVideo); on('cpclear', clearClip);
+  on('cplink', copyTimestamp); on('cpsave', exportVideo); on('cpclear', clearClip); on('cpzoom', toggleClipZoom);
 }
 
 // ---- live clip links: a clip of a live match as a replay link (?r=<id>&t=<in>&e=<out>&c=<clip id>&loop=1) ----

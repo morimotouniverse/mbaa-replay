@@ -525,6 +525,23 @@
     drawIcon(cv, chara, moon);
     return cv;
   };
+  // a chat line's icon as an image: the canvas drawn once per character / moon / size and kept as a PNG (a canvas a line
+  // was a composited layer each: ~110 in a full log, every one handed to the compositor again on each frame, ~40 ms/s at
+  // 4x; perf plan RT2). The same pixels at the same size (an <img> scales as the canvas did).
+  const iconUrls = new Map();
+  const iconImg = (cls, size, chara, moon) => {
+    const im = document.createElement('img');
+    im.className = cls; im.alt = ''; im.draggable = false; im.width = size * 3 / 4; im.height = size;
+    const k = `${chara}/${moon}/${size}`, u = iconUrls.get(k);
+    if (u) { im.src = u; return im; }
+    const cv = document.createElement('canvas');
+    cv.height = size; cv.width = size * 3 / 4;
+    const put = () => { let v = iconUrls.get(k); if (!v) { try { v = cv.toDataURL('image/png'); } catch (e) { cv.className = cls; im.replaceWith(cv); return false; } iconUrls.set(k, v); } im.src = v; return true; };
+    drawIcon(cv, chara, moon);
+    if (!art) artWait.push(put);
+    else if (!put()) return cv;  // (an art sheet that cannot be read back: the canvas itself)
+    return im;
+  };
 
   // ---- DOM ----
   const css = document.createElement('style');
@@ -1074,6 +1091,15 @@
                         animation-delay: calc(var(--i, 0) * var(--ow-d, -.25s)); }
   @keyframes owave { from { transform: translateY(var(--ow-a, 4px)); } to { transform: translateY(calc(-1 * var(--ow-a, 4px))); } }
   #chatsec .ostill .cnick.own, #chatsec .ostill .owave i { animation: none; }
+  /* (the moving parts drawn by the name worker, FX: a canvas over the line, outside its box by the reach of the motion and
+     the glow, which clips there without growing the log's scroll height; the DOM glyphs it draws transparent (.fxh); a new
+     line held still at its moment (.fxp) until the canvas's first frame) */
+  #chatlog li.ofx { position: relative; }
+  #chatsec .ofxw { position: absolute; left: 0; top: 0; right: 0; bottom: 0; overflow: clip; pointer-events: none; }
+  #chatsec .ofxw canvas { position: absolute; pointer-events: none; }
+  #chatsec .fxp .cnick.own, #chatsec .fxp .owave i { animation: none !important; }
+  #chatsec .cnick.own.fxh { animation: none !important; background: none !important; -webkit-text-fill-color: transparent !important; text-shadow: none !important; filter: none !important; }
+  #chatsec .owave.fxh i:not(.oemo) { animation: none !important; -webkit-text-fill-color: transparent !important; }
   @media (prefers-reduced-motion: reduce) { #chatsec .cnick.own, #chatsec .owave i { animation: none !important; } }
   #chatsec .ctool .costyle { order: 10; flex: 1 0 100%; text-align: left; border: 1px solid var(--line); border-radius: 8px; padding: 5px 8px; color: var(--fg); }
   #chatsec .ctool .costyle[hidden] { display: none; }
@@ -1325,8 +1351,9 @@
   const profEdit = () => { const d = sec.querySelector('details'); d.open = true; d.scrollIntoView({ block: 'nearest' }); };
   const logEl = $('#chatlog'), tabsEl = $('.ctabs'), input = composerUpgrade($('#chatin'), MAXLEN), cmdIn = $('#chatcmd'), stateEl = $('.cstate');
   // the newest line stays in view when the log's box changes size (the on-screen keyboard, a rotation, the layout)
-  let logStick = true;
-  logEl.addEventListener('scroll', () => { logStick = logEl.scrollHeight - logEl.scrollTop - logEl.clientHeight < 30; }, { passive: true });
+  let logStick = true, stickRaf = 0;
+  // (a scroll to the new bottom pending, stickSoon: lines came after the last one; still at the bottom)
+  logEl.addEventListener('scroll', () => { if (!stickRaf) logStick = logEl.scrollHeight - logEl.scrollTop - logEl.clientHeight < 30; }, { passive: true });
   // (scrolled down to the newest line: read)
   logEl.addEventListener('scroll', () => { if (logStick) markRead(chans.get(key(shown))); }, { passive: true });
   if (window.ResizeObserver) new ResizeObserver(() => { if (logStick) logEl.scrollTop = logEl.scrollHeight; }).observe(logEl);
@@ -1472,7 +1499,16 @@
     if (st.grad) { S.setProperty('--og-g', NFX.gradCss(st)); S.setProperty('--og-p', `${NFX.gradPeriod(st).toFixed(3)}s`); }
     // (alternate + ease-in-out: a half period per run; phase w.step rad a character)
     S.setProperty('--ow-a', `${w.a}px`); S.setProperty('--ow-p', `${dur.toFixed(3)}s`); S.setProperty('--ow-d', `${(-w.step / Math.PI * dur).toFixed(4)}s`);
-    NFX.lockSoon(sec);  // (its animations on the one clock, in phase with every other name and the picture's)
+    lockSoon(el);  // (its animations on the one clock, in phase with every other name and the picture's)
+  }
+  // (the CSS animations of the elements given, on the clock: only theirs (getAnimations of the whole section, ~150 styled
+  // lines' worth, each time a line came, was a style flush and a scan per line); a clip page holds the whole section's at
+  // the picture's time (mbaaNameFx.lock keeps the last set it was given))
+  const lockEls = new Set(); let lockRaf = 0;
+  function lockSoon(el) {
+    if (CLIPM) { NFX.lockSoon(sec); return; }
+    lockEls.add(el);
+    if (!lockRaf) lockRaf = requestAnimationFrame(() => { lockRaf = 0; const es = [...lockEls]; lockEls.clear(); for (const e of es) if (e.isConnected) NFX.lock(e); });
   }
   // (the stylers changed: the log drawn again, my name, the panel)
   function stylesChanged() { renderSoon(); myNameStyle(); ownPanelHook(); try { if (membOpen) membersShow(); } catch (e) {} }
@@ -1518,15 +1554,19 @@
   const ownIO = 'IntersectionObserver' in window ? new IntersectionObserver(es => {
     for (const e of es) { if (e.isIntersecting) ownOff.delete(e.target); else ownOff.add(e.target); }
     ownCapNow();
-  }, { root: logEl }) : null;
+  }, { root: logEl, rootMargin: '50% 0px' }) : null;  // (half a log ahead: a line scrolling in is drawn before it shows)
   const ownWatched = new WeakSet();
+  // (drawn by the name worker, FX: every styled line on screen moves, none off it; the CSS fallback: the newest OWN_LIVE)
   function ownCapNow() {
-    const a = logEl.querySelectorAll('li.oown');
-    for (let i = 0; i < a.length; i++) a[i].classList.toggle('ostill', i < a.length - OWN_LIVE || ownOff.has(a[i]));
-    NFX.lockSoon(sec);  // (a line animating again: its new animations on the clock)
+    const a = logEl.querySelectorAll('li.oown'), cap = FX.on ? 0 : OWN_LIVE;
+    for (let i = 0; i < a.length; i++) {
+      const off = ownOff.has(a[i]), still = (cap > 0 && i < a.length - cap) || off;
+      if (a[i].classList.contains('ostill') !== still) { a[i].classList.toggle('ostill', still); if (!still) lockSoon(a[i]); }  // (a line animating again: its new CSS animations on the clock)
+      FX.vis(a[i], !off);
+    }
   }
   function ownCap() {
-    if (ownIO) for (const li of logEl.querySelectorAll('li.oown')) if (!ownWatched.has(li)) { ownWatched.add(li); ownIO.observe(li); }
+    for (const li of logEl.querySelectorAll('li.oown')) if (!ownWatched.has(li)) { ownWatched.add(li); if (ownIO) ownIO.observe(li); FX.add(li); }
     ownCapNow();
   }
   // ~text~ (a styled line): one span per character (grapheme), its phase as --i
@@ -1555,6 +1595,279 @@
     if (i < text.length) out.push(...leaf(text.slice(i)));
     return out;
   }
+  // ---- the moving name styles drawn off the main thread (FX) ----
+  // Measured (perf plan RT1, artifacts/xz_check/perf_plan/chat_fx): this page's main thread makes a frame every vsync (the
+  // game's loop), and in each one Blink ticks every CSS animation there, compositor ones included: the ~wave~ letters'
+  // transforms (one animation a letter: ~20 us each at 4x, 100 letters ~460 ms/s) and the gradient names'
+  // background-position (a repaint each frame, ~430-660 ms/s for the stress log). So the moving parts of a styled line are
+  // drawn by one worker into a canvas over the line (transferControlToOffscreen): its frames go to the compositor with no
+  // main-thread work. The DOM keeps the text (layout, wrapping, selection, copy, screen readers) with those glyphs made
+  // transparent (.fxh). The canvas draws bitmaps made here once with the page's own fonts: a letter atlas for the ~waves~
+  // (each letter where layout put it, moved by the CSS curve, mbaaNameFx waveY); for a gradient name its white mask (cut
+  // to the name's box, as background-clip: text) filled with the sliding gradient (gradStops), and, for its glow / shadow
+  // (CSS filter drop-shadows, which depend on the text's alpha only), the filter's part outside the text (F - S: the
+  // filter of the white mask minus the mask), added under it ('lighter': text + shadow (1 - a), as the filter composites).
+  // One clock (mbaaNameFx): the CSS animations' time 0 is performance.now() 0 (the worker's own clock moved by the two time
+  // origins); a clip page posts the picture's time each frame. Every styled line on screen moves (no OWN_LIVE cap); lines
+  // off screen are not drawn. A new line is still at the phase of the moment it is made (.fxp) until its first canvas
+  // frame. Falls back to the CSS animations (with the OWN_LIVE cap) without OffscreenCanvas / overflow-clip-margin, with
+  // ?namefx=css, and holds still under prefers-reduced-motion (the CSS rules).
+  const FX = (() => {
+    const off = { on: false, add() {}, vis() {}, clock() {}, n: () => 0 };
+    try {
+      if (Q.get('namefx') === 'css' || typeof OffscreenCanvas !== 'function' || !HTMLCanvasElement.prototype.transferControlToOffscreen ||
+          typeof Worker !== 'function' || typeof createImageBitmap !== 'function' || !(window.CSS && CSS.supports('overflow-clip-margin', '1px')) ||
+          (window.matchMedia && matchMedia('(prefers-reduced-motion: reduce)').matches)) return off;
+    } catch (e) { return off; }
+    const SRC = `'use strict';
+const L = new Map(); let pic = null, off = 0, raf = 0;
+const req = self.requestAnimationFrame ? f => self.requestAnimationFrame(f) : f => setTimeout(() => f(performance.now()), 16);
+function gradAt(cs, u, p) { const n = cs.length, v = Math.min(1, Math.max(0, u)) * 0.5 + p, s = (v - Math.floor(v)) * n, i = Math.floor(s), f = s - i, a = cs[i % n], b = cs[(i + 1) % n];
+  return 'rgb(' + a.map((x, k) => Math.round(x + (b[k] - x) * f)).join(',') + ')'; }
+function ease(x) { let s = x;
+  for (let k = 0; k < 6; k++) { const bx = 3 * (1 - s) * (1 - s) * s * 0.42 + 3 * (1 - s) * s * s * 0.58 + s * s * s, d = 3 * (1 - s) * (1 - s) * 0.42 + 6 * (1 - s) * s * 0.16 + 3 * s * s * 0.42;
+    if (Math.abs(d) < 1e-5) break; s = Math.min(1, Math.max(0, s - (bx - x) / d)); }
+  return s * s * (3 - 2 * s); }
+function draw(l, t) {
+  const x = l.x; x.globalCompositeOperation = 'source-over'; x.clearRect(0, 0, l.cv.width, l.cv.height);
+  for (const n of l.names) {
+    const g = n.g, q = t / n.per, p = q - Math.floor(q), cs = n.cs, k = cs.length;
+    g.globalCompositeOperation = 'copy'; g.drawImage(n.mask, 0, 0); g.globalCompositeOperation = 'source-in';
+    const gr = g.createLinearGradient(n.u0, 0, n.u1, 0); gr.addColorStop(0, gradAt(cs, 0, p));
+    for (let j = 1; j <= 2 * k; j++) { const u = (j / k - p) * 2; if (u > 0 && u < 1) gr.addColorStop(u, gradAt(cs, u, p)); }
+    gr.addColorStop(1, gradAt(cs, 1, p)); g.fillStyle = gr; g.fillRect(0, 0, n.mask.width, n.mask.height);
+    if (n.under) { x.drawImage(n.under, n.x, n.y); x.globalCompositeOperation = 'lighter'; }
+    x.drawImage(g.canvas, n.x, n.y); x.globalCompositeOperation = 'source-over';
+  }
+  for (const r of l.runs) {
+    const a = r.amp, d = r.dur, ph = r.step / Math.PI * d;
+    for (const c of r.c) { const u = ((t + c[6] * ph) / d) % 2, uu = u < 0 ? u + 2 : u;
+      x.drawImage(r.atlas, c[0], c[1], c[2], c[3], c[4], c[5] + a * (1 - 2 * ease(uu < 1 ? uu : 2 - uu)), c[2], c[3]); }
+  }
+}
+function frame(ts) {
+  raf = 0; const t = pic != null ? pic : (ts + off) / 1000; let any = false;
+  for (const [id, l] of L) { if (!l.vis || !l.ready) continue; any = true; draw(l, t); if (l.fresh) { l.fresh = false; postMessage({ drawn: id }); } }
+  if (any && pic == null) raf = req(frame);
+}
+const kick = () => { if (!raf) raf = req(frame); };
+function drop(l) { for (const n of l.names) { n.mask.close(); if (n.under) n.under.close(); } for (const r of l.runs) r.atlas.close(); }
+onmessage = ({ data: m }) => {
+  if (m.op === 'origin') { off = performance.timeOrigin - m.o; return; }
+  if (m.op === 'clock') { pic = m.t; kick(); return; }
+  let l = L.get(m.id);
+  if (m.op === 'del') { if (l) { drop(l); L.delete(m.id); } return; }
+  if (m.op === 'vis') { if (!l || l.vis === m.on) return; l.vis = m.on;
+    // (off screen: the canvas's memory let go; back: its size again, drawn at once)
+    if (m.on) { l.cv.width = l.w; l.cv.height = l.h; l.fresh = true; kick(); } else { l.cv.width = 1; l.cv.height = 1; } return; }
+  if (m.op === 'set') {
+    if (!l) { l = { cv: m.cv, x: m.cv.getContext('2d'), vis: true, names: [], runs: [] }; L.set(m.id, l); }
+    drop(l);
+    l.w = m.w; l.h = m.h; if (l.vis) { l.cv.width = m.w; l.cv.height = m.h; }
+    for (const n of m.names) { const c = new OffscreenCanvas(n.mask.width, n.mask.height); n.g = c.getContext('2d'); }
+    l.names = m.names; l.runs = m.runs; l.ready = true; l.fresh = true; kick();
+  }
+};`;
+    let wk = null, ids = 0, pic = null;
+    const recs = new Map(), ofLi = new WeakMap();
+    const post = (m, tr) => { try { wk.postMessage(m, tr || []); } catch (e) { console.warn('chat name fx:', e); } };
+    function worker() {
+      if (wk) return wk;
+      wk = new Worker(URL.createObjectURL(new Blob([SRC], { type: 'text/javascript' })));
+      wk.onmessage = ({ data }) => { const r = recs.get(data.drawn); if (r) shown(r); };
+      wk.onerror = e => console.warn('chat name fx worker:', e.message || e);
+      post({ op: 'origin', o: performance.timeOrigin });
+      if (pic != null) post({ op: 'clock', t: pic });
+      return wk;
+    }
+    // (the line's first canvas frame is up: its DOM glyphs go transparent; the still phase set on them is dropped)
+    function shown(r) {
+      for (const e of r.hide) e.classList.add('fxh');
+      r.li.classList.remove('fxp');
+      for (const e of r.held) { e.style.removeProperty(e.classList.contains('cnick') ? 'background-position' : 'transform'); heldY.delete(e); }
+      r.held = [];
+      lockSoon(r.li);  // (what is left to CSS (an emote letter) starts now: on the clock)
+    }
+    const pending = new Set(); let raf = 0;
+    const soon = r => { pending.add(r); if (!raf) raf = requestAnimationFrame(flush); };
+    function flush() {
+      raf = 0; const rs = [...pending]; pending.clear();
+      for (const r of rs) { if (r.li.isConnected) { try { build(r); } catch (e) { console.warn('chat name fx:', e); } } }
+    }
+    // a still frame at the moment now (a new line, until the worker's first frame: no jump when it takes over)
+    function hold(li) {
+      const t = NFX.now(), S = getComputedStyle(li), held = [];
+      if (li.classList.contains('og-grad')) {
+        const n = li.querySelector('.cnick.own'), per = parseFloat(S.getPropertyValue('--og-p')) || 4;
+        if (n) { const q = t / per; n.style.backgroundPosition = `${(200 * (q - Math.floor(q))).toFixed(3)}% 0`; held.push(n); }
+      }
+      const a = parseFloat(S.getPropertyValue('--ow-a')) || 4, dur = parseFloat(S.getPropertyValue('--ow-p')) || 1.3, d = -(parseFloat(S.getPropertyValue('--ow-d')) || -0.25);
+      for (const i of li.querySelectorAll('.owave i')) {
+        const k = +i.style.getPropertyValue('--i') || 0, u = ((t + k * d) / dur) % 2, uu = u < 0 ? u + 2 : u;
+        const y = +(a * (1 - 2 * easeIO(uu < 1 ? uu : 2 - uu))).toFixed(3);
+        i.style.transform = `translateY(${y}px)`; heldY.set(i, y); held.push(i);
+      }
+      return held;
+    }
+    const heldY = new WeakMap();  // (a held letter's offset: build measures where layout put it)
+    function easeIO(x) { let s = x;
+      for (let k = 0; k < 6; k++) { const bx = 3 * (1 - s) * (1 - s) * s * 0.42 + 3 * (1 - s) * s * s * 0.58 + s * s * s, d = 3 * (1 - s) * (1 - s) * 0.42 + 6 * (1 - s) * s * 0.16 + 3 * s * s * 0.42;
+        if (Math.abs(d) < 1e-5) break; s = Math.min(1, Math.max(0, s - (bx - x) / d)); }
+      return s * s * (3 - 2 * s); }
+    function add(li) {
+      if (ofLi.has(li)) return;
+      const r = { id: ++ids, li, vis: true, hide: [], held: [], wrap: null, cv: null, sent: false, seq: 0 };
+      ofLi.set(li, r); recs.set(r.id, r);
+      li.classList.add('fxp'); r.held = hold(li);
+      soon(r);
+    }
+    function del(r) {
+      if (!recs.has(r.id)) return;
+      recs.delete(r.id); pending.delete(r);
+      if (r.sent) post({ op: 'del', id: r.id });
+    }
+    // the font a canvas draws with, as the element's (shorthand pieces: Firefox has no computed 'font')
+    const fontOf = S => `${S.fontStyle} ${S.fontVariantCaps === 'small-caps' ? 'small-caps ' : ''}${S.fontWeight} ${S.fontSize} ${S.fontFamily}`;
+    const canv = (w, h) => { const c = document.createElement('canvas'); c.width = Math.max(1, w); c.height = Math.max(1, h); return c; };
+    const rangeRects = (n, rg) => { rg.selectNodeContents(n); return rg.getClientRects(); };
+    const FILTER = (() => { try { return 'filter' in CanvasRenderingContext2D.prototype; } catch (e) { return false; } })();
+    async function build(r) {
+      const li = r.li, dpr = window.devicePixelRatio || 1, rg = document.createRange(), hide = [], seq = ++r.seq;
+      const lr = li.getBoundingClientRect();
+      if (!lr.width || !lr.height) return;
+      // the moving parts: the gradient name, the ~wave~ runs (not in a closed spoiler; an emote letter stays a CSS one)
+      const nick = li.classList.contains('og-grad') ? li.querySelector('.cnick.own') : null;
+      const runs = [...li.querySelectorAll('.owave')].filter(w => !w.closest('.cspoil'));
+      const LS = getComputedStyle(li);
+      const amp = parseFloat(LS.getPropertyValue('--ow-a')) || 4, dur = parseFloat(LS.getPropertyValue('--ow-p')) || 1.3, step = -(parseFloat(LS.getPropertyValue('--ow-d')) || -0.25) / dur * Math.PI;
+      // the name: its box, its text nodes (one rectangle each), its filter's reach
+      let nm = null;
+      if (nick) {
+        const NS = getComputedStyle(nick), box = nick.getClientRects(), tw = document.createTreeWalker(nick, NodeFilter.SHOW_TEXT), texts = [];
+        let ok = box.length === 1;
+        for (let n = tw.nextNode(); ok && n; n = tw.nextNode()) { const rs = rangeRects(n, rg); if (!rs.length) continue; if (rs.length !== 1) ok = false; else texts.push([n.data, rs[0], getComputedStyle(n.parentElement)]); }
+        const filt = NS.filter && NS.filter !== 'none' ? NS.filter : '';
+        const cs = (LS.getPropertyValue('--og-g').match(/#[0-9a-f]{6}/gi) || []).slice(0, -1).map(c => [1, 3, 5].map(k => parseInt(c.slice(k, k + 2), 16)));
+        if (ok && texts.length && cs.length >= 2 && (!filt || FILTER)) {
+          const reach = filt ? 2 + 2 * (filt.match(/-?\d*\.?\d+px/g) || []).reduce((s, v) => s + Math.abs(parseFloat(v)), 0) : 1;
+          nm = { box: box[0], texts, filt, cs, per: parseFloat(LS.getPropertyValue('--og-p')) || 4, reach: Math.min(48, reach) };
+        }
+      }
+      const P = Math.ceil(Math.max(runs.length ? amp + 2 : 0, nm ? nm.reach : 0, 2));
+      // the canvas: the line's box and P around it, on whole device pixels
+      // (positions in device pixels from the line's box, whose own origin is taken whole: the DOM's text is laid on the line
+      // as painted at a whole pixel (measured: a line at x.5 device px drew its text half a pixel off otherwise))
+      const ox0 = Math.round(lr.left * dpr), oy0 = Math.round(lr.top * dpr), PX = Math.ceil(P * dpr);
+      const DX = v => (v - lr.left) * dpr + ox0, DY = v => (v - lr.top) * dpr + oy0;
+      const dl = ox0 - PX, dt = oy0 - PX, W = Math.round(lr.width * dpr) + 2 * PX, H = Math.round(lr.height * dpr) + 2 * PX;
+      const names = [], rws = [], bm = [];
+      if (nm) {
+        const b = nm.box, ox = Math.floor(DX(b.left) - dl - nm.reach * dpr), oy = Math.floor(DY(b.top) - dt - nm.reach * dpr);
+        const w = Math.ceil((b.width + 2 * nm.reach) * dpr) + 2, h = Math.ceil((b.height + 2 * nm.reach) * dpr) + 2;
+        const x0 = Math.round(DX(b.left) - dl) - ox, x1 = Math.round(DX(b.right) - dl) - ox, y0 = Math.round(DY(b.top) - dt) - oy, y1 = Math.round(DY(b.bottom) - dt) - oy;
+        const mc = canv(w, h), m = mc.getContext('2d', { willReadFrequently: true });
+        m.save(); m.beginPath(); m.rect(x0, y0, x1 - x0, y1 - y0); m.clip(); m.fillStyle = '#fff';
+        for (const [s, rc, S] of nm.texts) {
+          m.font = fontOf(S); m.setTransform(1, 0, 0, 1, 0, 0);
+          const asc = m.measureText(s).fontBoundingBoxAscent;
+          m.setTransform(dpr, 0, 0, dpr, DX(rc.left) - dl - ox, DY(rc.top + asc) - dt - oy); m.fillText(s, 0, 0);
+        }
+        m.restore();
+        let under = null;
+        if (nm.filt) {  // (the filter's part outside the text: F - S, premultiplied)
+          const fc = canv(w, h), f = fc.getContext('2d', { willReadFrequently: true });
+          f.filter = nm.filt.replace(/(-?\d*\.?\d+)px/g, (z, v) => `${(+v * dpr).toFixed(3)}px`); f.drawImage(mc, 0, 0);
+          const F = f.getImageData(0, 0, w, h), S = m.getImageData(0, 0, w, h), fd = F.data, sd = S.data;
+          for (let i = 0; i < fd.length; i += 4) {
+            const fa = fd[i + 3], sa = sd[i + 3], ua = fa - sa;
+            if (ua <= 0) { fd[i] = fd[i + 1] = fd[i + 2] = fd[i + 3] = 0; continue; }
+            for (let k = 0; k < 3; k++) fd[i + k] = Math.max(0, Math.min(255, Math.round((fd[i + k] * fa - 255 * sa) / ua)));
+            fd[i + 3] = ua;
+          }
+          f.filter = 'none'; f.putImageData(F, 0, 0); under = fc;
+        }
+        names.push({ mc, under, x: ox, y: oy, u0: x0, u1: x1, cs: nm.cs, per: nm.per });
+        hide.push(nick);
+      }
+      for (const run of runs) {
+        const letters = [...run.querySelectorAll('i')].filter(i => !i.classList.contains('oemo'));
+        if (!letters.length) continue;
+        const RS = getComputedStyle(run), IS = getComputedStyle(letters[0]);
+        if (IS.textShadow && IS.textShadow !== 'none') continue;
+        const font = fontOf(IS), col = RS.webkitTextFillColor || RS.color;
+        const mc0 = canv(1, 1).getContext('2d'); mc0.font = font;
+        const asc = mc0.measureText('x').fontBoundingBoxAscent;
+        const cells = []; let cx = 0, cy = 0, rowH = 0, aw = 0;
+        for (const i of letters) {
+          const s = i.textContent; if (!s || !s.trim()) continue;
+          const rs = rangeRects(i, rg); if (!rs.length) continue;
+          const rc = rs[0], mt = mc0.measureText(s);
+          const X = DX(rc.left) - dl, Y = DY(rc.top - (heldY.get(i) || 0) + asc) - dt;
+          const dx = Math.floor(X - mt.actualBoundingBoxLeft * dpr) - 2, dy = Math.floor(Y - mt.actualBoundingBoxAscent * dpr) - 2;
+          const cw = Math.ceil((mt.actualBoundingBoxLeft + mt.actualBoundingBoxRight) * dpr) + 5, ch = Math.ceil((mt.actualBoundingBoxAscent + mt.actualBoundingBoxDescent) * dpr) + 5;
+          if (cx + cw > 2048) { cx = 0; cy += rowH; rowH = 0; }
+          cells.push([cx, cy, cw, ch, dx, dy, +i.style.getPropertyValue('--i') || 0, s, X - dx, Y - dy]);
+          cx += cw; aw = Math.max(aw, cx); rowH = Math.max(rowH, ch);
+        }
+        if (!cells.length) continue;
+        const ac = canv(aw, cy + rowH), a = ac.getContext('2d');
+        a.font = font; a.fillStyle = col;
+        for (const c of cells) { a.setTransform(dpr, 0, 0, dpr, c[0] + c[8], c[1] + c[9]); a.fillText(c[7], 0, 0); }
+        rws.push({ ac, amp: amp * dpr, dur, step, c: cells.map(c => c.slice(0, 7)) });
+        hide.push(run);
+      }
+      if (!names.length && !rws.length && !r.sent) { shown(r); return; }
+      // (bitmaps for the worker)
+      const bms = await Promise.all([...names.flatMap(n => [createImageBitmap(n.mc), n.under ? createImageBitmap(n.under) : null]), ...rws.map(x => createImageBitmap(x.ac))]);
+      if (seq !== r.seq || !recs.has(r.id) || !li.isConnected) { for (const b of bms) if (b) b.close(); return; }
+      let k = 0;
+      const nmsg = names.map(n => ({ mask: bms[k++], under: bms[k++], x: n.x, y: n.y, u0: n.u0, u1: n.u1, cs: n.cs, per: n.per }));
+      const rmsg = rws.map(x => ({ atlas: bms[k++], amp: x.amp, dur: x.dur, step: x.step, c: x.c }));
+      const tr = bms.filter(Boolean);
+      if (!r.wrap) {
+        r.wrap = document.createElement('span'); r.wrap.className = 'ofxw'; r.wrap.setAttribute('aria-hidden', 'true');
+        r.cv = document.createElement('canvas'); r.wrap.append(r.cv);
+      }
+      if (!r.wrap.isConnected) li.append(r.wrap);
+      li.classList.add('ofx');
+      const st = r.cv.style;  // (against the line's box as measured: the canvas moves with it)
+      r.wrap.style.overflowClipMargin = `${P + 1}px`;
+      st.left = `${dl / dpr - lr.left}px`; st.top = `${dt / dpr - lr.top}px`; st.width = `${W / dpr}px`; st.height = `${H / dpr}px`;
+      worker();
+      const m = { op: 'set', id: r.id, w: W, h: H, names: nmsg, runs: rmsg };
+      if (!r.sent) { const o = r.cv.transferControlToOffscreen(); m.cv = o; tr.push(o); r.sent = true; }
+      post(m, tr);
+      if (!r.vis) post({ op: 'vis', id: r.id, on: false });
+      for (const e of r.hide) if (!hide.includes(e)) e.classList.remove('fxh');  // (a part no longer drawn here: its DOM glyphs back)
+      r.hide = hide;
+    }
+    // (lines gone from the log: their canvases dropped; a change inside a line (a rank prefix, a reaction, an edit): drawn again)
+    new MutationObserver(ms => {
+      for (const m of ms) {
+        if (m.target === logEl) { for (const n of m.removedNodes) { const r = ofLi.get(n); if (r) del(r); } continue; }
+        const li = m.target.closest ? m.target.closest('li') : m.target.parentElement && m.target.parentElement.closest('li');
+        const r = li && ofLi.get(li);
+        if (!r || !r.sent) continue;
+        if ([...m.addedNodes, ...m.removedNodes].every(n => n === r.wrap || (n.parentNode === r.wrap) || n.nodeName === 'CANVAS')) continue;
+        soon(r);
+      }
+    }).observe(logEl, { childList: true, subtree: true, characterData: true });
+    const again = () => { for (const r of recs.values()) if (r.sent) soon(r); };
+    // (the log's width changed (a resize, the layout): every line again. One observer for the log, not one a line: an
+    // observer a line was ~30 ms/s at 4x of per-frame checks; a line changes size only with the log's width or its own
+    // content, which the mutation observer above sees)
+    if (window.ResizeObserver) { let lw = -1; new ResizeObserver(() => { const w = logEl.clientWidth; if (w !== lw) { const was = lw; lw = w; if (was >= 0) again(); } }).observe(logEl); }
+    if (document.fonts && document.fonts.addEventListener) document.fonts.addEventListener('loadingdone', again);
+    { let mq = null; const dprWatch = () => { if (mq) mq.removeEventListener('change', dprWatch); mq = matchMedia(`(resolution: ${window.devicePixelRatio || 1}dppx)`); mq.addEventListener('change', dprWatch); again(); };
+      try { mq = matchMedia(`(resolution: ${window.devicePixelRatio || 1}dppx)`); mq.addEventListener('change', dprWatch); } catch (e) {} }
+    return {
+      on: true, add,
+      vis(li, on) { const r = ofLi.get(li); if (!r || r.vis === on) return; r.vis = on; if (r.sent) post({ op: 'vis', id: r.id, on }); },
+      // (a clip page: the picture's time, each frame; null: back to the wall clock)
+      clock(t) { if (t === pic) return; pic = t; if (wk) post({ op: 'clock', t }); },
+      n: () => recs.size,
+    };
+  })();
   const overOn = $('#chatover_on');
   overOn.checked = store.get('mbaa-chat-over', true);
   over.hidden = !overOn.checked;
@@ -2028,7 +2341,7 @@
     const orig = l.reply && c ? c.lines.find(x => x.msgid === l.reply) : null;
     if (!l.self && (mentionsMe(l.text) || (orig && orig.self))) li.classList.add('ment');
     // (no character picked: no icon at all, rather than an empty square)
-    if (validChara(l.chara)) li.append(iconCanvas('cico', 48, l.chara, l.moon));
+    if (validChara(l.chara)) li.append(iconImg('cico', 48, l.chara, l.moon));
     const body = document.createElement('span'); body.className = 'cbody';
     if (l.reply) {  // a reply: "↪ Name: snippet" (a click goes to the original while it is loaded)
       const q = document.createElement('span'); q.className = 'crq';
@@ -2490,7 +2803,9 @@
     else c.lines.push(l);
     if (c.lines.length > MAXLINES) { c.lines.splice(0, c.lines.length - MAXLINES); chanTrim(c); }
     if (key(name) !== key(shown)) { if (!l.hist && !l.sys && !l.self) { c.unread++; tabs(); } badge(); return; }
-    const stick = logEl.scrollHeight - logEl.scrollTop - logEl.clientHeight < 30;
+    // (at the bottom: the scroll handler's own answer, not a layout read per line; the scroll to the new bottom once a frame,
+    // stickSoon: a line no longer forces a layout of the log as it comes, perf plan RT2)
+    const stick = logStick;
     if (l.hist) renderSoon();
     else {
       comboLink(c, l, c.lines.length - 1);
@@ -2499,13 +2814,14 @@
       else if (l.head) renderSoon();
       else { logEl.append(lineEl(l)); if (logEl.children.length > MAXLINES) { if (ownIO) ownIO.unobserve(logEl.firstChild); logEl.firstChild.remove(); } if (lineStyle(l)) ownCap(); }
     }
-    if (stick || l.self) { logEl.scrollTop = logEl.scrollHeight; logStick = true; }
+    if (stick || l.self) { logStick = true; stickSoon(); }
     if (!l.hist) { markRead(c); badge(); }
     // (a match channel's comments: on its timeline, tlAdd above, while watching back (DVR); following live, as they
     // arrive, as #melty's: on the wall clock, so they keep crossing through the result screen, a character select and
     // the switch to the next game, where the stream position stops or starts again)
     if (!l.hist && onPic && (!isMatch(name) || following())) danmaku(l);
   }
+  const stickSoon = () => { if (!stickRaf) stickRaf = requestAnimationFrame(() => { stickRaf = 0; if (logStick) logEl.scrollTop = logEl.scrollHeight; }); };
   let renderPend = 0;  // (a match's whole history arrives line by line: one redraw for the lot)
   const renderSoon = () => { if (!renderPend) renderPend = setTimeout(() => { renderPend = 0; render(); }, 0); };
   const sys = (text, name) => addLine(name || shown, { sys: true, text, time: new Date() });
@@ -2886,6 +3202,9 @@
     if (!body) return;
     let box = body.querySelector('.creacts');
     const r = c.reacts.get(msgid);
+    // (a chip row added or removed changes the line's height: a reader at the bottom stays there, as for a new line;
+    // the ResizeObserver only sees the log's own box, not its content growing)
+    if (logStick) stickSoon();
     if (!r || !r.size) { if (box) box.remove(); return; }
     if (!box) { box = document.createElement('span'); box.className = 'creacts'; body.append(box); }
     // (a click toggles yours: one per person)
@@ -5057,7 +5376,7 @@
   mlogBtn.onclick = e => { e.stopPropagation(); if (modFor === 'modlog' && !modm.hidden) modClose(); else modlogOpen(mlogBtn); };
   // ---- play: host a match from the site, or join one by code (user rulings 2026-11-03; tools/web/host_links.mjs) ----
   // Host: the Worker gives a signed-in viewer a one-time token; <app>:host/<token> opens their game hosting; the game
-  // registers its code with the token and this panel shows it (claim), with the share link /j/NNNN. Join is free.
+  // registers its code with the token and this panel shows it (claim), with the share link /j/<code>. Join is free.
   // "Open in" (PovertyCaster / CCCaster) is remembered ('hc.app', the share page's key too).
   {
     const HC_URL = location.pathname.replace(/\/[^/]*$/, '') + '/hc';
@@ -5106,9 +5425,11 @@
         pop.append(r);
       }
       const j = el('div', 'row'); j.append(el('span', 'dim', 'Join with a code'));
-      const inp = el('input'); inp.inputMode = 'numeric'; inp.maxLength = 4; inp.placeholder = '4821'; inp.setAttribute('aria-label', 'host code');
+      // (codes: CCCaster K7QX, a letter then 3 letters / digits without I O 0 1, any case; PovertyCaster rooms 1000-9999)
+      const inp = el('input'); inp.maxLength = 4; inp.placeholder = 'K7QX'; inp.autocapitalize = 'characters'; inp.spellcheck = false;
+      inp.setAttribute('autocomplete', 'off'); inp.setAttribute('aria-label', 'host code');
       const go = el('button', '', 'Join'); go.type = 'button';
-      const join = () => { const c = inp.value.trim(); if (/^[1-9]\d{3}$/.test(c)) open(`${scheme()}:join/${c}`); else inp.focus(); };
+      const join = () => { const c = inp.value.trim().toUpperCase(); if (/^(?:[A-HJ-NP-Z][A-HJ-NP-Z2-9]{3}|[1-9]\d{3})$/.test(c)) open(`${scheme()}:join/${c}`); else inp.focus(); };
       go.onclick = join; inp.onkeydown = e => { if (e.key === 'Enter') join(); };
       j.append(inp, go); pop.append(j);
     }
@@ -5307,6 +5628,7 @@
     if (!r || f == null || !clip.j) return;
     if (r.a !== clip.a) { clip.a = r.a; clip.n = -1; clipOv(); }  // (the clip moved to its fight start's frames: viewer.js clipFix)
     NFX.tick();  // (the column's name styles at the picture's time: NFX.picClock, clipMode)
+    FX.clock(NFX.now());  // (and the name worker's)
     // the column: the lines said up to the picture's frame
     let n = 0;
     while (n < clip.all.length && clip.a + clip.all[n].o <= f) n++;
@@ -5381,7 +5703,7 @@
 
   if (CLIPM) clipMode(CLIPM);
   else { tabs(); render(); start(); }
-  window.mbaaChat = { clipLine, clipState: () => ({ n: clip.n, a: clip.a, all: clip.all.length, ids: clip.all.map(l => tl.entries.find(e => e.l === l)).map(e => e && e.c ? e.c.gid : 0),
+  window.mbaaChat = { clipLine, fx: { on: FX.on, n: FX.n, clock: t => FX.clock(t) }, clipState: () => ({ n: clip.n, a: clip.a, all: clip.all.length, ids: clip.all.map(l => tl.entries.find(e => e.l === l)).map(e => e && e.c ? e.c.gid : 0),
     lines: [...logEl.querySelectorAll('li[data-clip-i]')].map(li => +li.dataset.clipI) }), nicoMax: n => { NICO_ON_SCREEN = n; }, dmText: t => dmTextOf({}, t), dmLine: l => dmMake(l, 0).text, emotes: () => [...EMOTES.keys()], emoteReady: n => !!(EMOTES.get(n) && emoteReady(EMOTES.get(n))), swellMap: swells, ovReset: () => { dmClear(nico); swellClear(); }, ovRestored: () => { swellClear(); glovReady(); }, irc, auth, nameOk, chans, prof, danmaku, say, nico, tl, clockPos, localOf, posOf, nowOf, feed: raw => on(parse(raw)), spread: () => spread, owner: () => ({ acct: ownAcct, spec: styleSpec(ownStyle) }), styles: () => Object.fromEntries([...styles.values()].map(x => [x.acct, styleSpec(x.st)])), mayStyle: () => mayStyle(), picSet, md: mdPlain, mirc: t => mircNodes(t).map(n => n.outerHTML || n.textContent).join(''),
     idle: ms => { idleMs = ms; }, swells: () => [...swells.values()].filter(x => x.el).map(x => ({ e: x.e, n: x.count, size: parseFloat(x.em.style.fontSize), op: x.el.style.opacity })), typingTimes: { TYPE_EVERY, TYPE_TTL }, show: name => { chan(name); shown = name; tabs(); render(); }, status: () => ({ connected: irc.registered, nick: irc.nick, caps: [...irc.caps], shown, matchChan }) };  // (tests)
 })();

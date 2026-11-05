@@ -18,7 +18,7 @@
 <meta name="twitter:description" content="Watch Melty Blood Actress Again Current Code replays in your browser, frame-exact.">
 <meta name="twitter:image" content="https://watch.meltyblood.org/preview.png">
 <meta name="mbaa-manifest" content="2a2e2bac19a8">
-<meta name="mbaa-chatjs" content="chat.js?v=5a5b5d8d36a0">
+<meta name="mbaa-chatjs" content="chat.js?v=9a6f13d9ab36">
 <meta name="mbaa-announcer" content="announcer/neco.bin?v=932b15248e89">
 <link rel="manifest" href="site.webmanifest">
 <link rel="icon" href="icon-192.png">
@@ -240,6 +240,10 @@
                align-items: center; justify-content: center; gap: 6px 12px; padding: 6px 10px; box-sizing: border-box;
                background: #12121cf0; border: 1px solid #50c8ff66; border-radius: 10px; box-shadow: 0 8px 24px #000a; font-size: 12px; }
   #clippanel[hidden] { display: none; }
+  /* (clip panel zoomed: the timeline shows the clip's round, not the whole set; viewer.js tlView) */
+  #transportsec .timeline.zoom #marks { box-shadow: inset 0 0 0 1px #50c8ff99; border-radius: 2px; }
+  #clippanel #cpzoom.on { border-color: #50c8ff99; }
+  #clippanel #cpzoom .i[hidden] { display: none; }
   #clippanel select { height: 28px; font-size: 12px; padding: 0 4px; background: var(--btn, #1c2230); color: inherit; border: 1px solid var(--line, #3a4050); border-radius: 4px; }
   body.mob #clippanel select { height: 36px; }
   .stage.exporting #canvas, .stage.exporting #overlay { visibility: hidden; }
@@ -800,6 +804,7 @@
     <div class="timeline"><canvas id="marks"></canvas><input id="seek" type="range" min="0" max="1" value="0" step="1" aria-label="seek"><div id="cliph" hidden><button class="ch" id="chA" role="slider" aria-label="clip in point" title="Clip in point: drag; arrows nudge 1 frame (Shift: 1 s)"></button><button class="ch" id="chB" role="slider" aria-label="clip out point" title="Clip out point: drag; arrows nudge 1 frame (Shift: 1 s)"></button></div></div>
     <div id="clippanel" role="group" aria-label="clip" hidden>
       <span class="cprange"><b id="cpa">0:00.0</b> &ndash; <b id="cpb">0:00.0</b><span id="cplen"></span></span>
+      <span class="cpg"><button class="txt on" id="cpzoom" title="Show the whole set on the timeline (Z)"><i class="i i-smaller"></i><i class="i i-full" hidden></i><span class="zl">Whole set</span></button></span>
       <span class="cpg"><span class="lbl">in</span><button data-nudge="a,-1" title="In point one frame earlier">&minus;1f</button><button data-nudge="a,1" title="In point one frame later">+1f</button></span>
       <span class="cpg"><span class="lbl">out</span><button data-nudge="b,-1" title="Out point one frame earlier">&minus;1f</button><button data-nudge="b,1" title="Out point one frame later">+1f</button></span>
       <span class="cpg"><button class="txt" id="cplink" title="Copy a link that plays just this clip (C)"><i class="i i-share"></i>Copy link</button><button class="txt" id="cpsave" title="Save the clip as an MP4 video; again to stop (E)"><i class="i i-film"></i>Save MP4</button><button class="txt" id="cpclear" title="Clear the clip (Esc)"><i class="i i-x"></i>Clear</button></span>
@@ -932,8 +937,8 @@
   </div>
 </div>
 </div>
-<script src="mbaa.js?v=ae7607fd05fa"></script>
+<script src="mbaa.js?v=7f0a3fb80067"></script>
 <script src="bgm_stream.js?v=407ac29e5c89"></script>
-<script src="viewer.js?v=0bc99e2f88ac"></script>
+<script src="viewer.js?v=95053e520d34"></script>
 </body>
 </html>
