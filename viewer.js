@@ -1989,7 +1989,12 @@ async function liveList() {
   const r = await liveFetch(`${LIVE}/live/list`);
   if (!r.ok) throw new Error(`HTTP ${r.status}`);
   const l = await r.json();
+  // (a name the bridge learnt since the panel was drawn (a joiner's, from the hosts list): the panel redrawn from this
+  // read at once, not at its next 15 s refresh: user 2026-11-05, "Ciel" listed while the card and the banner had the name)
+  const nk = x => JSON.stringify((x || []).map(m => [m.id, m.names]));
+  const renamed = liveListLast && nk(liveListLast.l) !== nk(l) && liveListLast.l.length === l.length;
   liveListLast = { at: performance.now(), l };
+  if (renamed && !liveListDrawing) liveListShow(l).catch(() => {});
   return l;
 }
 let liveListLast = null;  // {at, l}: the newest list read (an entry from it is fresh for LIVE_FRESH ms)
@@ -3302,7 +3307,14 @@ function liveSide(m, p) {
 }
 let liveListDeferred = false;
 document.addEventListener('visibilitychange', () => { if (!document.hidden && liveListDeferred) { liveListDeferred = false; liveListShow(); } });
-async function liveListShow() {
+let liveListDrawing = false;
+// given: a list just read (liveList's redraw): drawn without a fetch or a next refresh of its own
+async function liveListShow(given = null) {
+  if (liveListDrawing && given) return;
+  liveListDrawing = true;
+  try { await liveListDraw(given); } finally { liveListDrawing = false; }
+}
+async function liveListDraw(given) {
   const sec = document.getElementById('livesec'), ol = document.getElementById('liveitems');
   if (!LIVE_FEED) { sec.hidden = true; return; }
   // a hidden page asks for no list (a phone's radio woken every 15 s for a list nobody sees): asked again once it is back
@@ -3310,7 +3322,8 @@ async function liveListShow() {
   let l = [];
   // (a failed fetch, a phone's network dropping one request, keeps the list as it is and asks again in 5 s: it emptied
   // and hid the whole list for 15 s)
-  try { l = await liveList(); } catch (e) { if (ol.children.length) { wTimeout(liveListShow, 5000); return; } }
+  if (given) l = given;
+  else try { l = await liveList(); } catch (e) { if (ol.children.length) { wTimeout(liveListShow, 5000); return; } }
   try { await playersArt(); } catch (e) {}
   cardPreload(l);
   sec.hidden = !l.length;
@@ -3380,7 +3393,7 @@ async function liveListShow() {
     }
   if (!l.some(m => liveSrc && liveSrc.id === m.id)) liveWatching(0);
   marquee(ol, '.lnm:not(.mq)');
-  wTimeout(liveListShow, 15000);
+  if (!given) wTimeout(liveListShow, 15000);
 }
 // the received records by index (each the longest so far), kept outside the game's memory: a seek's keyframe restore
 // rolls the game's copy back to what had arrived then, and liveRefeed hands it everything again
