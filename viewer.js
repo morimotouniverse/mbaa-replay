@@ -229,6 +229,51 @@ async function openObject(buf, z = null) {
   return new Uint8Array(await new Response(s).arrayBuffer());
 }
 const net = window.mbaaNet = { objects: 0, bytes: 0, cached: 0 };
+// The file pipeline in workers (web/shell/file_worker.js; 11-04 live-switch work, rescued 2026-11-06): fetch (with the
+// Cache Storage copy), decrypt and inflate off this thread, the plain bytes transferred back; a pack is fetched once for
+// all of its files a load asks for. decodeObject already moves decrypt + inflate off this thread; this also moves the
+// fetch, the store's copy and the fallback copy. A worker that fails turns the pool off: this thread's path as before.
+// on by default (user 2026-11-06, after artifacts/xz_check/file_worker/RESULTS.md); ?fileworker=0: off
+let filePool = null, filePoolOff = Q.get('fileworker') === '0' || typeof Worker === 'undefined' || typeof DecompressionStream === 'undefined';
+function fileJob(h, parts, z = null) {
+  if (filePoolOff || !cryptoKey) return Promise.reject(new Error('no file workers'));
+  if (!filePool) {
+    const v = ((document.querySelector('script[src^="viewer.js"]') || {}).src || '').split('?')[1] || '';
+    const n = Math.max(1, Math.min(3, (navigator.hardwareConcurrency || 2) - 1));
+    filePool = { ws: [], jobs: new Map(), id: 0, rr: 0 };
+    try {
+      for (let i = 0; i < n; i++) {
+        const w = new Worker('file_worker.js' + (v ? `?${v}` : ''));
+        w.onmessage = ({ data: m }) => {
+          const j = filePool && filePool.jobs.get(m.id);
+          if (!j) return;
+          filePool.jobs.delete(m.id);
+          if (m.net) { net.bytes += m.net.bytes; net.cached += m.net.cached; if (m.net.bytes) net.objects++; }
+          m.err ? j.rej(new Error(`object ${j.h}: ${m.err}`)) : j.res(m.bufs.map(b => new Uint8Array(b)));
+        };
+        w.onerror = e => { e.preventDefault(); fileOff('worker failed: ' + (e.message || 'no script')); };
+        w.postMessage({ key: cryptoKey });
+        filePool.ws.push(w);
+      }
+    } catch (e) { fileOff(String(e)); return Promise.reject(e); }
+  }
+  return new Promise((res, rej) => {
+    const id = ++filePool.id;
+    filePool.jobs.set(id, { res, rej, h });
+    filePool.ws[filePool.rr++ % filePool.ws.length].postMessage({ id, url: new URL(`${BUNDLE}o/${h.slice(0, 2)}/${h}`, location.href).href, parts, z });
+  });
+}
+// the pool off: every job waiting fails over to this thread's path (the callers fall back on a rejection)
+function fileOff(why) {
+  if (filePoolOff) return;
+  filePoolOff = true;
+  console.warn('file workers off:', why);
+  if (!filePool) return;
+  for (const w of filePool.ws) w.terminate();
+  for (const j of filePool.jobs.values()) j.rej(new Error(why));
+  filePool = null;
+}
+
 // Bundle objects are content-addressed (the name is a hash of the content), so a stored copy never goes stale: they
 // are kept in the Cache Storage API, and a character / stage seen before loads with no network at all. (Pages' own
 // HTTP cache keeps them only 10 minutes.)
@@ -241,7 +286,10 @@ const objCacheReady = (async () => {
 if (navigator.storage && navigator.storage.persist) navigator.storage.persisted().then(p => p || navigator.storage.persist()).catch(() => {});
 if ('serviceWorker' in navigator && /^(replay|watch)\.meltyblood\.org$/.test(location.hostname))
   navigator.serviceWorker.register('/sw.js').catch(e => console.warn('service worker:', e));
-async function fetchObject(h, z = null) { return openObject(await fetchRaw(h), z); }
+async function fetchObject(h, z = null) {
+  const w = filePoolOff ? null : await fileJob(h, [null], z).catch(() => null);
+  return w ? w[0] : openObject(await fetchRaw(h), z);
+}
 // an object or a pack (tools/web/bundle_pack.py: a group's small objects back to back) as stored, from this device's
 // store or the network
 async function fetchRaw(h) {
@@ -422,9 +470,23 @@ async function fetchAll(man, paths, label, quiet = false) {
   const queue = [...paths].filter(p => !cache.has(p)).sort((a, b) => big(b) - big(a));
   let done = 0, bytes = 0;
   const n = queue.length, packs = new Map();  // pack -> its bytes (one fetch for all of its files in this call)
+  // (file workers: a pack once for all of its files in this call -> their plain bytes, by path; null: this thread's path)
+  const packParts = new Map(), packOut = new Map();
+  if (!filePoolOff) for (const p of queue) { const f = man.files[p]; if (f && f.pk && !f.plain) { const l = packParts.get(f.pk[0]) || []; l.push(p); packParts.set(f.pk[0], l); } }
+  const viaPack = (h, p) => {
+    if (!packOut.has(h)) {
+      const ps = packParts.get(h) || [p];
+      packOut.set(h, fileJob(h, ps.map(q => [man.files[q].pk[1], man.files[q].pk[2], man.files[q].z || null]))
+        .then(bufs => new Map(ps.map((q, i) => [q, bufs[i]]))).catch(() => null));
+    }
+    return packOut.get(h).then(m => m && m.get(p));
+  };
   const one = async p => {
     const f = man.files[p];
     let data;
+    if (!f.plain && !filePoolOff && (data = await (f.pk ? viaPack(f.pk[0], p) : fileJob(f.o, [null], f.z).then(b => b[0]).catch(() => null)))) {
+      cache.set(p, data); return;
+    }
     if (f.plain) {
       const r = await fetch(f.plain);
       if (!r.ok) { console.warn(`${p}: HTTP ${r.status}`); return; }
