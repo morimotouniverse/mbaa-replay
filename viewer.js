@@ -5878,7 +5878,9 @@ function clipControls() {
 const REP_BATTLE_AT = 566;
 const LIVE_SIGNIN = 'sign in to share live clips (the chat’s Sign in)';
 const liveClipCan = () => { const C = window.mbaaChat; return !!(C && C.irc && C.irc.account); };
-const liveClipPending = s => !!(s && s.liveSrc && s.liveSrc.clipPend && s.clip && s.liveSrc.clipPend.clip === s.clip && !s.liveSrc.clipPend.link);
+// (a pending link is for the clip as it was when Copy was pressed: moving its in / out points makes it another clip)
+const clipSame = (p, c) => !!(p && c && p.clip === c && p.game === c.game && p.a === c.a && p.b === c.b);
+const liveClipPending = s => !!(s && s.liveSrc && s.liveSrc.clipPend && clipSame(s.liveSrc.clipPend, s.clip) && !s.liveSrc.clipPend.link);
 // the game at the clip and the chat timeline's local frame - viewer frame (clipNow: the picture is at the clip's out point)
 function liveClipWhere(s) {
   const L = s.liveSrc, g = call(s, 'viewer_spectate_game'), out = { game: g >= 0 ? g : L.firstGame, loc0: null };
@@ -5952,7 +5954,7 @@ async function liveClipLink(s) {
   const L = s.liveSrc, c = s.clip;
   if (!c) { status('live: take a clip (X) to share a moment of a live match'); return; }
   if (!liveClipCan()) { status(`live clip: ${LIVE_SIGNIN}`); return; }
-  if (L.clipPend && L.clipPend.clip === c) {  // (its link is there: copy it now, a click being a user gesture)
+  if (L.clipPend && clipSame(L.clipPend, c)) {  // (its link is there: copy it now, a click being a user gesture)
     if (L.clipPend.link) return liveClipCopy(L.clipPend.link);
     status(L.clipPend.busy ? 'live clip: making the link…' : 'live clip: the link is made when this game ends (its replay is saved then): Esc to watch on, it is copied then');
     return;
