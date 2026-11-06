@@ -2065,6 +2065,9 @@ const liveExtApi = {
     stageKey = '';
     stageShow(session).catch(() => {});
     radioExtTile();
+    // (the link card's picture follows the stage: a new one 4 s on, once the stage is drawn (a 3D one's textures upload
+    // over a few frames); none of the routine ones meanwhile, so no frame of the old stage lands after the switch)
+    liveExt.thumbDue = performance.now() + 4000;
     return liveExt.stage ? liveExt.stage.n : null;
   },
 };
@@ -4807,10 +4810,14 @@ function liveBegin(s) {  // play(): after viewer_play
       const battle = s.M.HEAP32[0x54EEE8 >> 2] === 1;
       if (!battle) s.battleAt = null;
       else if (s.battleAt == null) s.battleAt = performance.now();
-      if (s.liveSynced && battle && !hidden() && !s.seeking && performance.now() - s.battleAt > 4000
-          && performance.now() - (s.liveThumbAt || -1e9) > 120000 && !cardDark()) {
-        s.liveThumbAt = performance.now();
-        grabCard().jpeg.then(b => b && fetch(`${LIVE}/live/${L.id}/thumb`, { method: 'POST', body: b }).catch(() => {}));
+      const due = liveExt.thumbDue, extNow = due != null && performance.now() >= due;
+      if (s.liveSynced && battle && !hidden() && !s.seeking && performance.now() - s.battleAt > 4000 && !cardDark()
+          && (extNow || (due == null && performance.now() - (s.liveThumbAt || -1e9) > 120000))) {
+        s.liveThumbAt = performance.now(); liveExt.thumbDue = null;
+        // (ext: the extension this frame shows; the bridge keeps a frame of the match's current one over an older one's. In the
+        // query, not a header: a custom header would need a CORS preflight the bridge does not answer)
+        grabCard().jpeg.then(b => b && fetch(`${LIVE}/live/${L.id}/thumb?ext=${encodeURIComponent(liveExt.v || '')}`,
+          { method: 'POST', body: b }).catch(() => {}));
       }
       // (not at the retry menu: it has no stream frames to count, the players' choice comes when they make it, and
       // CCCaster's spectator never waits there: the game shows the win quote meanwhile)
