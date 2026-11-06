@@ -109,7 +109,6 @@
   body.side .main { grid-template-columns: var(--w) 330px; grid-template-rows: auto auto; grid-template-areas: "stage ctl" "tr ctl"; }
   body.side #controls { align-self: center; }
   #transportsec { width: var(--w); box-sizing: border-box; padding: 2px 4px; }
-  .clock #livebtn { margin-left: 8px; align-self: center; }
   body:not(.mob) .mobonly, body:not(.haschat) .chatonly { display: none !important; }
   .i-chat { --m: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath d='M3 4h18v12H8l-5 4zm4 5v2h2V9zm4 0v2h2V9zm4 0v2h2V9z' fill-rule='evenodd'/%3E%3C/svg%3E"); }
   .i-menu { --m: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Ccircle cx='5' cy='12' r='2.4'/%3E%3Ccircle cx='12' cy='12' r='2.4'/%3E%3Ccircle cx='19' cy='12' r='2.4'/%3E%3C/svg%3E"); }
@@ -334,7 +333,6 @@
   /* (a live page's LIVE pill beside the time: compact, and the clock never shrinks under its content: the pill was drawn
      over the previous-round button on every phone, 5-84 px; the bar's buttons give the room instead) */
   body.mob .tbar .clock { flex: none; gap: 5px; padding-right: 4px; }
-  body.mob .clock #livebtn { margin-left: 0; padding: 3px 7px; }  body.mob .livebtn::before { display: none; }
   @media (max-width: 380px) { body.mob .tbar .rl { display: none; } body.mob.live .clock #time { display: none; } body.mob .tbar button { min-width: 25px; padding: 0 2px; } }
   body.mob :is(.tg-view, #tclip, .tbar .deskonly, .tbar .tbreak) { display: none !important; }
   body.mob .tbar .tg.sep { border: 0; margin: 0; padding: 0; }
@@ -673,9 +671,9 @@
                 counter-increment: q; font-size: 12px; }
   #plitems li::before { content: counter(q); color: var(--faint); font-size: 10.5px; min-width: 1.4em; font-variant-numeric: tabular-nums; }
   #plitems li:hover { background: #ffffff0c; }
-  .livebtn { font-weight: 700; letter-spacing: .06em; padding: 3px 10px; line-height: 16px; font-size: 12px; border-radius: 999px; color: var(--faint); }
-  .livebtn::before { content: '\25CF'; margin-right: 5px; font-size: 9px; vertical-align: 2px; }
-  .livebtn.on { color: #fff; background: var(--accent); }
+  /* (live: End is the way back to live; lit while following it. necoTV #3: the LIVE button went, one row of controls) */
+  body.live #toend.on { color: var(--accent); }
+  body.mob.live .tbar #toend { display: inline-flex !important; }   /* (phones too: it replaced their LIVE button) */
   #liveitems { margin: 0; padding: 0; list-style: none; max-height: 200px; overflow-y: auto; display: flex; flex-direction: column; gap: 2px; }
   #liveitems a { display: block; padding: 4px 8px; border-radius: 8px; color: inherit; text-decoration: none; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   #liveitems a:hover { background: #ffffff0c; }  #liveitems li.cur a { background: #e04a5a22; }
@@ -824,7 +822,7 @@
       <span class="cpg"><button class="txt" id="cplink" title="Copy a link that plays just this clip (C)"><i class="i i-share"></i>Copy link</button><button class="txt" id="cpsave" title="Save the clip as an MP4 video; again to stop (E)"><i class="i i-film"></i>Save MP4</button><button class="txt" id="cpclear" title="Clear the clip (Esc)"><i class="i i-x"></i>Clear</button></span>
     </div>
     <div class="tbar">
-      <div class="clock"><span id="time">0:00.0</span><span class="hint" id="dur"></span><span id="fc"></span><button id="livebtn" class="livebtn" title="Back to live, ~4 s behind the players (L)" hidden>LIVE</button></div>
+      <div class="clock"><span id="time">0:00.0</span><span class="hint" id="dur"></span><span id="fc"></span></div>
       <span class="tg tg-seek sep" id="tseek">
         <button id="tostart" class="deskonly" data-act="start" title="Start (Home)"><i class="i i-prev"></i></button>
         <button id="prevr" title="Previous round ([ or Page Up)"><i class="i i-rewind"></i><span class="rl">R</span></button>
@@ -953,6 +951,6 @@
 </div>
 <script src="mbaa.js?v=65eff4f16631"></script>
 <script src="bgm_stream.js?v=407ac29e5c89"></script>
-<script src="viewer.js?v=79330af38be5"></script>
+<script src="viewer.js?v=dc3bdb17755e"></script>
 </body>
 </html>

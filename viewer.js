@@ -4493,12 +4493,12 @@ if (Q.get('swhash') === '1') window.__mbaaStateRows = async (k, n) => {
   return { from: f0, csv: s.M.ccall('viewer_hash_take', 'string', [], []) };
 };
 // live: following the stream (paced, ~LIVE_BEHIND frames behind it); DVR (after a seek, a step or a pause): the replay
-// controls on everything received so far, no pacing; the LIVE button goes back
+// controls on everything received so far, no pacing; End (or L) goes back
 function liveFollow(s, on) {
   s.liveFollow = on;
   if (!on && s.liveFF) { s.liveFF = false; call(s, 'viewer_speed', ui.speed); }
   if (!on && s.liveTrim) { s.liveTrim = false; call(s, 'viewer_rate', 1); }
-  document.getElementById('livebtn').classList.toggle('on', on);
+  document.getElementById('toend').classList.toggle('on', on);
 }
 async function liveGoLive() {
   const s = session;
@@ -5449,7 +5449,7 @@ function toggleClipZoom() {
 // the seek actions with a key and a button (the bar, the phone sheet): 1 s = 60 frames, 5 s = 300
 const ACT = {
   start: () => requestSeek(1),
-  end: () => { if (session && session.tl) requestSeek(tlMax(session.tl)); },
+  end: () => { if (session && session.liveSrc) liveGoLive(); else if (session && session.tl) requestSeek(tlMax(session.tl)); },   // (live: back to live, paced)
   back5: () => stepBy(-300, false), back1s: () => stepBy(-60, false), fwd1s: () => stepBy(60, false), fwd5: () => stepBy(300, false),
 };
 const VIEW_TOGGLES = ['boxes', 'inputs', 'hitstun', 'hud', 'names', 'music'];
@@ -5600,7 +5600,7 @@ function controls() {
     else if (k === '{') setClip('a');
     else if (k === '}') setClip('b');
     else if (k === 'Escape') { if (fx) fx.cancel = true; else if (rec) stopRecording(false); else if (!document.getElementById('help').hidden) toggleHelp(); else if (!document.fullscreenElement && document.querySelector('.stage.fs')) setFs(false); else clearClip(); }
-    else if ((k === 'l' || k === 'L') && live) liveGoLive();  // (live: the LIVE button; a replay: loop)
+    else if ((k === 'l' || k === 'L') && live) liveGoLive();  // (live: back to live, as End; a replay: loop)
     else if (k === 'l' || k === 'L') toggleLoop();
     else if (k === 'e' || k === 'E') exportVideo();
     else if (k === 'm' || k === 'M') toggleMute();
@@ -7520,8 +7520,6 @@ async function main() {
   liveListShow();
   if (Q.get('live')) {  // spectating: the live controls and the player block; the replay-only controls go (.replayonly)
     document.body.classList.add('live');
-    document.getElementById('livebtn').hidden = false;
-    document.getElementById('livebtn').onclick = e => { e.target.blur(); liveGoLive(); };
   }
   if (/^[A-Za-z0-9_]{4,64}$/.test(Q.get('live') || '')) {  // a live CCCaster match
     // (after an update reload: the match it was on, and where; liveResumeTake)
