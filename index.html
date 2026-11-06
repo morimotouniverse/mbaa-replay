@@ -18,7 +18,7 @@
 <meta name="twitter:description" content="Watch Melty Blood Actress Again Current Code replays in your browser, frame-exact.">
 <meta name="twitter:image" content="https://watch.meltyblood.org/preview.png">
 <meta name="mbaa-manifest" content="2a2e2bac19a8">
-<meta name="mbaa-chatjs" content="chat.js?v=9a6f13d9ab36">
+<meta name="mbaa-chatjs" content="chat.js?v=ef2fcc09bd28">
 <meta name="mbaa-announcer" content="announcer/neco.bin?v=932b15248e89">
 <link rel="manifest" href="site.webmanifest">
 <link rel="icon" href="icon-192.png">
@@ -40,6 +40,8 @@
      window): the picture centred on black, the timeline and transport over its bottom (shown on a tap or a mouse move) */
   .stage.fs { background: #000; display: flex; align-items: center; justify-content: center; width: 100%; height: 100%; }
   .stage.fs:not(:fullscreen) { position: fixed; inset: 0; z-index: 100; height: 100dvh; }
+  /* (the page under it, laid out for the fullscreen picture's width, never scrolls sideways: viewer.js setFs) */
+  html.fsmode { overflow: hidden; }
   .stage.fs canvas#canvas { width: var(--w); box-shadow: none; }
   .stage.fs #overlay { width: var(--w); height: auto; aspect-ratio: 4 / 3; }  /* (left / top: the picture's, viewer.js drawOverlay) */
   .fsbar { position: absolute; left: 0; right: 0; bottom: 0; padding: 18px max(12px, env(safe-area-inset-right)) max(10px, env(safe-area-inset-bottom)) max(12px, env(safe-area-inset-left));
@@ -52,14 +54,13 @@
                                    transform: translateX(-50%) scale(var(--fk)); transform-origin: 50% 100%; }
   @media (min-height: 1300px) { .stage.fs:not(.sidebar) .fsbar { --fk: 1.3; } }
   @media (min-height: 1900px) { .stage.fs:not(.sidebar) .fsbar { --fk: 1.8; } }
-  /* (viewer.js fitStage: room under the picture for the whole bar) the picture at the block's top, the bar under it */
-  .stage.fs.fsroom { align-items: flex-start; padding-top: var(--fstop, 0px); box-sizing: border-box; }
-  .stage.fs.fsroom:not(.sidebar) .fsbar { bottom: auto; top: calc(var(--fstop, 0px) + var(--w) * 3 / 4); padding-top: 6px; background: none; transform-origin: 50% 0; }
+  /* (always over the picture, never under it: hidden, a bar under the picture left an empty strip, necoTV #2; the
+     picture is sized from the whole screen, viewer.js fitStage, so it never moves as the bar comes and goes) */
   /* fullscreen chat (Twitch's): the chat column inside the fullscreen picture's layer, on the right (viewer.js fsChatPlace) */
-  .stage.fs.fschat { padding-right: var(--chatw); box-sizing: border-box; }
-  .stage.fs.fschat > #chatcol { display: flex; position: absolute; right: 0; top: 0; bottom: 0; width: var(--chatw); height: auto;
+  .stage.fs.fschat { padding-right: var(--fschatw); box-sizing: border-box; }
+  .stage.fs.fschat > #chatcol { display: flex; position: absolute; right: 0; top: 0; bottom: 0; width: var(--fschatw); height: auto;
                                 border-radius: 0; border-width: 0 0 0 1px; z-index: 3; }
-  .stage.fs.fschat:not(.sidebar) .fsbar { left: calc((100% - var(--chatw)) / 2); width: calc(max(var(--w), min(100% - var(--chatw), 1180px)) / var(--fk)); }
+  .stage.fs.fschat:not(.sidebar) .fsbar { left: calc((100% - var(--fschatw)) / 2); width: calc(max(var(--w), min(100% - var(--fschatw), 1180px)) / var(--fk)); }
   .fsbar #transportsec { width: 100%; padding: 0; }
   .fsbar #time { font-size: 22px; }  .fsbar :is(#dur, #fc) { font-size: 13px; color: #c8c8d8; }
   .fsbar .tbar button:not(#pause) { min-height: 36px; }
@@ -71,7 +72,7 @@
   .stage.ovl:not(.fs) .fsbar { padding: 34px 12px 8px; background: linear-gradient(transparent, #000a 35%, #000e); }
   .stage.ovl.idle:not(.fs) .fsbar { opacity: 0; pointer-events: none; }
   .stage.ovl.idle:not(.fs) { cursor: none; }
-  .stage.fs.idle { cursor: none; }
+  .stage.fs.idle { cursor: none; }  .stage.fs.idle > #chatcol { cursor: auto; }
   body.mob .fsbar .tbar button { min-width: 44px; min-height: 40px; }
   /* a phone on its side in fullscreen (.sidebar, viewer.js fitStage: phones only, the room beside the 4:3 picture): the
      controls in a column there, always shown */
@@ -884,7 +885,7 @@
       </span>
       <span class="grp">
         <button id="pip" title="Picture in picture: a small window over other apps" hidden><i class="i i-pip"></i></button>
-        <button id="full" title="Fullscreen, integer scaled (F)"><i class="i i-full fs-in"></i><i class="i i-smaller fs-out"></i></button>
+        <button id="full" title="Fullscreen (F)"><i class="i i-full fs-in"></i><i class="i i-smaller fs-out"></i></button>
         <button id="helpb" title="Keyboard shortcuts (?)"><i class="i i-help"></i></button>
       </span>
     </div>
@@ -937,8 +938,8 @@
   </div>
 </div>
 </div>
-<script src="mbaa.js?v=7f0a3fb80067"></script>
+<script src="mbaa.js?v=b86aa6617da9"></script>
 <script src="bgm_stream.js?v=407ac29e5c89"></script>
-<script src="viewer.js?v=95053e520d34"></script>
+<script src="viewer.js?v=2fb6390afb75"></script>
 </body>
 </html>

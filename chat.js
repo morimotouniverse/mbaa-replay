@@ -2797,7 +2797,7 @@ onmessage = ({ data: m }) => {
     // card); the chat keeps the whole line
     if (!l.sys) picSet(l);
     const onPic = !l.sys && !!dmText(l);
-    if (onPic && isMatch(name)) tlAdd(l);
+    if (onPic && isMatch(name)) { try { tlAdd(l); } catch (e) { ovWarn('timeline', e); } }
     // (history arrives oldest first, before any live line of that channel: kept in time order)
     if (l.hist) { let i = c.lines.length; while (i > 0 && c.lines[i - 1].time > l.time) i--; c.lines.splice(i, 0, l); }
     else c.lines.push(l);
@@ -4032,7 +4032,7 @@ onmessage = ({ data: m }) => {
   }
   { const ro = new ResizeObserver(() => { const M = glovSession(); if (M && glov.M === M) glovCanvas(M); });
     const watch = () => { const cv = document.getElementById('canvas'); if (cv && cv !== glov.ro) { if (glov.ro) ro.unobserve(glov.ro); ro.observe(cv); glov.ro = cv; } };
-    watch(); setInterval(() => { watch(); glovReady(); }, 1000);
+    watch(); setInterval(() => { watch(); try { glovReady(); ovCheck(); } catch (e) { ovWarn('tick', e); glov.M = null; } }, 1000);
     window.addEventListener('resize', () => { const M = glovSession(); if (M && glov.M === M) { glov.cv = ''; glovCanvas(M); } }); }
 
   // Live comments (nico): on the wall clock, each entering as it arrives; the compositor runs it to the end
@@ -4074,8 +4074,37 @@ onmessage = ({ data: m }) => {
   function danmaku(l) {
     // (a line with server emotes not loaded yet: shown once they are, or after EMOTE_WAIT as text)
     if (!l.emoWait) { const p = emotesPending(l); if (p) { l.emoWait = true; p.then(() => danmaku(l)); return; } }
-    if (!OVP) return danmaku_(l);
-    const t0 = performance.now(); danmaku_(l); ovp('danmaku', t0);
+    // (a throw anywhere in putting a comment up never stops the overlay: reported once, the overlay set up again from
+    // the page's own lists (ovRecover), the next comment shown as ever)
+    try {
+      if (!OVP) return danmaku_(l);
+      const t0 = performance.now(); danmaku_(l); ovp('danmaku', t0);
+    } catch (e) { ovWarn('comment', e); ovRecover('throw'); }
+  }
+  // the overlay set up again: the renderer's fonts, switches and every comment the page has on it sent again (glovReady
+  // with no instance yet), the swells started afresh; the page's comment lists stay (what is on screen keeps going)
+  let ovRecoveries = 0;
+  function ovRecover(why) {
+    ovRecoveries++;
+    try { swellClear(); } catch (e) { swells.clear(); }
+    glov.M = null; glov.gen = -1;
+    try { glovReady(); } catch (e) { ovWarn('recover', e); glov.M = null; }
+    if (OVP) (window.__ovRecover = window.__ovRecover || []).push([why, performance.now()]);
+  }
+  // Each second: the renderer still has its font and the newest live comment the page put up (a memory restore the
+  // page was not told of, a renderer that dropped its list or font, put back from a snapshot: comments stopped for good
+  // while the chat went on). Either missing: set up again. viewer_ov_colors(id)[0] is 1 when the renderer has comment
+  // id (a lookup, no layout).
+  function ovCheck() {
+    const M = glov.M;
+    if (!M || !overOn.checked || over.hidden || !M._viewer_ov_colors || M !== glovSession()) return;
+    // (its font: viewer_ov_has is 0 for every code point while the renderer has none, so nothing at all is drawn)
+    if (M._viewer_ov_has && glov.font && M._viewer_ov_has(0x41) !== 1) { ovWarn('font', new Error('renderer lost its font')); ovRecover('font'); return; }
+    const now = wallNow(), c = nico.list.findLast ? nico.list.findLast(x => x.gM === M && x.t + x.life > now + 0.5) : null;
+    if (!c) return;
+    let has = 1;
+    try { has = new Float64Array(M.HEAPU8.buffer, M._viewer_ov_colors(c.gid), 3)[0]; } catch (e) { has = 0; }
+    if (has !== 1) { ovWarn('lost', new Error(`renderer lost comment ${c.gid}`)); ovRecover('lost'); }
   }
   function danmaku_(l) {
     if (!overOn.checked || document.visibilityState === 'hidden' || l.gone) return;
@@ -4351,9 +4380,14 @@ onmessage = ({ data: m }) => {
   // arrives out of order), so the layout is the same whenever it is built
   function tlRelayout() {
     if (!tl.st) tl.st = dmStage('dmtl');
-    const cs = tl.entries.filter(e => e.c).map(e => e.c).sort((a, b) => a.t - b.t), spread = spreadOf(), done = [];
-    for (const c of cs) { dmPlace(done.filter(a => a.t + a.life + spread > c.t), c, spread); done.push(c); }
-    for (const c of tl.st.list) if (!cs.includes(c)) { glovDel(c); if (c.el) { c.el.remove(); c.el = null; } }
+    const cs = tl.entries.filter(e => e.c).map(e => e.c).sort((a, b) => a.t - b.t), spread = spreadOf();
+    // (the comments still holding a row at each one's time, in time order: the same as filtering every earlier one,
+    // without going over the whole history again per comment; a match's spam ran into thousands of them, each new line
+    // laying out all of them again: O(n^2) per line, a few seconds a line once it was long)
+    let act = [];
+    for (const c of cs) { act = act.filter(a => a.t + a.life + spread > c.t); dmPlace(act, c, spread); act.push(c); }
+    const keep = new Set(cs);
+    for (const c of tl.st.list) if (!keep.has(c)) { glovDel(c); if (c.el) { c.el.remove(); c.el = null; } }
     tl.st.list = cs; tl.T = -1;
     for (const c of cs) glovPut(c, 1);
   }
@@ -5704,6 +5738,6 @@ onmessage = ({ data: m }) => {
   if (CLIPM) clipMode(CLIPM);
   else { tabs(); render(); start(); }
   window.mbaaChat = { clipLine, fx: { on: FX.on, n: FX.n, clock: t => FX.clock(t) }, clipState: () => ({ n: clip.n, a: clip.a, all: clip.all.length, ids: clip.all.map(l => tl.entries.find(e => e.l === l)).map(e => e && e.c ? e.c.gid : 0),
-    lines: [...logEl.querySelectorAll('li[data-clip-i]')].map(li => +li.dataset.clipI) }), nicoMax: n => { NICO_ON_SCREEN = n; }, dmText: t => dmTextOf({}, t), dmLine: l => dmMake(l, 0).text, emotes: () => [...EMOTES.keys()], emoteReady: n => !!(EMOTES.get(n) && emoteReady(EMOTES.get(n))), swellMap: swells, ovReset: () => { dmClear(nico); swellClear(); }, ovRestored: () => { swellClear(); glovReady(); }, irc, auth, nameOk, chans, prof, danmaku, say, nico, tl, clockPos, localOf, posOf, nowOf, feed: raw => on(parse(raw)), spread: () => spread, owner: () => ({ acct: ownAcct, spec: styleSpec(ownStyle) }), styles: () => Object.fromEntries([...styles.values()].map(x => [x.acct, styleSpec(x.st)])), mayStyle: () => mayStyle(), picSet, md: mdPlain, mirc: t => mircNodes(t).map(n => n.outerHTML || n.textContent).join(''),
+    lines: [...logEl.querySelectorAll('li[data-clip-i]')].map(li => +li.dataset.clipI) }), nicoMax: n => { NICO_ON_SCREEN = n; }, dmText: t => dmTextOf({}, t), dmLine: l => dmMake(l, 0).text, emotes: () => [...EMOTES.keys()], emoteReady: n => !!(EMOTES.get(n) && emoteReady(EMOTES.get(n))), swellMap: swells, ovReset: () => { dmClear(nico); swellClear(); }, ovRecover: () => ovRecover('test'), ovRecoveries: () => ovRecoveries, ovRestored: () => { swellClear(); glovReady(); }, irc, auth, nameOk, chans, prof, danmaku, say, nico, tl, clockPos, localOf, posOf, nowOf, feed: raw => on(parse(raw)), spread: () => spread, owner: () => ({ acct: ownAcct, spec: styleSpec(ownStyle) }), styles: () => Object.fromEntries([...styles.values()].map(x => [x.acct, styleSpec(x.st)])), mayStyle: () => mayStyle(), picSet, md: mdPlain, mirc: t => mircNodes(t).map(n => n.outerHTML || n.textContent).join(''),
     idle: ms => { idleMs = ms; }, swells: () => [...swells.values()].filter(x => x.el).map(x => ({ e: x.e, n: x.count, size: parseFloat(x.em.style.fontSize), op: x.el.style.opacity })), typingTimes: { TYPE_EVERY, TYPE_TTL }, show: name => { chan(name); shown = name; tabs(); render(); }, status: () => ({ connected: irc.registered, nick: irc.nick, caps: [...irc.caps], shown, matchChan }) };  // (tests)
 })();

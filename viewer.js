@@ -5102,7 +5102,8 @@ function controls() {
   // it pauses / plays
   const stageEl = document.getElementById('overlay').parentElement;
   const barOver = () => stageEl.classList.contains('fs') || stageEl.classList.contains('ovl');
-  stageEl.addEventListener('pointermove', e => { if (barOver() && e.pointerType === 'mouse') fsWake(); });
+  // (the mouse in the fullscreen chat column: reading or typing there does not bring the bar back over the picture)
+  stageEl.addEventListener('pointermove', e => { if (barOver() && e.pointerType === 'mouse' && !e.target.closest('#chatcol')) fsWake(); });
   // (the desktop overlay, not fullscreen: the bar goes as the mouse leaves the picture, as on YouTube; paused it stays)
   stageEl.addEventListener('pointerleave', e => {
     if (stageEl.classList.contains('ovl') && !stageEl.classList.contains('fs') && e.pointerType === 'mouse' && !ui.paused && !seekDragging && !clipPanel) { clearTimeout(fsTimer); stageEl.classList.add('idle'); }
@@ -6775,6 +6776,10 @@ let scaleMode = 'auto';
 try { scaleMode = localStorage.getItem('mbaaScale') || 'auto'; } catch (e) {}
 const SIDE_W = 320 + 16;  // the controls panel beside the picture, with its gap
 const FS_SIDE = 212;  // fullscreen: the least room beside the picture for the controls column (with its gap)
+// desktop fullscreen chat (necoTV #2): the column takes the room the full-height 4:3 picture leaves (16:9: a quarter of
+// the width, 480 px at 1080p, 640 at 1440p), at least FS_CHAT_MIN (16:10, 4:3: the picture narrows, black over and
+// under it) and at most FS_CHAT_MAX (21:9, 32:9: black either side of the picture, the column docked right)
+const FS_CHAT_MIN = 300, FS_CHAT_MAX = 640;
 // Chat pages (body.haschat, index.html's layout notes): by the window's shape, 'port' (an upright phone or tablet: the
 // picture on top, chat filling the rest), 'land' (a phone on its side: the picture left, chat right), 'desk' (the chat
 // column right, the controls under the picture). While the on-screen keyboard is up (body.kbd) the shape is kept (it
@@ -6862,8 +6867,8 @@ function fitStage() {
   // (a phone on its side: the picture the full height, the chat the rest, at least 240 px, at most 45 % of the width)
   const fsChatW = full && stage.classList.contains('fschat')
     ? Math.round(fsMob ? Math.min(window.innerWidth * 0.45, Math.max(240, window.innerWidth - window.innerHeight * 4 / 3))
-                       : Math.min(400, Math.max(300, window.innerWidth * 0.22))) : 0;
-  if (fsChatW) root.style.setProperty('--chatw', `${fsChatW}px`);
+                       : Math.min(FS_CHAT_MAX, Math.max(FS_CHAT_MIN, window.innerWidth - window.innerHeight * 4 / 3))) : 0;
+  if (fsChatW) root.style.setProperty('--fschatw', `${fsChatW}px`);  // (its own: --chatw is the page's column)
   const Wwin = full ? window.innerWidth - fsChatW : document.documentElement.clientWidth - 32;
   const H = full ? window.innerHeight : window.innerHeight - 16;
   // a phone in fullscreen with FS_SIDE or more beside the full-height picture (landscape): the controls go there
@@ -6889,7 +6894,9 @@ function fitStage() {
     // high-density screens (phones): a game pixel is already 2+ device pixels, uneven rows are invisible there, and a
     // whole multiple would leave a small picture: fit the width instead (beside the panel: the room there)
     // (fullscreen on such a screen: the whole screen, as large as it fits)
-    const k = dpr >= 2 ? 0 : side ? kSide : kBelow;
+    // Fullscreen, auto: the picture from the whole screen (its height, or the width beside the chat), not a whole
+    // multiple: the bar is over it, so hiding the bar never moves it, and no strip is left empty (necoTV #2)
+    const k = dpr >= 2 || full ? 0 : side ? kSide : kBelow;
     return [k >= 1 ? 640 * k / dpr : full ? Math.min(W, H * 4 / 3) : side ? wSide : wBelow, k >= 1 ? `${k}x` : 'fit'];
   };
   let trH = trAt(Math.min(W, 1280)), r = pick(trH);
@@ -6900,16 +6907,6 @@ function fitStage() {
     r = o;
   }
   setW(r[0], r[1]);
-  // desktop fullscreen with room under the picture for the whole bar (1080p at 2x: 960 + 120): the picture and the
-  // bar as one block, centred, the bar under the picture instead of over its bottom (.fsroom); no room: over it
-  const bar = stage && stage.querySelector('.fsbar');
-  if (bar) {
-    stage.classList.add('fsroom');  // (its compact padding, to measure)
-    const fk = parseFloat(getComputedStyle(bar).getPropertyValue('--fk')) || 1, barH = bar.offsetHeight * fk, picH = r[0] * 3 / 4;
-    const room = full && !sidebar && H - picH >= barH;
-    stage.classList.toggle('fsroom', room);
-    if (room) root.style.setProperty('--fstop', `${Math.floor((H - picH - barH) / 2)}px`);
-  }
 }
 addEventListener('resize', fitStage);
 // the layout's own controls: the phone menu sheet, the chat column's show / hide, the chat profile; the on-screen
@@ -6986,6 +6983,7 @@ function setFs(on) {
   const stage = document.querySelector('.stage'), sec = document.getElementById('transportsec');
   if (stage.classList.contains('fs') === on) return;
   stage.classList.toggle('fs', on);
+  document.documentElement.classList.toggle('fsmode', on);
   // (remembered: a page opened again, or reloaded for a new version, offers it back: fsOfferInit; browsers enter
   // fullscreen only on a tap)
   try { localStorage.setItem('mbaa-fs', on ? '1' : '0'); } catch (e) {}
@@ -7030,12 +7028,17 @@ function fsChatPlace() {
   const ct = document.getElementById('chattog');
   if (ct) ct.classList.toggle('on', !chatHidden);
 }
+// fullscreen: the bar stays while the mouse is over it (as on YouTube) or its settings / levels popover is open
+function fsBarHeld(stage) {
+  const bar = stage.querySelector(':scope > .fsbar'), open = id => { const el = document.getElementById(id); return !!el && !el.hidden; };
+  return !!bar && stage.classList.contains('fs') && (bar.matches(':hover') || open('setpop') || open('mixpop'));
+}
 function fsWake() {
   const stage = document.querySelector('.stage');
   stage.classList.remove('idle');
   clearTimeout(fsTimer);
   fsTimer = setTimeout(function idle() {
-    if (ui.paused || seekDragging || clipPanel) { fsTimer = setTimeout(idle, FS_IDLE); return; }
+    if (ui.paused || seekDragging || clipPanel || fsBarHeld(stage)) { fsTimer = setTimeout(idle, FS_IDLE); return; }
     stage.classList.add('idle');
   }, FS_IDLE);
 }
