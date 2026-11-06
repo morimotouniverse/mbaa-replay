@@ -2207,7 +2207,7 @@ onmessage = ({ data: m }) => {
   colourField($('#chatcolor'), 'your name colour', prof.color);
   $('#chatcolor').oninput = e => { prof.color = e.target.value; saveProf(); profShow(); };
   [0, 1, 2].forEach(m => {
-    const cv = document.createElement('canvas'); cv.width = cv.height = 24; cv.title = MOON_NAME[m];
+    const cv = document.createElement('canvas'); cv.width = cv.height = 24; cv.title = MOON_NAME[m] ? MOON_NAME[m] + ' Moon' : '';
     const draw = () => cv.getContext('2d').drawImage(art.cursor, MOON_X[m], 288, 56, 56, 0, 0, 24, 24);
     if (art) draw(); else artWait.push(draw);
     cv.onclick = () => { prof.moon = m; saveProf(); profShow(); };
@@ -2385,6 +2385,8 @@ onmessage = ({ data: m }) => {
       body.append(tm, ' ', nk, ' ', j);
     } else {
       if (!l.action && emoteOnly(text)) body.classList.add('ejumbo');  // (emotes only: big)
+      // a mod's / the owner's links that get a card under the line: the card alone, not the URL too (user 2026-11-06)
+      l.embU = opLine(l) ? new Set(extLinksOf(text).slice(0, 2)) : null;
       const parts = mdNodes(text, own ? seg => waveNodes(seg, x => richText(emoRuns(x), l)) : seg => richText(emoRuns(seg), l));
       if (l.action) {  // ("/me": "* Name does something", IRC style: italic, in the sender's colour)
         const at = document.createElement('span'); at.className = 'cacttext'; inkSet(at, l.color); at.append(...parts);
@@ -2517,7 +2519,8 @@ onmessage = ({ data: m }) => {
     const a = document.createElement('a');
     a.className = 'xcard'; a.href = u; a.target = '_blank'; a.rel = 'noopener noreferrer nofollow'; a.title = u;
     const img = src => { const i = document.createElement('img'); i.loading = 'lazy'; i.decoding = 'async'; i.alt = ''; i.referrerPolicy = 'no-referrer'; i.src = src;
-      i.onerror = () => a.classList.add('noimg'); return i; };
+      // (a picture that does not load: the card shows the link instead of an empty box)
+      i.onerror = () => { a.classList.add('noimg'); if (!a.querySelector('.xcap')) a.append(cap(x.hostname.replace(/^www\./, ''), cleanUrl(u))); }; return i; };
     const cap = (site, t) => { const d = document.createElement('span'); d.className = 'xcap'; const b = document.createElement('b'); b.textContent = site; d.append(b, ' ', t); return d; };
     const yt = ytId(x);
     if (yt && /^[\w-]{6,20}$/.test(yt)) {
@@ -2552,6 +2555,7 @@ onmessage = ({ data: m }) => {
         // a mod's (or the owner's) link elsewhere: a link too, shown clean; anyone else's stays text (user 2026-11-01)
         if (!opLine(l) || !extUrl(u)) continue;
         if (m.index > i) out.push(...tsText(text.slice(i, m.index), l));
+        if (l.embU && l.embU.has(u)) { i = m.index + u.length; continue; }  // (its card under the line shows it)
         const a = document.createElement('a');
         a.className = 'clink'; a.href = u; a.target = '_blank'; a.rel = 'noopener noreferrer nofollow'; a.title = u; a.textContent = cleanUrl(u);
         out.push(a); i = m.index + u.length;
@@ -2725,7 +2729,7 @@ onmessage = ({ data: m }) => {
         const c = m.chara[p], mo = m.moon[p], s = document.createElement('span'); s.className = 'ccside';
         if (validChara(c) || api.iconCell(c) >= 0) s.append(iconCanvas('ccico', 48, validChara(c) ? c : CHARAS.find(x => api.iconCell(x) === api.iconCell(c)), mo));
         const n = document.createElement('span'); n.className = 'ccn';
-        const ch = `${['C-', 'F-', 'H-'][mo] || ''}${api.chara[c] || ''}`;
+        const ch = `${['Crescent Moon ', 'Full Moon ', 'Half Moon '][mo] || ''}${api.chara[c] || ''}`;
         n.textContent = m.names[p] || ch || `Player ${p + 1}`; s.title = m.names[p] ? `${m.names[p]} (${ch})` : ch;
         s.append(n); return s;
       };

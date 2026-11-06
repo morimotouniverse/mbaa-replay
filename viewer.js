@@ -370,16 +370,18 @@ document.getElementById('slogcopy')?.addEventListener('click', async e => {
   setTimeout(() => { b.textContent = 'copy session log'; }, 2500);
 });
 // chara id -> display name (charaselect.txt CharaNo_<id>; replay header side block +4), moon (+8): 0 C, 1 F, 2 H
+// (moons spelled out, never C- / F- / H-: user 2026-11-06 "Full Moon Arcueid", not "Full-Arcueid"; 51 is Archetype:Earth, as the wiki)
+const MOON_LABEL = ['Crescent Moon', 'Full Moon', 'Half Moon'];
 const CHARA = { 0: 'Sion', 1: 'Arcueid', 2: 'Ciel', 3: 'Akiha', 4: 'Hisui & Kohaku', 5: 'Hisui', 6: 'Kohaku', 7: 'Shiki',
   8: 'Miyako', 9: 'Warachia', 10: 'Nrvnqsr', 11: 'V. Sion', 12: 'Red Arcueid', 13: 'V. Akiha', 14: 'Mech-Hisui', 15: 'Nanaya',
   16: 'G. Akiha', 17: 'Satsuki', 18: 'Len', 19: 'P. Ciel', 20: 'Neco-Arc', 22: 'Aoko', 23: 'White Len', 25: 'Neco-Arc Chaos',
   27: 'G. Chaos', 28: 'Kouma', 29: 'Seifuku Akiha', 30: 'Riesbyfe', 31: 'Roa', 32: 'Hermes', 33: 'Ryougi',
-  34: 'Neco & Mech', 35: 'Kohaku & Mech', 51: 'Arcueid (Earth)', 53: 'B. Akiha', 58: 'B. Miyako', 59: 'B. Warachia',
+  34: 'Neco & Mech', 35: 'Kohaku & Mech', 51: 'Archetype:Earth', 53: 'B. Akiha', 58: 'B. Miyako', 59: 'B. Warachia',
   72: 'B. Aoko', 73: 'B. White Len', 85: 'B. Kohaku & Mech' };
 function matchTitle(rep) {
   if (rep.length < 0x5C) return 'MBAACC replay';
   const dv = new DataView(rep.buffer, rep.byteOffset, rep.byteLength);
-  const side = o => (['C-', 'F-', 'H-'][dv.getInt32(o + 8, true)] || '') + (CHARA[dv.getInt32(o + 4, true)] || `#${dv.getInt32(o + 4, true)}`);
+  const side = o => { const m = MOON_LABEL[dv.getInt32(o + 8, true)]; return (m ? m + ' ' : '') + (CHARA[dv.getInt32(o + 4, true)] || `#${dv.getInt32(o + 4, true)}`); };
   return `${side(0x3C)} vs ${side(0x4C)}`;
 }
 // a replay file name (CIELxW_LEN_261009184010) -> ['Ciel vs W Len', 'Oct 9 18:40']; other names pass through
@@ -2965,7 +2967,7 @@ function playersShow(s) {
       const row = rows[p];
       plCells[p] = iconCell(c);
       drawMoon(row.querySelector('.moon'), m);
-      const moon = m >= 0 && m <= 2 ? MOON_NAME[m] : m === 9 ? 'Eclipse' : '';  // (9: the bosses' moon)
+      const moon = m >= 0 && m <= 2 ? MOON_LABEL[m] : m === 9 ? 'Eclipse' : '';  // (9: the bosses' moon)
       row.querySelector('.nm .t').textContent = names[p] || CHARA[c] || `Player ${p + 1}`;
       // (the moon is its icon: the line beside it is the character, or with no player name the moon's name)
       row.querySelector('.ch .t').textContent = names[p] ? CHARA[c] || '' : moon;
@@ -3799,7 +3801,7 @@ function charPopShow(anchor, c, mo) {
   const el = charPopEl(), img = el.querySelector('img'), url = mizuUrl(c, mo), path = porPath(c);
   clearTimeout(charPopHide);
   charPopFor = anchor;
-  el.querySelector('.cp-nm').textContent = (mo === 9 ? 'E-' : ['C-', 'F-', 'H-'][mo] || '') + (CHARA[c] || '');   // (C-Akiha, as players write it)
+  el.querySelector('.cp-nm').textContent = `${mo === 9 ? 'Eclipse' : MOON_LABEL[mo] || ''} ${CHARA[c] || ''}`.trim();
   drawMoon(el.querySelector('.cp-moon'), mo);
   const a = el.querySelector('.cp-wiki');
   a.hidden = !url; if (url) a.href = url;
@@ -3840,7 +3842,7 @@ function liveSide(m, p) {
   const nm = el('span', 'lnm');
   nm.append(el('span', 't', names[p] || CHARA[c] || `Player ${p + 1}`));
   sp.append(nm);
-  sp.title = `${mo === 9 ? 'Eclipse' : MOON_NAME[mo] || ''} ${CHARA[c] || ''}`.trim();
+  sp.title = `${mo === 9 ? 'Eclipse' : MOON_LABEL[mo] || ''} ${CHARA[c] || ''}`.trim();
   return sp;
 }
 let liveListDeferred = false;
