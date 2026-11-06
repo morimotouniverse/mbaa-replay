@@ -3699,6 +3699,68 @@ function liveWatching(n) {
 // the panel's "live now" list (refreshed every 15 s; hidden while nothing is live or the feed is unreachable)
 // a live match's side, as the live list and the next-match card show it: the character's select icon and moon, then the
 // player's name (no name: the character's)
+// The live list's character icons: hover (touch: tap the icon) shows a card with the character's select-screen portrait,
+// its moon and name, and a link to its Mizuumi wiki page (that moon's page). Page names from mizuumi.wiki's own page
+// list (api.php allpages, Melty Blood/MBAACC/, non-redirects, 2026-11-06): every one has Crescent / Full / Half Moon
+// subpages. G. Akiha (16) has no page of its own: no link. (user / community request 2026-11-06)
+const MIZU = { 0: 'Sion Eltnam Atlasia', 1: 'Arcueid Brunestud', 2: 'Ciel', 3: 'Akiha Tohno', 4: 'Hisui & Kohaku', 5: 'Hisui',
+  6: 'Kohaku', 7: 'Shiki Tohno', 8: 'Miyako Arima', 9: 'Warachia', 10: 'Nero Chaos', 11: 'Sion TATARI', 12: 'Red Arcueid',
+  13: 'Akiha Vermilion', 14: 'Mech-Hisui', 15: 'Shiki Nanaya', 17: 'Satsuki Yumizuka', 18: 'Len', 19: 'Powered Ciel',
+  20: 'Neco-Arc', 22: 'Aoko Aozaki', 23: 'White Len', 25: 'Neco-Arc Chaos', 28: 'Kouma Kishima', 29: 'Akiha Tohno (Seifuku)',
+  30: 'Riesbyfe Stridberg', 31: 'Roa', 33: 'Shiki Ryougi', 34: 'Neco & Mech', 35: 'Koha & Mech', 51: 'Archetype: Earth' };
+function mizuUrl(c, mo) {
+  const base = CHARA[c] && CHARA[c].startsWith('B. ') ? +Object.keys(CHARA).find(k => CHARA[k] === CHARA[c].slice(3)) : c;
+  const pg = MIZU[base];
+  if (!pg) return null;
+  const moon = MOON_NAME[mo];
+  const t = `Melty Blood/MBAACC/${pg}${moon ? `/${moon} Moon` : ''}`.replace(/ /g, '_');
+  return 'https://mizuumi.wiki/w/' + t.split('/').map(encodeURIComponent).join('/');
+}
+let charPop = null, charPopFor = null, charPopHide = 0;
+function charPopEl() {
+  if (charPop) return charPop;
+  charPop = document.createElement('div'); charPop.id = 'charpop'; charPop.hidden = true;
+  charPop.innerHTML = '<div class="cp-por"><img alt=""></div><div class="cp-txt"><canvas class="cp-moon" width="14" height="14"></canvas><span class="cp-nm"></span></div><a class="cp-wiki" target="_blank" rel="noopener">Mizuumi wiki ↗</a>';
+  charPop.addEventListener('pointerenter', () => clearTimeout(charPopHide));
+  charPop.addEventListener('pointerleave', e => { if (e.pointerType === 'mouse') charPopSoon(); });
+  document.body.append(charPop);
+  document.addEventListener('pointerdown', e => { if (charPop && !charPop.hidden && !charPop.contains(e.target) && !(charPopFor && charPopFor.contains(e.target))) charPopClose(); }, true);
+  addEventListener('scroll', () => charPopClose(), { passive: true, capture: true });
+  return charPop;
+}
+function charPopClose() { clearTimeout(charPopHide); if (charPop) charPop.hidden = true; charPopFor = null; }
+function charPopSoon() { clearTimeout(charPopHide); charPopHide = setTimeout(charPopClose, 220); }
+function charPopShow(anchor, c, mo) {
+  const el = charPopEl(), img = el.querySelector('img'), url = mizuUrl(c, mo), path = porPath(c);
+  clearTimeout(charPopHide);
+  charPopFor = anchor;
+  el.querySelector('.cp-nm').textContent = (mo === 9 ? 'E-' : ['C-', 'F-', 'H-'][mo] || '') + (CHARA[c] || '');   // (C-Akiha, as players write it)
+  drawMoon(el.querySelector('.cp-moon'), mo);
+  const a = el.querySelector('.cp-wiki');
+  a.hidden = !url; if (url) a.href = url;
+  img.hidden = true; img.removeAttribute('src');
+  if (path) porLoad(path).then(u => { if (charPopFor === anchor) { img.src = u; img.hidden = false; charPopPlace(anchor); } }, () => {});
+  el.hidden = false;
+  charPopPlace(anchor);
+}
+function charPopPlace(anchor) {
+  const el = charPop, r = anchor.getBoundingClientRect(), w = el.offsetWidth, h = el.offsetHeight, m = 8;
+  let x = r.left + r.width / 2 - w / 2, y = r.top - h - 6;
+  if (y < m) y = r.bottom + 6;
+  x = Math.max(m, Math.min(innerWidth - w - m, x)); y = Math.max(m, Math.min(innerHeight - h - m, y));
+  el.style.left = `${Math.round(x)}px`; el.style.top = `${Math.round(y)}px`;
+}
+function charPopWire(t, c, mo) {
+  t.addEventListener('pointerenter', e => { if (e.pointerType === 'mouse') charPopShow(t, c, mo); });
+  t.addEventListener('pointerleave', e => { if (e.pointerType === 'mouse') charPopSoon(); });
+  // (touch / pen: a tap on the icon opens the card, not the match: the rest of the row still switches)
+  t.addEventListener('pointerdown', e => { if (e.pointerType !== 'mouse') e.stopPropagation(); });
+  t.addEventListener('click', e => {
+    if (e.pointerType === 'mouse' || (e.pointerType === undefined && matchMedia('(hover: hover)').matches)) return;
+    e.preventDefault(); e.stopPropagation();
+    if (charPopFor === t && charPop && !charPop.hidden) charPopClose(); else charPopShow(t, c, mo);
+  });
+}
 function liveSide(m, p) {
   const el = (tag, cls, txt) => { const e = document.createElement(tag); if (cls) e.className = cls; if (txt != null) e.textContent = txt; return e; };
   const names = (m.names || []).map(n => (n || '').trim());
@@ -3706,7 +3768,10 @@ function liveSide(m, p) {
   const ico = el('canvas', 'lico'); ico.width = ico.height = 64;
   ico.dataset.cell = iconCell(c); ico.dataset.side = p;
   const moon = el('canvas', 'lmoon'); moon.width = 14; moon.height = 14;
-  if (plArt && iconCell(c) >= 0) { selFrame(ico, iconCell(c), p, 0); drawMoon(moon, mo); sp.append(ico, moon); }
+  if (plArt && iconCell(c) >= 0) {
+    selFrame(ico, iconCell(c), p, 0); drawMoon(moon, mo);
+    const ch = el('span', 'lchar'); ch.append(ico, moon); charPopWire(ch, c, mo); sp.append(ch);
+  }
   const nm = el('span', 'lnm');
   nm.append(el('span', 't', names[p] || CHARA[c] || `Player ${p + 1}`));
   sp.append(nm);

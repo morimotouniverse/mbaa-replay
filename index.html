@@ -687,6 +687,19 @@
   #liveitems .side { display: flex; align-items: center; gap: 3px; min-width: 0; flex: 1 1 0; }  /* (equal halves: a long name scrolls in its own) */
   #liveitems .lico { width: 28px; height: 28px; flex: none; margin: -2px 0; }
   #liveitems .lmoon { width: 12px; height: 12px; flex: none; }
+  #liveitems .lchar { display: flex; align-items: center; gap: 3px; flex: none; cursor: help; }
+  /* the character card (viewer.js charPopShow): portrait, moon + name, Mizuumi link */
+  #charpop { position: fixed; z-index: 120; width: 168px; padding: 8px; box-sizing: border-box; background: var(--raise);
+    border: 1px solid var(--line); border-radius: 10px; box-shadow: 0 8px 24px rgba(0,0,0,.5); display: flex; flex-direction: column; gap: 6px; }
+  #charpop[hidden] { display: none; }
+  #charpop .cp-por { width: 100%; aspect-ratio: 1; overflow: hidden; border-radius: 6px; background: radial-gradient(circle at 50% 40%, #2a2a3c, #15151f); }
+  /* (the select splash is a whole figure in a 512 square: zoomed to the upper body) */
+  #charpop img { width: 100%; height: 100%; display: block; transform: scale(1.9); transform-origin: 50% 30%; }
+  #charpop .cp-txt { display: flex; align-items: center; gap: 5px; font-weight: 600; font-size: 13px; color: var(--fg); }
+  #charpop .cp-moon { width: 14px; height: 14px; flex: none; }
+  #charpop .cp-wiki { font-size: 12px; color: var(--accent); text-decoration: none; }
+  #charpop .cp-wiki:hover { text-decoration: underline; }
+  #charpop .cp-wiki[hidden] { display: none; }
   /* a text longer than its room scrolls to its end and back (viewer.js marquee(): .mqx holding a .t) */
   #liveitems .lnm, .mqx { overflow: hidden; white-space: nowrap; min-width: 0; }
   #liveitems .lnm .t, .mqx .t { display: inline-block; }
@@ -940,6 +953,6 @@
 </div>
 <script src="mbaa.js?v=65eff4f16631"></script>
 <script src="bgm_stream.js?v=407ac29e5c89"></script>
-<script src="viewer.js?v=bb1d710aed38"></script>
+<script src="viewer.js?v=79330af38be5"></script>
 </body>
 </html>
