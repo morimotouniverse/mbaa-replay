@@ -28,6 +28,10 @@
 // read game memory (viewer_boxes / viewer_inputs).
 const KEY_HEX = '6d626161636377656272657061796b65792d6e6f742d612d7365637265742121';
 const Q = new URLSearchParams(location.search);
+// a page's first-load steps (performance.now(), the first time each is reached): window.__mbaaBoot (the join-time checks,
+// artifacts/xz_check/perf_plan/snapjoin goal D)
+const bootMarks = window.__mbaaBoot = {};
+const bootMark = k => { if (bootMarks[k] == null) bootMarks[k] = Math.round(performance.now()); };
 // ---- name styles: one system (user 2026-11-04: "the nico text gradient animated the same way as in the chat") ----
 // The stylers' look (the bot's spec: glow, a 2-3 colour gradient, ~wave~, shadow) is parsed here once and its motion
 // computed here once, for every place it is drawn: the chat column (chat.js styleApply: CSS custom properties and the
@@ -176,37 +180,46 @@ const STORE_GC = Q.get('storegc') !== '0';  // texture store eviction (storeGc; 
 
 const hex = h => new Uint8Array(h.match(/../g).map(x => parseInt(x, 16)));
 let cryptoKey;
-// z = 'xz' (manifest entry; tools/web/bundle_xz.py): the large files, a third smaller than deflate, decoded by a pool
-// of web/shell/xz_worker.js (one xz-decompress each: parallel, and off this thread); everything else deflate, which the browser
-// decodes natively. The pool starts on the first xz object; its URL carries viewer.js's version (deploy_pages.sh hashes
-// the worker and xz-decompress into it).
+// z = 'xz' (manifest entry; tools/web/bundle_xz.py): the large files, a third smaller than deflate; everything else
+// deflate. A pool of web/shell/xz_worker.js decodes them off this thread and in parallel: decodeObject hands a worker an
+// object as stored (it decrypts and inflates / xz-decodes it), xzDecode a decrypted xz one. Each job goes to the worker
+// with the fewest bytes pending; a worker runs its xz jobs one at a time and its deflate ones alongside. The pool starts
+// on the first job; its URL carries viewer.js's version (deploy_pages.sh hashes the worker and xz-decompress into it).
 let xzPool = null;
-function xzDecode(buf) {
+function xzJob(msg, cost, transfer) {
   if (!xzPool) {
     const v = ((document.querySelector('script[src^="viewer.js"]') || {}).src || '').split('?')[1] || '';
     const n = Math.max(1, Math.min(4, (navigator.hardwareConcurrency || 2) - 1));
-    xzPool = { idle: [], queue: [], jobs: new Map(), id: 0 };
+    xzPool = { ws: [], jobs: new Map(), id: 0 };
     for (let i = 0; i < n; i++) {
       const w = new Worker('xz_worker.js' + (v ? `?${v}` : ''));
+      w.load = 0; w.keyed = false;
       w.onmessage = ({ data: { id, buf, err } }) => {
         const j = xzPool.jobs.get(id); xzPool.jobs.delete(id);
-        err ? j.rej(new Error(`xz: ${err}`)) : j.res(new Uint8Array(buf));
-        xzNext(w);
+        w.load -= j.cost;
+        err ? j.rej(new Error(`object: ${err}`)) : j.res(new Uint8Array(buf));
       };
-      xzPool.idle.push(w);
+      xzPool.ws.push(w);
     }
   }
   return new Promise((res, rej) => {
-    const id = ++xzPool.id;
-    xzPool.jobs.set(id, { res, rej });
-    xzPool.queue.push({ id, buf });
-    if (xzPool.idle.length) xzNext(xzPool.idle.pop());
+    const id = ++xzPool.id, w = xzPool.ws.reduce((a, b) => (b.load < a.load ? b : a));
+    xzPool.jobs.set(id, { res, rej, cost });
+    w.load += cost;
+    if (msg.enc && !w.keyed) { msg.key = KEY_HEX; w.keyed = true; }
+    w.postMessage({ id, ...msg }, transfer);
   });
 }
-function xzNext(w) {
-  const j = xzPool.queue.shift();
-  if (!j) { xzPool.idle.push(w); return; }
-  w.postMessage(j, [j.buf]);
+const xzDecode = buf => xzJob({ buf }, buf.byteLength * 8, [buf]);
+// an object as stored (an ArrayBuffer of its own: it is transferred) -> its plain bytes, in a worker; the page's own
+// path (openObject) where workers fail
+let objWorkers = typeof Worker !== 'undefined' && typeof DecompressionStream !== 'undefined' && Q.get('objworkers') !== '0';
+function decodeObject(buf, z = null) {
+  if (!objWorkers) return openObject(buf, z);
+  const copy = buf.slice(0);  // (kept for the fallback: the job transfers its own)
+  return xzJob({ enc: copy, z }, buf.byteLength * (z === 'xz' ? 8 : 1), [copy]).catch(e => {
+    console.warn('object worker failed, decoding on the page:', e); objWorkers = false; return openObject(buf, z);
+  });
 }
 async function openObject(buf, z = null) {
   const b = new Uint8Array(buf);
@@ -400,9 +413,13 @@ const cache = new Map();  // game path -> Uint8Array
 // files being fetched (path -> promise): a second fetchAll asking for one waits for that fetch (a live switch starts its
 // match's files with the boot tape's request, and start() asks for them again)
 const inflight = new Map();
+const FILES_PROF = Q.get('filesprof') === '1';  // (the checks: window.__mbaaFiles, each object's fetch and decode times)
 async function fetchAll(man, paths, label, quiet = false) {
   const net0 = net.bytes;  // the counter shows what came over the network (objects are deflated; the game sees ~4x that)
-  const queue = [...paths].filter(p => !cache.has(p));
+  // (the big xz objects first, largest first: each is one worker's job for a while (a character's .cg, ~0.3-0.5 s);
+  // started last they were the long pole of a match's files, the small ones long done)
+  const big = p => { const f = man.files[p]; return f && f.z === 'xz' && !f.pk ? f.n || 0 : -1; };
+  const queue = [...paths].filter(p => !cache.has(p)).sort((a, b) => big(b) - big(a));
   let done = 0, bytes = 0;
   const n = queue.length, packs = new Map();  // pack -> its bytes (one fetch for all of its files in this call)
   const one = async p => {
@@ -415,8 +432,14 @@ async function fetchAll(man, paths, label, quiet = false) {
     } else if (f.pk) {
       const [h, off, len] = f.pk;
       if (!packs.has(h)) packs.set(h, fetchRaw(h));
-      data = await openObject((await packs.get(h)).slice(off, off + len), f.z);
-    } else data = await fetchObject(f.o, f.z);
+      const t0 = performance.now(), pb = await packs.get(h), t1 = performance.now();
+      data = await decodeObject(pb.slice(off, off + len), f.z);
+      if (FILES_PROF) (window.__mbaaFiles || (window.__mbaaFiles = [])).push([p, 'pk:' + (f.z || 'd'), len, data.length, Math.round(t0), Math.round(t1), Math.round(performance.now())]);
+    } else if (FILES_PROF) {
+      const t0 = performance.now(), raw = await fetchRaw(f.o), t1 = performance.now();
+      data = await decodeObject(raw, f.z);
+      (window.__mbaaFiles || (window.__mbaaFiles = [])).push([p, f.z || 'd', raw.byteLength, data.length, Math.round(t0), Math.round(t1), Math.round(performance.now())]);
+    } else data = await decodeObject(await fetchRaw(f.o), f.z);
     cache.set(p, data);
   };
   async function worker() {
@@ -430,7 +453,9 @@ async function fetchAll(man, paths, label, quiet = false) {
       if ((++done % 10 === 0 || done === n) && !quiet) status(`${label} ${done}/${n} (${((net.bytes - net0) / 1e6).toFixed(1)} MB downloaded${net.cached ? `, ${net.cached} files from cache` : ''})`);
     }
   }
-  await Promise.all(Array.from({ length: 16 }, worker));
+  // (48 at once: the decoding is the pool's (decodeObject), off this thread; with 16 the small objects waited their turn
+  // behind the big ones, ~0.5 s of a match's files)
+  await Promise.all(Array.from({ length: objWorkers ? 48 : 16 }, worker));
 }
 function mkdirs(FS, path) {
   let cur = '';
@@ -783,6 +808,7 @@ function cachePinned() {
   const out = new Set();
   for (const t of [radio, musicSel, liveExt.music]) if (t && t.path) out.add(t.path.replace(/^\/game\//, ''));
   for (const p of livePreKeep) out.add(p);  // (the likeliest next live match's files: livePreTick)
+  for (const [, w] of cardHot) for (const p of w) out.add(p);  // (the live cards' preloaded / hovered files)
   if (radio && radio.dat) out.add(radio.dat);
   if (radio && radio.stages && man) for (const id of radio.stages) for (const p of radioStageFiles(id)) out.add(p);
   return out;
@@ -969,7 +995,7 @@ function bootSnapshot(M) {
   const x0 = Math.floor(M._viewer_page_hash_area(0) / PAGE), x1 = Math.ceil(M._viewer_page_hash_area(1) / PAGE);
   const z0 = M._viewer_kz_base ? Math.floor(M._viewer_kz_base() / PAGE) : -1, z1 = M._viewer_kz_base ? Math.ceil((M._viewer_kz_base() + M._viewer_kz_size()) / PAGE) : -1;
   let bytes = 0;
-  for (let i = 0; i < n; i++) { pages[i] = packPage(H, i * W, W); bytes += pages[i].bytes; }
+  for (let i = 0; i < n; i++) { pages[i] = packPage(H, i * W, W); pages[i].bootPage = 1; bytes += pages[i].bytes; }
   // (and only where the page hashes the same after packing: the pages zlib's calls wrote meanwhile (its C stack frames,
   // its arena counter) were packed with content other than what was hashed)
   const h2 = pageHashes(M, n * PAGE);
@@ -978,6 +1004,9 @@ function bootSnapshot(M) {
     if ((i >= x0 && i < x1) || (i >= z0 && i < z1) || hs[j] !== h2[j] || hs[j + 1] !== h2[j + 1] || hs[j + 2] !== h2[j + 2] || hs[j + 3] !== h2[j + 3]) continue;
     pages[i].h = [hs[j], hs[j + 1], hs[j + 2], hs[j + 3]];
   }
+  // (?bootcheck=1, the checks: each page's hash, to compare a prewarmed boot with play()'s own)
+  if (Q.get('bootcheck') === '1') window.__mbaaBootImg = M.HEAPU8.slice(0x400000, 0x800000);
+  if (Q.get('bootcheck') === '1') window.__mbaaBootPages = pages.map(q => (q.h ? q.h.map(x => (x >>> 0).toString(16)).join('') : 'x'));
   return { top: n * PAGE, pages, bytes };
 }
 // The picture's comment renderer (overlay_gl.cpp) keeps its fonts, glyph / emoji caches, registered comments and switches
@@ -1004,7 +1033,73 @@ function restoreBoot(s) {
   liveKeptStale(M);  // (a kept live match's textures survive the reset: liveKeepTake)
   M._viewer_tex_store_reset();  // the last match's sealed textures (the boot ones stay)
 }
+// ---- the engine started ahead (goal D, 2026-11-05: a tap on a live card paid the module, the game's boot and the boot
+// snapshot after all of the match's files were in, ~0.5 s desktop / ~1.7 s at 4x). As soon as the manifest is in, the
+// page fetches the boot files only (plan.boot), makes the instance and boots it exactly as play() does (the same
+// settings before viewer_boot, the boot textures sealed, the boot snapshot); the first session then takes it over as a
+// reused instance that has never run past its boot (no restore). The match's files and the boot tape meanwhile come in
+// alongside. ?prewarm=0: off (the old order); never in hash / capture runs or with ?reuse=0.
+const PREWARM = !HASH && !CAPTURE && Q.get('prewarm') === '1' && Q.get('reuse') !== '0' && !Q.get('files');
+let warmP = null;
+function engineWarm() {
+  if (warmP || !PREWARM || session || !man || !man.plan || !man.plan.boot) return warmP;
+  warmP = (async () => {
+    const boot = withSiblings(man, new Set(man.plan.boot));
+    await fetchAll(man, boot, '', true);
+    if (session) return null;
+    bootMark('warmModule');
+    const wasmV = ((document.querySelector('script[src^="mbaa.js"]') || {}).src || '').split('?')[1];
+    const M = await MBAA({ print: t => console.log(t), printErr: t => console.warn(t), canvas: freshCanvas(), mbaaStoreKeep: !LOWMEM,
+                           locateFile: p => (wasmV && p.endsWith('.wasm') ? `${p}?${wasmV}` : p) });
+    if (session) return null;
+    const w = { M, name: '', rep: new Uint8Array(0), live: true, mute: false, gen: 0, warm: true };
+    // (the session's hooks act for the current session only: this one is it while it boots (one synchronous run, from
+    // here to the snapshot), so its boot opens are tracked as play()'s are; then none again)
+    session = w;
+    try {
+    fillSession(w, boot, null);
+    // (play()'s settings before its viewer_boot)
+    try { call(w, 'viewer_rate', 1); } catch (e) {}
+    call(w, 'viewer_stage_anim', Q.get('stageAnim') !== null ? +(Q.get('stageAnim') !== '0') : 1);
+    if (Q.get('seal') === '0') call(w, 'viewer_seal_off', 1);
+    if (!call(w, 'viewer_boot')) return null;
+    M._viewer_seal_boot();
+    if (M._viewer_files_open()) return null;
+    w.boot = bootSnapshot(M);
+    M.mbaaBootOpened = new Set(w.opened);
+    } finally { if (session === w) session = null; }
+    bootMark('warm');
+    // (the live matches' files after the engine: a list drawn before the manifest preloaded none)
+    if (liveListLast) livePreloadAll(liveListLast.l);
+    // (the shader programs built at idle while the list shows, one pass a callback: the tick's own idle step does it
+    // once a match runs, so a tap's first frame waited on their links; ?glwarm=0: off)
+    if (M._viewer_gl_prewarm_step && Q.get('glwarm') !== '0') (async () => {
+      for (let more = 1; more && (!session || session.M === M);) {
+        await new Promise(r => window.requestIdleCallback ? requestIdleCallback(() => r(), { timeout: 1000 }) : setTimeout(r, 30));
+        more = M._viewer_gl_prewarm_step();
+      }
+      bootMark('glWarm');
+    })().catch(e => console.warn('shader prewarm:', e));
+    return w;
+  })().catch(e => { console.warn('engine prewarm:', e); return null; });
+  return warmP;
+}
+// the prewarmed instance as this session's (fillSession's reused path: the match's files over the boot ones)
+function warmTake(w, rep, name, want) {
+  const s = { M: w.M, name, rep, live: true, mute: false, gen: w.gen, boot: w.boot, reused: 1 };
+  session = s;
+  const M = s.M;
+  if (movieBytes) M.mbaaMovie = movieBytes;
+  else if (movieH264) M.mbaaMovieVideo = movieVideo(movieH264);
+  movieLoad();
+  return fillSession(s, want, new Set(w.want));
+}
 async function newSession(rep, name, want) {
+  if (!session && warmP) {
+    const w = await warmP;
+    warmP = null;
+    if (w && !session) { bootMark('moduleStart'); bootMark('module'); return warmTake(w, rep, name, want); }
+  }
   const prev = session;
   if (prev) { try { prev.M.ccall('viewer_stop', null, [], []); } catch (e) {} }
   window.dispatchEvent(new Event('mbaa-session-end'));
@@ -1012,8 +1107,10 @@ async function newSession(rep, name, want) {
   // mbaa.wasm is built with mbaa.js: it takes mbaa.js's cache-busting version (tools/web/deploy_pages.sh)
   const wasmV = ((document.querySelector('script[src^="mbaa.js"]') || {}).src || '').split('?')[1];
   // mbaaStoreKeep: the texture store keeps the last match's textures for the next one (web/host/browser/d3d9_gl.cpp)
+  bootMark('moduleStart');
   const M = await MBAA({ print: t => console.log(t), printErr: t => console.warn(t), canvas: freshCanvas(), mbaaStoreKeep: !LOWMEM,
                          locateFile: p => (wasmV && p.endsWith('.wasm') ? `${p}?${wasmV}` : p) });
+  bootMark('module');
   const s = { M, name, rep, live: true, mute: false, gen: 0 };
   session = s;
   return fillSession(s, want, null);
@@ -1055,7 +1152,7 @@ function fillSession(s, want, had) {
   M.mbaaAssetMiss = p => { if (man.files[p] && p !== MOVIE && !(s.want.has(p) && cache.has(p))) misses.add(p); };  // (the movie: movieLoad)
   if (movieBytes) M.mbaaMovie = movieBytes;
   else if (movieH264) M.mbaaMovieVideo = movieVideo(movieH264);
-  if (!HASH) movieLoad();  // (as soon as a match loads: its VS screen comes first)
+  if (!HASH && !s.warm) movieLoad();  // (as soon as a match loads: its VS screen comes first; not for a prewarmed engine)
   trackOpens(s);
   audioHooks(M, s);
   if (!HASH && !bgmStreamReady) for (const p of s.want) if (/^bgm\/.*\.opus$/.test(p) && cache.has(p)) bgmDecode(p);
@@ -1073,13 +1170,16 @@ async function play(rep, name, catchUp = 0, want = null, liveId = null) {
   // stage animations on, except for native comparisons (?stageAnim=0, hash runs): the oracle's settings have them off
   call(s, 'viewer_stage_anim', Q.get('stageAnim') !== null ? +(Q.get('stageAnim') !== '0') : HASH ? 0 : 1);
   if (Q.get('seal') === '0') call(s, 'viewer_seal_off', 1);
+  bootMark('session');
   if (!call(s, 'viewer_boot')) { window.__mbaaStarted = -1; loading(false); status('start failed (see console)'); return; }
   // boot textures to the GPU store first: the snapshot (and every keyframe) then holds no pixels
+  bootMark('booted');
   if (!s.reused) s.M._viewer_seal_boot();
   if (!s.boot && (!HASH && !CAPTURE || Q.get('reuse') === '1') && !s.M._viewer_files_open()) {
     s.boot = bootSnapshot(s.M);
     s.M.mbaaBootOpened = new Set(s.opened);  // read before the snapshot: a reused instance's later matches never open them
   }
+  bootMark('bootSnap');
   if (!call(s, 'viewer_load')) { window.__mbaaStarted = -1; loading(false); status('start failed (see console)'); return; }
   // a live clip's replay: the live session's forcing (clipLtFor), before the first frame
   s.lt = clipLt && clipLt.name === name && !liveSrc ? clipLt.bytes : null;
@@ -1095,7 +1195,9 @@ async function play(rep, name, catchUp = 0, want = null, liveId = null) {
   call(s, 'viewer_hud', ui.hud ? 1 : 0);
   hitstunApply(s);
   window.__mbaa = { Module: s.M, man };
+  bootMark('played');
   if (!HASH || CAPTURE) timelineInit(s);
+  bootMark('timeline');
   swMark('timeline', s);
   if (s.liveResumeK && s.tl) liveResumeApply(s);  // (back to a kept live match: its keyframe)
   // the pre-scan is a second copy of the game (~400 MB with its files): not in low-memory mode, where marks come as playback reaches them
@@ -1124,6 +1226,7 @@ async function play(rep, name, catchUp = 0, want = null, liveId = null) {
   }
   if (s !== session) return;
   call(s, 'viewer_run');
+  bootMark('run');
   swMark('run');
   xfRuns++;
   loading(false);
@@ -1289,7 +1392,7 @@ function jumpRound(dir) {
   else if (dir < 0) requestSeek(ms[0]);
 }
 const pageRef = (t, p, d) => {
-  if (!p) return;
+  if (!p || p.bootPage) return;  // (a boot snapshot page shared by a keyframe: the snapshot holds it, not counted here)
   p.n = (p.n || 0) + d;
   if (p.n <= 0) t.bytes -= p.bytes;
 };
@@ -1408,6 +1511,7 @@ function storeGc(t) {
 // Keyframe: every page of the used memory [0, sbrk). A page whose hash equals the previous keyframe's is shared with
 // it, so a keyframe stores only its changed pages (packed, packPage; h = the page's hash). The hash output array is
 // scratch (null pages: never stored, never restored).
+const KF_BOOT = Q.get('kfboot') === '1';
 function keyframe(s, f) {
   const t = s.tl, M = s.M, t0 = performance.now();
   const top = M._viewer_mem_top(), n = Math.ceil(top / PAGE), W = PAGE >> 2;
@@ -1415,14 +1519,17 @@ function keyframe(s, f) {
   let at = t.kfs.length;  // sorted by frame; pages are shared with the nearest earlier keyframe
   while (at > 0 && t.kfs[at - 1].frame > f) at--;
   if (at > 0 && t.kfs[at - 1].frame === f) return;
-  const prev = at > 0 ? t.kfs[at - 1].pages : [];
+  // (the first keyframe: shared with the boot snapshot (same instance), so the pages the match has not changed since the
+  // boot (~most of the exe's data and the boot files' heap) are not packed again: at 4x the first keyframe after a
+  // live join took ~350 ms. Only those with a hash (the hash output and the zlib scratch have none)). ?kfboot=0: off
+  const prev = at > 0 ? t.kfs[at - 1].pages : (KF_BOOT && s.boot ? s.boot.pages : []);
   const x0 = Math.floor(M._viewer_page_hash_area(0) / PAGE), x1 = Math.ceil(M._viewer_page_hash_area(1) / PAGE);
   const pages = new Array(n);
   let fresh = 0;
   for (let i = 0; i < n; i++) {
     if (i >= x0 && i < x1) { pages[i] = null; continue; }
     const q = prev[i], j = i * 4;
-    if (q && q.h[0] === hs[j] && q.h[1] === hs[j + 1] && q.h[2] === hs[j + 2] && q.h[3] === hs[j + 3]) pages[i] = q;
+    if (q && q.h && q.h[0] === hs[j] && q.h[1] === hs[j + 1] && q.h[2] === hs[j + 2] && q.h[3] === hs[j + 3]) pages[i] = q;
     else { pages[i] = packPage(H, i * W, W); pages[i].h = [hs[j], hs[j + 1], hs[j + 2], hs[j + 3]]; t.bytes += pages[i].bytes; fresh++; }
     pageRef(t, pages[i], +1);
   }
@@ -1440,7 +1547,7 @@ function keyframe(s, f) {
 // stand-in): the renderer crashed (perf_plan R1)
 function kfPinned(t) {
   const from = t.safeFrom ?? (t.marks.length ? t.marks[0][0] : -1);
-  return from < 0 ? null : t.kfs.find(k => k.frame >= from && !k.pending) || null;
+  return from < 0 ? null : t.kfs.find(k => k.frame >= from && !k.pending && !k.preSnap) || null;
 }
 // Over the memory budget (keyframe pages, or the store textures they pin): keyframes dropped one at a time, each time
 // the one whose neighbours are closest (the spacing stays even: a back seek's re-simulation stays short everywhere),
@@ -1727,10 +1834,13 @@ async function seekTo(s, T) {
   const t = s.tl, M = s.M, t0 = performance.now();
   if (t.end !== null) T = Math.min(T, t.end);
   T = Math.max(1, Math.round(T));
+  if (s.snapFrom != null && T <= s.snapFrom) T = s.snapFrom + 1;  // (a snapshot join: nothing of the game before its load)
   const cur = M._viewer_frame();
   // the nearest keyframe strictly before T (at least one step is drawn), unless the current state is nearer
   let kf = null;
-  for (const k of t.kfs) if (k.frame < T) { if (!k.pending) kf = k; } else break;
+  for (const k of t.kfs) if (k.frame < T) { if (!k.pending && !k.preSnap) kf = k; } else break;
+  // (a snapshot join: nothing to restore before the first keyframe after its load)
+  if (s.snapFrom != null && !kf && !(T > cur)) { status('live: not kept this far back yet'); return; }
   // low memory: a restore from before the freed files' load (kfSafe) re-simulates it. A replay gets the files back
   // first (the browser's cache has them); live goes back no further than its pinned keyframe (re-simulating a set from
   // its first game would take minutes on a phone)
@@ -2126,11 +2236,16 @@ const liveRecsBytes = map => {
 // The requests that do not depend on each other go out together: the join (or the boot tape and the first records), the
 // match's files (known from the entry's setup), and a check of a stale entry against the list
 async function startLive(id, match = null, entry = null) {
-  let info = null, all = null, boot = null, first = null, ext = null;
+  bootMark('startLive');
+  let info = null, all = null, boot = null, first = null, ext = null, snapQ = null;
   liveWant = id;
   if (entry && entry.id === id && !entry.css) liveFiles(entry);  // (with the join: the setup is the entry's but after a select)
-  const pre = livePre.get(id);
-  const j = await liveJoin(id, pre && pre.recs.size ? { have: pre.game, since: pre.last, v: true } : { v: true });
+  const jp = liveJoinPress && liveJoinPress.id === id && performance.now() - liveJoinPress.at < SNAP_PRE_MS ? liveJoinPress : null;
+  liveJoinPress = null;
+  if (jp) jp.used = true;
+  if (liveReqs && liveReqs.id === id) liveReqs.used = true;
+  const pre = jp ? jp.pre : livePre.get(id);
+  const j = jp ? await jp.p : await liveJoin(id, pre && pre.recs.size ? { have: pre.game, since: pre.last, v: true } : { v: true });
   if (liveWant !== id) return;
   if (j && j.entry) {
     info = j.entry; ext = j.ext;
@@ -2204,8 +2319,9 @@ async function startLive(id, match = null, entry = null) {
   if (!info.streak && prev && prev.M && liveOurs(info, prev.liveSrc) && prev.streakKnown && prev.M.HEAP32[0x54EEE8 >> 2] !== 1)
     info.streak = STREAK.map(a => prev.M.HEAP32[a >> 2]);
   if (!boot) {
-    const q = liveReqs && liveReqs.id === id && liveReqs.game === info.game ? liveReqs : liveStartReqs(id, info);
+    const q = liveReqs && liveReqs.id === id && liveReqs.game === info.game && performance.now() - liveReqs.at < SNAP_PRE_MS ? liveReqs : liveStartReqs(id, info);
     liveReqs = null;
+    snapQ = q.snap;
     const r = await q.boot;
     if (r && r.ok) liveExtSet(id, ext = r.headers.get('X-Live-Ext'));
     if (liveWant !== id) return;
@@ -2217,10 +2333,11 @@ async function startLive(id, match = null, entry = null) {
     liveFiles(info);  // (the files: from the setup, while start() reads the tape)
   }
   swMark('bootRep', true, id);
+  bootMark('bootRep');
   if (liveWant !== id) return;
   // (the live match being left for another: kept warm for a switch back)
   if (prev && prev.liveSrc && prev.liveSrc.id !== id) liveKeepTake(prev);
-  liveSrc = { id, info, since: info.game, first, fresh: true };
+  liveSrc = { id, info, since: info.game, first, fresh: true, snapP: snapQ || liveSnapFetch(id, info) };
   window.__mbaaRepUrl = null;
   // (a switch from a match on screen: quiet, the old picture held until the new match's first frame is drawn and
   // crossfaded into it, not the opening movie; a first load: the movie)
@@ -2228,12 +2345,207 @@ async function startLive(id, match = null, entry = null) {
 }
 // a start's requests without the join: the boot tape, the first records (the poll's first request, sent now) and the files
 let liveReqs = null;
+// A press on a live card (goal D, user ruling 2026-11-06): the join request (the bridge's /join: the entry, the boot
+// tape, the records; it counts this tab as the match's viewer) goes on the press, not the tap (~0.1 s and one bridge
+// round trip earlier); a bridge without /join: the start's requests (liveStartReqs). The tap's startLive takes it within
+// SNAP_PRE_MS. A press that never became a tap (a scroll, a press let go elsewhere): after PRESS_LEAVE_MS the tab is
+// taken off that match's viewers again (/live/<id>/leave), so the count settles. (The snapshot and the files: the
+// card prefetch on the same pointerdown, liveCardPrefetch)
+const PRESS_LEAVE_MS = 3000;
+let liveJoinPress = null;  // {id, game, at, p, used}
+function livePress(m) {
+  if (m.css || liveIdle(m) || (session && session.liveSrc && session.liveSrc.id === m.id)) return;
+  const now = performance.now();
+  if (liveJoinPress && liveJoinPress.id === m.id && liveJoinPress.game === m.game && now - liveJoinPress.at < SNAP_PRE_MS) return;
+  if (liveReqs && liveReqs.id === m.id && liveReqs.game === m.game && now - liveReqs.at < SNAP_PRE_MS) return;
+  let P;
+  if (liveJoinOk) {
+    const pre = livePre.get(m.id);
+    P = liveJoinPress = { id: m.id, game: m.game, at: now, used: false,
+      p: liveJoin(m.id, pre && pre.recs.size ? { have: pre.game, since: pre.last, v: true } : { v: true }), pre };
+    liveFiles(m);
+  } else P = liveStartReqs(m.id, m);
+  wTimeout(() => {
+    if (P.used || liveWant === m.id || (session && session.liveSrc && session.liveSrc.id === m.id)) return;
+    if (liveJoinPress === P) liveJoinPress = null;
+    if (liveReqs === P) liveReqs = null;
+    liveFetch(`${LIVE}/live/${m.id}/leave?v=${VIEWER}`).catch(() => {});
+  }, PRESS_LEAVE_MS);
+}
 function liveStartReqs(id, info) {
   const rec = `${LIVE}/live/${id}/rec?from=${info.game}&since=${info.game}&v=${VIEWER}` + (info.match ? `&match=${encodeURIComponent(info.match)}` : '');
-  const q = liveReqs = { id, game: info.game, boot: liveFetch(`${LIVE}/live/${id}/boot.rep?game=${info.game}`).catch(() => null),
-    first: liveFetch(rec).then(async r => r.ok ? { bytes: new Uint8Array(await r.arrayBuffer()), ext: r.headers.get('X-Live-Ext') } : null).catch(() => null) };
+  const q = liveReqs = { id, game: info.game, at: performance.now(), boot: liveFetch(`${LIVE}/live/${id}/boot.rep?game=${info.game}`).catch(() => null),
+    first: liveFetch(rec).then(async r => r.ok ? { bytes: new Uint8Array(await r.arrayBuffer()), ext: r.headers.get('X-Live-Ext') } : null).catch(() => null),
+    snap: liveSnapFetch(id, info) };
   liveFiles(info);
   return q;
+}
+// ---- the server snapshot join (artifacts/xz_check/perf_plan/snapjoin): the bridge's snapshot runner (tools/web/cc_snap.mjs)
+// keeps a typed snapshot of each live game every ~1.5 s (web/host/snapshot.cpp: PC's MBAACC typed deep-join format + the
+// web sections). A join loads it at its battle's first frames instead of re-simulating the game up to the live point, then
+// catches up only the seconds after it. Refused / no snapshot / the state hash after the load differs (the keyframe made
+// just before is put back): today's catch-up. The DVR goes back no further than the load (the frames before it are the
+// joiner's own, not the game's: s.snapFrom), and the game gives no clip replay (its tape lacks the rounds before the join:
+// web/host/spectate.cpp noTape). ?snap=0: off.
+const SNAP_ON = Q.get('snap') !== '0', JOIN_PROF = Q.get('joinprof') === '1';
+let snapSkip = '';   // ("<id>:<game>": its snapshot loaded with a differing state hash once: that game catches up)
+function liveSnapFetch(id, info) {
+  if (!SNAP_ON || snapSkip === `${id}:${info.game}`) return null;
+  // (one fetched for its card a moment ago (liveCardPrefetch: a hover, a touch): that one)
+  const pre = snapPre.get(id);
+  snapPre.delete(id);
+  if (pre && pre.game === info.game && performance.now() - pre.at < SNAP_PRE_MS) return pre.p;
+  return liveFetch(`${LIVE}/live/${id}/snap?game=${info.game}` + (info.match ? `&match=${encodeURIComponent(info.match)}` : ''))
+    .then(async r => r.ok ? { bytes: new Uint8Array(await r.arrayBuffer()), frame: +r.headers.get('X-Snap-Frame'), age: +r.headers.get('X-Snap-Age'), got: performance.now() } : null)
+    .catch(() => null);
+}
+// A card the viewer is about to tap (pointer over it, a touch starting on it, keyboard focus): its match's snapshot asked
+// for now (the bridge makes a fresh one if its newest is old: cc_live.mjs SNAP_FRESH_MS) and its game's files into the
+// disk cache, so the tap finds both. Once per card per SNAP_PRE_MS; nothing with Save-Data / 2G (livePreOff). The list's
+// first card gets its files only (no snapshot) when the list shows, on desktop (LOWMEM / a phone: on its touch alone).
+const SNAP_PRE_MS = 4000, snapPre = new Map(), cardWarm = new Set(), cardHot = [];
+// The decoded files of the cards most likely tapped (hovered, pressed, or preloaded: livePreloadAll), beside the
+// session's and the prewarmed engine's: at most HOT_N matches and HOT_MB MB of decoded files (the oldest go first); kept
+// through the session's own cache prunes (cachePinned)
+const HOT_N = 4, HOT_MB = 320;
+function cardHotAdd(key, want) {
+  const at = cardHot.findIndex(([k]) => k === key);
+  if (at >= 0) cardHot.splice(at, 1);
+  cardHot.push([key, want]);
+  cardHotTrim();
+}
+function cardHotTrim() {
+  const mb = () => { const seen = new Set(); let b = 0;
+    for (const [, w] of cardHot) for (const p of w) if (!seen.has(p)) { seen.add(p); const d = cache.get(p); if (d) b += d.byteLength; }
+    return b / 1048576; };
+  let drop = false;
+  while (cardHot.length > HOT_N || (cardHot.length > 1 && mb() > HOT_MB)) { cardWarm.delete(cardHot.shift()[0]); drop = true; }
+  if (drop) cachePrune(new Set([...((session && session.want) || []), ...((man.plan && man.plan.boot) || []), ...cardHot.flatMap(([, w]) => [...w])]));
+}
+// Live-match preload (goal D, user ruling 2026-11-06): when the live list shows or updates, each live match's files (its
+// list entry: stage, characters, moons, palettes) at idle, one match at a time, the list's order (the likeliest tap
+// first): desktop decoded into memory (cardHot: at most HOT_N matches / HOT_MB MB); low memory (phones) into the disk
+// cache only (a match's decoded files are ~50-80 MB, past a phone's 16-24 MB budget; a tap then decodes them in the
+// worker pool). Matches gone from the list leave cardHot. Nothing on Save-Data / 2G (livePreOff); ?preload=0: off
+// (the hover / press prefetch stays).
+const PRELOAD = Q.get('preload') !== '0';
+let preloadRun = null;
+function livePreloadAll(list) {
+  if (!PRELOAD || livePreOff() || !man || !list) return;
+  const ids = new Set(list.map(m => m.id));
+  const gone = cardHot.filter(([k]) => !ids.has(JSON.parse(k)[0]));
+  if (gone.length) { for (const [k] of gone) { cardWarm.delete(k); cardHot.splice(cardHot.findIndex(([x]) => x === k), 1); } cardHotTrim(); }
+  const todo = list.filter(m => !m.css && !liveIdle(m) && !(session && session.liveSrc && session.liveSrc.id === m.id)).slice(0, LOWMEM ? 8 : HOT_N);
+  const run = preloadRun = {};   // (a newer list's run takes over)
+  (async () => {
+    for (const m of todo) {
+      if (preloadRun !== run) return;
+      await new Promise(r => window.requestIdleCallback ? requestIdleCallback(() => r(), { timeout: 2000 }) : setTimeout(r, 200));
+      const key = JSON.stringify([m.id, m.game, m.stage, m.chara, m.moon, m.color]);
+      if (cardWarm.has(key)) continue;
+      const want = liveWantOf(m);
+      if (!want) continue;
+      cardWarm.add(key);
+      if (LOWMEM) { await warmDisk(man, want).catch(() => {}); continue; }
+      // (one already preloaded stays where it is: a preload never pushes out a card the viewer hovered)
+      cardHot.unshift([key, want]);
+      cardHotTrim();
+      if (!cardHot.some(([k]) => k === key)) { cardWarm.delete(key); continue; }
+      await fetchAll(man, want, '', true).catch(() => {});
+      cardHotTrim();
+    }
+  })().catch(e => console.warn('live preload:', e));
+}
+function liveCardPrefetch(m, snap = true) {
+  if (livePreOff() || !m || m.css || liveIdle(m)) return;
+  const key = JSON.stringify([m.id, m.game, m.stage, m.chara, m.moon, m.color]);
+  // (desktop: decoded into the page's file cache, so a tap finds them ready, not only on disk: the decode of a match's
+  // files was ~0.55 s of a desktop tap, goal D; low memory: the disk only)
+  if (!cardWarm.has(key)) {
+    cardWarm.add(key);
+    const want = liveWantOf(m);
+    if (want && LOWMEM) warmDisk(man, want).catch(() => {});
+    else if (want) {
+      cardHotAdd(key, want);
+      fetchAll(man, want, '', true).then(cardHotTrim, () => {});
+    }
+  }
+  const pre = snapPre.get(m.id);
+  if (!snap || (pre && pre.game === m.game && performance.now() - pre.at < SNAP_PRE_MS)) return;
+  const p = liveSnapFetch(m.id, m);
+  if (p) snapPre.set(m.id, { game: m.game, p, at: performance.now() });
+}
+// the join's load: true when loaded (the catch-up then has only the rest); window.__mbaaSnapJoin: what happened (the checks)
+// (goal D) the join's load stores its sprite pages raw and codes them after (viewer_encode_later): desktop all of them;
+// low-memory mode (phones) at most ENC_BUDGET MB raw (?encbudget=<MB>), the pages past it coded in place (user ruling
+// 2026-11-06: a 16-24 MB cap). ?enclater=0: every page coded in place
+const ENC_LATER = !HASH && !CAPTURE && Q.get('enclater') === '1';
+const ENC_BUDGET = LOWMEM ? Math.max(1, +(Q.get('encbudget') || 24)) : 0;
+async function liveSnapJoin(s) {
+  const L = s.liveSrc, M = s.M, t0 = performance.now(), J = window.__mbaaSnapJoin = { t0, ok: false };
+  const p = L.snapP;
+  L.snapP = null;
+  if (!p || !M._viewer_snap_load) return false;
+  const sn = await Promise.race([p, new Promise(r => setTimeout(() => r(null), 2500))]);
+  J.fetched = performance.now() - t0;
+  if (!sn || session !== s) { J.why = sn ? 'left' : 'no snapshot'; return false; }
+  Object.assign(J, { bytes: sn.bytes.length, senderFrame: sn.frame, age: sn.age });
+  // the base: this game's battle under way (scene code and committed scene 1, the live session InGame), unrendered
+  const base = () => M.HEAP32[0x55D1D0 >> 2] === 1 && M.HEAP32[0x54EEE8 >> 2] === 1 && call(s, 'viewer_spectate_phase') === 2;
+  if (JOIN_PROF) console.profile('join-base');   // (?joinprof=1, the checks: a CPU profile of the base's stepping)
+  let f = M._viewer_frame(), stalls = 0, stepMs = 0, slow = [];
+  const f0 = f, tw = performance.now();
+  // (desktop: the load's sprite pages coded after the join, viewer_encode_later; the same store contents)
+  const encLater = ENC_LATER && !!M._viewer_encode_later;
+  if (encLater) M._viewer_encode_later(1, ENC_BUDGET * 1048576);
+  try {
+  while (!base() && session === s) {
+    const ta = performance.now(), g = M._viewer_step(1), d = performance.now() - ta;
+    stepMs += d;
+    if (d > 8 && slow.length < 24) slow.push(`${g}:${Math.round(d)}`);
+    if (g === f) { if (++stalls > 600) break; await cuTurn(); continue; }  // (held: the match's files, the stream)
+    f = g;
+    if (f % 60 === 0) await cuTurn();
+  }
+  } finally { if (encLater) M._viewer_encode_later(0, 0); }
+  // (the checks: frames stepped, time in the steps, the held steps (waits on files / the stream), the slow frames)
+  Object.assign(J, { baseFrom: f0, stepMs: Math.round(stepMs), waitMs: Math.round(performance.now() - tw - stepMs), stalls, slow: slow.join(' ') });
+  J.baseFrame = f; J.baseMs = performance.now() - t0;
+  if (JOIN_PROF) console.profileEnd('join-base');
+  if (session !== s || !base()) { J.why = 'no battle base'; return false; }
+  const t = s.tl;
+  if (M._viewer_spectate_set_first_game) M._viewer_spectate_set_first_game(L.firstGame ?? L.info.game);   // (the snapshot's same-game check)
+  const buf = M._malloc(sn.bytes.length);
+  M.HEAPU8.set(sn.bytes, buf);
+  const tl = performance.now(), r = M._viewer_snap_load(buf, sn.bytes.length);
+  J.loadMs = performance.now() - tl;
+  M._free(buf);
+  J.result = r;
+  if (r !== 1) {
+    J.why = M.ccall('viewer_snap_why', 'string', [], []);
+    console.log(`live: snapshot not used (${J.why}); catching up`);
+    // (loaded but the state hash differs: this session's state is not the game's; the match again without the snapshot)
+    if (r === 2) { snapSkip = `${L.id}:${L.info.game}`; setTimeout(() => startLive(L.id, L.info.match || null), 0); J.restart = true; }
+    return false;
+  }
+  // the timeline from here: the keyframes before the load are the joiner's own frames, not the game's. The newest stays
+  // only as the incremental keyframes' base (its pages shared; preSnap: never restored, seekTo / kfPinned); no keyframe is
+  // made here (a whole-memory one: ~1.5 s at phone speed), the first after the load comes KF_EVERY frames on (incTick).
+  // A rewind before it: refused (seekTo)
+  if (t) {
+    const keep = t.kfs.filter(k => !k.pending).pop();
+    for (const k of t.kfs.splice(0)) if (k !== keep) { for (const q of k.pages) pageRef(t, q, -1); kfTexDrop(t, k); }
+    if (keep) { keep.preSnap = true; t.kfs.push(keep); }
+    t.inc = null;
+    t.lastKf = keep ? keep.frame : -1;
+    t.safeFrom = f + 1;
+    t.marks = t.marks.filter(m => m[0] > f);
+    t.simMax = Math.max(t.simMax || 0, f);
+  }
+  s.snapFrom = f;
+  J.ok = true; J.ms = performance.now() - t0;
+  console.log(`live: joined from the server's snapshot (sender frame ${sn.frame}, ${sn.age} ms old, ${sn.bytes.length} bytes) at frame ${f} in ${Math.round(J.ms)} ms`);
+  return true;
 }
 // the match's files, from its setup, into the cache (start() waits on the same fetches)
 function liveFiles(info) {
@@ -2308,6 +2620,22 @@ const cuTurn = () => new Promise(r => { const ch = new MessageChannel(); ch.port
 // marks of a match switch (performance.now(); window.__mbaaSwitch, the checks): click, picture (the new match's first
 // frame drawn), cuStart / cuEnd (catch-up), live (caught up)
 async function liveCatchUp(s, n) {
+  bootMark('catchUp');
+  if (s.liveSrc && s.liveSrc.snapP && !CU_OLD) {
+    const was = s.seeking;
+    s.seeking = true; s.mute = true; s.stopSes(); s.bgmHalt(); call(s, 'viewer_suppress', 1);
+    let ok = false;
+    try { ok = await liveSnapJoin(s); } finally { call(s, 'viewer_suppress', 0); s.seeking = was; }
+    if (session !== s) return;
+    if (ok) n = call(s, 'viewer_spectate_buffered') - LIVE_BEHIND;
+    if (ok && n <= 2) {
+      call(s, 'viewer_represent'); s.mute = ui.paused; uiApply(s); if (!ui.paused) s.bgmSync(s.M._viewer_frame());
+      if (s.liveSrc) { liveCssWatch(s); liveRematchHold(s); liveBanner(s); liveStreak(s); slogWatch(s); }
+      s.livePic = true; swMark('picture'); swMark('battlePic');
+      cuDone(s, s.M._viewer_frame(), window.__mbaaSnapJoin.t0, 0);
+      return;
+    }
+  }
   if (CU_OLD) return liveCatchUpOld(s, n);
   const M = s.M, T = cuTarget(M, n), DRAW = 2, t0 = performance.now(), f0 = M._viewer_frame();
   catchUpShow(T - f0, T - f0);
@@ -2374,6 +2702,7 @@ async function liveCatchUp(s, n) {
 function cuDone(s, f0, t0, drawn) {
   const M = s.M, f = M._viewer_frame(), ms = performance.now() - t0;
   const r = { frames: f - f0, ms, fps: (f - f0) / (ms / 1000), from: f0, frame: f, drawn, kfs: s.tl ? s.tl.kfs.length : 0, old: CU_OLD, prof: s.cuProf || null,
+             at: performance.now(), snap: s.snapFrom != null ? { ...window.__mbaaSnapJoin } : null,
              kfMs: s.tl ? s.tl.kfs.filter(k => k.frame >= f0).map(k => Math.round(k.ms)) : [], landMs: s.cuLandMs ?? null };
   s.cuProf = null;
   if (CU_HASH) {
@@ -3449,6 +3778,9 @@ async function liveListDraw(given) {
     if (liveSrc && liveSrc.id === m.id) { li.className = 'cur'; liveWatching(m.viewers); }
     if (liveIdle(m)) li.classList.add('idle');
     // (in place: the chat, the radio and the loaded game stay; a new tab / window with a modifier or the middle button)
+    for (const ev of ['pointerenter', 'pointerdown', 'focus']) a.addEventListener(ev, () => liveCardPrefetch(m), { passive: true });
+    // (a press: the tap follows in ~0.1 s; its start's requests go now (livePress), the tap's startLive takes them; goal D)
+    a.addEventListener('pointerdown', () => livePress(m), { passive: true });
     a.onclick = e => {
       if (e.button || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
       e.preventDefault();
@@ -3461,6 +3793,7 @@ async function liveListDraw(given) {
   // (in place: a kept row is never taken out of the list, which would restart its names' scrolling from the start;
   // only rows out of order move)
   rows.forEach((li, i) => { if (ol.children[i] !== li) ol.insertBefore(li, ol.children[i] || null); });
+  livePreloadAll(l);   // (every live match's files, at idle: livePreloadAll)
   while (ol.children.length > rows.length) ol.lastElementChild.remove();
   // (a moved row slides to its place; a new one fades in; none under reduced motion)
   if (!matchMedia('(prefers-reduced-motion: reduce)').matches && !document.hidden)
@@ -5449,7 +5782,9 @@ async function start(file, quiet = false, liveId = null) {
   if (want && liveResumeK) for (const p of liveResumeK.want) want.add(p);  // (back to a kept match: every file it had in)
   if (want) {
     status(`stage ${keys.stage}, P1 ${keys.p1[0]}:${keys.p1[1]} vs P2 ${keys.p2[0]}:${keys.p2[1]}: fetching`);
+    bootMark('filesStart');
     await fetchAll(man, want, 'match assets');
+    bootMark('files');
     swMark('files');
   }
   if (liveId) swMark('files', true, liveId);
@@ -7068,6 +7403,7 @@ function toggleFullscreen() {
 }
 matchMedia && addEventListener('load', fitStage);
 async function main() {
+  bootMark('main');
   fitStage();
   // the engine downloads while the match's files do (MBAA() later fetches the same URL: an HTTP cache hit)
   const wasmV = ((document.querySelector('script[src^="mbaa.js"]') || {}).src || '').split('?')[1];
@@ -7088,7 +7424,10 @@ async function main() {
     const r = await fetch(BUNDLE + 'manifest.bin' + (mv ? `?v=${mv}` : ''), { cache: mv ? 'default' : 'no-cache' });
     net.bytes += +(r.headers.get('content-length') || 0);
     man = JSON.parse(new TextDecoder().decode(await openObject(await r.arrayBuffer())));
+    bootMark('manifest');
     stagePanelLoad().catch(e => console.warn('stage panel:', e));
+    engineWarm();  // (the engine boots while the page shows its list / the match's files come in)
+    if (!PREWARM && liveListLast) livePreloadAll(liveListLast.l);   // (no prewarm: the live matches' files now)
     if (!man.plan) await fetchAll(man, Object.keys(man.files), 'assets');  // a bundle without a plan: everything
   }
   status('ready: drop a .rep file');
