@@ -3,7 +3,11 @@
    game's 15-30 px bitmaps scaled up); only the font files ship (tools/ui_assets/gx_build.py). Dark: the main menu's indigo (Menu_BG) with the select screen's
    crimson (csel_bg00, menu_sel); light: the style select's lavender (csel_style00 / csel_Disk00) on white. Loaded only
    with gx on (root .gx, data-theme dark | light). */
-@font-face { font-family: 'Cezanne'; src: url(cezanne.woff2) format('woff2'); font-display: swap; }
+/* (its vertical metrics pinned: the file's Windows ones (winAscent 1232 / winDescent 354) differ from its hhea ones
+   (880 / 120), so Chrome on Windows set every line ~0.06 em lower than elsewhere (user 2026-11-07: the plate names sat
+   low). 89 / 11: the caps (cap height 780) centred in any line height, on every platform) */
+@font-face { font-family: 'Cezanne'; src: url(cezanne.woff2) format('woff2'); font-display: swap;
+  ascent-override: 89%; descent-override: 11%; line-gap-override: 0%; }
 /* (the VS screen's thin geometric caps for the character line: Jost, SIL OFL) */
 @font-face { font-family: 'Jost'; src: url(jost.woff2) format('woff2'); font-weight: 300 600; font-display: swap; }
 
@@ -31,13 +35,13 @@
 
 /* ---- the match card: names on the select screen's style plates (redrawn: a thin light rim, black running into the
    select glow's violet, a sheen line, the outer end cut on the slant; P2 mirrored), the VS in the game's blue glow ---- */
-:root.gx #matchcard #players .nm { position: relative; isolation: isolate; padding: 2px 20px 3px 9px; color: var(--gx-ink); font-weight: 400;
+:root.gx #matchcard #players .nm { position: relative; isolation: isolate; padding: 2.5px 20px 2.5px 9px; color: var(--gx-ink); font-weight: 400;
   background: linear-gradient(90deg, #ffffff 0%, #d9d0ff 100%); clip-path: polygon(0 0, 100% 0, calc(100% - 11px) 100%, 0 100%);
   text-shadow: 0 0 3px var(--gx-rim), 0 1px 0 #000; }
 :root.gx #matchcard #players .nm::before { content: ''; position: absolute; inset: 1.5px 2px 1.5px 1.5px; z-index: -1;
   clip-path: polygon(0 0, 100% 0, calc(100% - 10px) 100%, 0 100%);
   background: linear-gradient(transparent 62%, #ffffff40 62% 68%, transparent 68%), linear-gradient(90deg, #000 0%, #07020f 22%, #2b0f66 62%, #7a35ff 100%); }
-:root.gx #matchcard #players .pl:last-child .nm { padding: 2px 9px 3px 20px; clip-path: polygon(0 0, 100% 0, 100% 100%, 11px 100%);
+:root.gx #matchcard #players .pl:last-child .nm { padding: 2.5px 9px 2.5px 20px; clip-path: polygon(0 0, 100% 0, 100% 100%, 11px 100%);
   background: linear-gradient(270deg, #ffffff 0%, #d9d0ff 100%); }
 :root.gx #matchcard #players .pl:last-child .nm::before { inset: 1.5px 1.5px 1.5px 2px; clip-path: polygon(0 0, 100% 0, 100% 100%, 10px 100%);
   background: linear-gradient(transparent 62%, #ffffff40 62% 68%, transparent 68%), linear-gradient(270deg, #000 0%, #07020f 22%, #2b0f66 62%, #7a35ff 100%); }

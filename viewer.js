@@ -3833,15 +3833,14 @@ setInterval(() => {
 // (the player block's room changes with the layout, the card's banner and its fonts: measured again on every resize)
 if (window.ResizeObserver && document.getElementById('players'))  // (viewer.js loads at the end of the page: it exists)
   new ResizeObserver(() => marquee(document.getElementById('players'))).observe(document.getElementById('players'));
-// (while a match plays (body.mplay) the shell's own animations hold still: these marquees, and in CSS the banner's
-// scroll, the clip link's pulse and the 2x badge; each ran compositor frames between the game's, goal 3a)
-const mqAnims = new Set();
+// (while a match plays (body.mplay) the shell's own CSS animations hold still: the banner's scroll, the clip link's
+// pulse and the 2x badge; each ran compositor frames between the game's, goal 3a. The name marquees run on: a paused one
+// froze a long name cut off at both ends (user 2026-11-07); each is one compositor transform)
 let mPlay = false;
 frameBus.add(function playState() {
   const on = !!(session && session.tl && !ui.paused && !document.hidden);
   if (on === mPlay) return;
   mPlay = on; document.body.classList.toggle('mplay', on);
-  for (const a of mqAnims) { try { if (on) a.pause(); else a.play(); } catch (e) {} }
 });
 function marquee(root, sel = '.mqx') {
   for (const nm of root.querySelectorAll(sel)) {
@@ -3851,13 +3850,12 @@ function marquee(root, sel = '.mqx') {
     // (a Web Animation with concrete numbers runs on the compositor; the CSS keyframes with var() re-styled the text
     // every frame on the main thread)
     if (t.__mq && t.__mq.over === over) continue;
-    if (t.__mq) { t.__mq.anim.cancel(); mqAnims.delete(t.__mq.anim); t.__mq = null; }
+    if (t.__mq) { t.__mq.anim.cancel(); t.__mq = null; }
     if (over <= 2 || (window.matchMedia && matchMedia('(prefers-reduced-motion: reduce)').matches) || !t.animate) continue;
     const anim = t.animate([{ transform: 'translateX(0)', offset: 0 }, { transform: 'translateX(0)', offset: 0.15 },
                             { transform: `translateX(${-over}px)`, offset: 0.85 }, { transform: `translateX(${-over}px)`, offset: 1 }],
                            { duration: (over / 60 / 0.7 + 0.5) * 1000, iterations: Infinity, direction: 'alternate', easing: 'ease-in-out' });
-    t.__mq = { over, anim }; mqAnims.add(anim);
-    if (mPlay) anim.pause();
+    t.__mq = { over, anim };
   }
 }
 // the watched match's viewer count (the live list's, every 15 s), on the players panel's VS line
@@ -4014,7 +4012,9 @@ async function liveListDraw(given) {
     if (liveSrc && liveSrc.id === m.id) { li.className = 'cur'; liveWatching(m.viewers); }
     if (liveIdle(m)) li.classList.add('idle');
     // (in place: the chat, the radio and the loaded game stay; a new tab / window with a modifier or the middle button)
-    for (const ev of ['pointerenter', 'pointerdown', 'focus']) a.addEventListener(ev, () => liveCardPrefetch(m), { passive: true });
+    // (a hover warms the card's files only; its snapshot (a runner wake on the bridge) waits for a press or focus: plan 0b)
+    a.addEventListener('pointerenter', () => liveCardPrefetch(m, false), { passive: true });
+    for (const ev of ['pointerdown', 'focus']) a.addEventListener(ev, () => liveCardPrefetch(m), { passive: true });
     // (a press: the tap follows in ~0.1 s; its start's requests go now (livePress), the tap's startLive takes them; goal D)
     a.addEventListener('pointerdown', () => livePress(m), { passive: true });
     a.onclick = e => {

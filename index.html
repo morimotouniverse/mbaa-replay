@@ -29,7 +29,7 @@
 <link rel="apple-touch-icon" href="icon-192.png">
 <meta name="theme-color" content="#0d0620">  <!-- (the phone browser's bar: the theme's background; set with it, viewer.js GX.apply / the head script) -->
 <link rel="stylesheet" href="icons.css?v=4db5e6fecf18">
-<link rel="stylesheet" href="gx/gx.css?v=1ffeef6825c5">
+<link rel="stylesheet" href="gx/gx.css?v=9ffaa9f70273">
 <style>
   :root { --bg: #0d0d14; --panel: #15151f; --raise: #1d1d2a; --fg: #ececf4; --muted: #8a8aa2; --faint: #5c5c74;
           --accent: #e04a5a; --accent2: #ffb84a; --line: #262636; --w: min(100%, 960px); }
@@ -417,7 +417,8 @@
   #players .pl { display: flex; align-items: center; gap: 8px; min-width: 0; }
   #players .ico { width: 64px; height: 64px; flex: none; }
   #players .who { min-width: 0; display: flex; flex-direction: column; line-height: 1.25; }
-  #players .nm { font-size: 14px; font-weight: 650; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  #players .nm { font-size: 14px; font-weight: 650; white-space: nowrap; overflow: hidden; }
+  #players .nm > .mqx { display: block; }  /* (the name's own clip box, inside the plate's padding: viewer.js marquee) */
   #players .ch { font-size: 11.5px; color: var(--muted); display: flex; align-items: center; gap: 4px; }
   #players .moon { width: 16px; height: 16px; flex: none; }
   /* (a tight dark rim plus a soft shadow under it: the moon stays readable over a bright stage picture) */
@@ -904,9 +905,9 @@
     <div id="matchcard">
     <img class="por" alt="" hidden><img class="por p2" alt="" hidden>
     <div id="players" hidden>
-      <div class="pl"><canvas class="ico" width="64" height="64"></canvas><div class="who"><span class="nm mqx"><span class="t"></span></span><span class="ch"><canvas class="moon" width="56" height="56"></canvas><span class="mqx"><span class="t"></span></span></span></div></div>
+      <div class="pl"><canvas class="ico" width="64" height="64"></canvas><div class="who"><span class="nm"><span class="mqx"><span class="t"></span></span></span><span class="ch"><canvas class="moon" width="56" height="56"></canvas><span class="mqx"><span class="t"></span></span></span></div></div>
       <div class="vs">VS <span id="watching"></span></div>
-      <div class="pl"><canvas class="ico" width="64" height="64"></canvas><div class="who"><span class="nm mqx"><span class="t"></span></span><span class="ch"><canvas class="moon" width="56" height="56"></canvas><span class="mqx"><span class="t"></span></span></span></div></div>
+      <div class="pl"><canvas class="ico" width="64" height="64"></canvas><div class="who"><span class="nm"><span class="mqx"><span class="t"></span></span></span><span class="ch"><canvas class="moon" width="56" height="56"></canvas><span class="mqx"><span class="t"></span></span></span></div></div>
     </div>
     <div id="stageblk" hidden><img class="view" alt=""><div class="plate"><img class="name" alt=""><div class="trk" id="trk"></div></div></div>
     </div>
@@ -988,6 +989,6 @@
 </div>
 <script src="mbaa.js?v=0ab30dcacef1"></script>
 <script src="bgm_stream.js?v=cad5cabd6328"></script>
-<script src="viewer.js?v=ac79834a700c"></script>
+<script src="viewer.js?v=cc3f07a2ed99"></script>
 </body>
 </html>
