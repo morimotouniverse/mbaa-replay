@@ -27,8 +27,10 @@ async function versioned(r, url) {
   const hit = await c.match(r);
   if (hit) return hit;
   const res = await fetch(r);
-  if (res.ok) {
-    await c.put(r, res.clone());
+  // (only whole answers: a media element's range request gets a 206, which the cache refuses, and a rejected put
+  // failed the whole answer: the opening video did not load in Firefox)
+  if (res.status === 200) {
+    await c.put(r, res.clone()).catch(() => {});
     for (const k of await c.keys()) {  // (older versions of the same file)
       const u = new URL(k.url);
       if (u.pathname === url.pathname && u.search !== url.search) c.delete(k);

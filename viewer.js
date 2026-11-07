@@ -367,9 +367,12 @@ function slogWatch(s) {
     s.cssBgHeld && 'select screen files', s.liveHeld && 'stream', s.seeking && 'seeking'].filter(Boolean).join(', ');
   if (holds !== w.holds) { slogAdd('hold', holds ? `held: ${holds}` : 'running'); w.holds = holds; }
   if (!!s.liveFF !== w.ff) { w.ff = !!s.liveFF; slogAdd('speed', w.ff ? '2x catching up' : '1x'); }
-  const now = performance.now();
+  const now = performance.now(), tk = M._viewer_tick_count() >>> 0;
+  // (the engine's loop ran lately: a window covered by another (a game in front of it) is never 'hidden' but its
+  // browser stops the animation frames, so no frame is no stall of ours: 8 such reports from one Firefox on 2026-11-07)
+  if (tk !== w.tk) { w.tk = tk; w.tkAt = now; }
   if (f !== w.f) { w.f = f; w.fAt = now; w.sent = false; }
-  else if (!w.sent && s.liveSrc && !ui.paused && !document.hidden && now - w.fAt > 20000) {
+  else if (!w.sent && s.liveSrc && !ui.paused && !document.hidden && now - w.tkAt < 2000 && now - w.fAt > 20000) {
     w.sent = true; slogAdd('stall', `no frame for ${Math.round((now - w.fAt) / 1000)} s at frame ${f}`); slogSend(s, 'stall');
   }
 }
@@ -2622,7 +2625,7 @@ async function liveSnapJoin(s) {
   // the base: this game's battle under way (scene code and committed scene 1, the live session InGame), unrendered
   const base = () => M.HEAP32[0x55D1D0 >> 2] === 1 && M.HEAP32[0x54EEE8 >> 2] === 1 && call(s, 'viewer_spectate_phase') === 2;
   if (JOIN_PROF) console.profile('join-base');   // (?joinprof=1, the checks: a CPU profile of the base's stepping)
-  let f = M._viewer_frame(), stalls = 0, stepMs = 0, slow = [];
+  let f = M._viewer_frame(), stalls = 0, stallAt = 0, stepMs = 0, slow = [];
   const f0 = f, tw = performance.now();
   // (desktop: the load's sprite pages coded after the join, viewer_encode_later; the same store contents)
   const encLater = ENC_LATER && !!M._viewer_encode_later;
@@ -2632,7 +2635,13 @@ async function liveSnapJoin(s) {
     const ta = performance.now(), g = M._viewer_step(1), d = performance.now() - ta;
     stepMs += d;
     if (d > 8 && slow.length < 24) slow.push(`${g}:${Math.round(d)}`);
-    if (g === f) { if (++stalls > 600) break; await cuTurn(); continue; }  // (held: the match's files, the stream)
+    // (held: the match's files, the stream. Waited for by time, not turns: 600 message-channel turns were well under
+    // a second, so a join that crossed a character select into a new pair gave up while that pair's files were still
+    // downloading, and the next steps read them missing: "21 game files were missing", then index out of bounds, user
+    // 2026-11-07. A stream that stops is the poll's to handle)
+    if (g === f) { if (!stalls++) stallAt = performance.now(); else if (performance.now() - stallAt > 60000) break;
+                   await new Promise(r => setTimeout(r, stalls < 50 ? 0 : 20)); continue; }
+    stalls = 0;
     f = g;
     if (f % 60 === 0) await cuTurn();
   }
@@ -4337,7 +4346,7 @@ function liveStreak(s) {
   if (!s.streakKnown) return;
   const g = call(s, 'viewer_spectate_game'), game = g >= 0 ? g : s.liveSrc.info.game;
   const w = STREAK.map(a => s.M.HEAP32[a >> 2]), post = (gm, ws) =>
-    fetch(`${LIVE}/live/${s.liveSrc.id}/streak?game=${gm}`, { method: 'POST', body: ws.join(',') }).catch(() => {});
+    liveClipCan() && fetch(`${LIVE}/live/${s.liveSrc.id}/streak?game=${gm}`, { method: 'POST', body: ws.join(',') }).catch(() => {});  // (signed in only: F-06)
   if (s.M.HEAP32[0x54EEE8 >> 2] === 1 && game !== s.streakSent) {
     s.streakSent = game; s.streakAt = w.join(','); s.streakAhead = null;
     post(game, w);
@@ -4923,7 +4932,11 @@ function liveBegin(s) {  // play(): after viewer_play
       if (sw && sw.id === L.id && sw.marks.records != null && sw.marks.cuStart == null && (sw.polls || (sw.polls = [])).length < 12)
         sw.polls.push({ t: Math.round(performance.now() - sw.t0), ahead, floor, synced: !!s.liveSynced, css: !!s.cssHeld, load: !!s.loadHeld,
                         retry: call(s, 'viewer_spectate_in_retry'), seeking: !!s.seeking });
-      if (s.liveSynced && liveJump() && !hidden() && !s.cssHeld && !s.loadHeld && !call(s, 'viewer_spectate_in_retry')) {
+      // (the jump only while the engine's loop runs: a covered window's browser runs no animation frames, and jumping
+      // its stalled session to live every ~17 s only spent the CPU of the game in front of it)
+      const tkNow = s.M._viewer_tick_count() >>> 0, looping = tkNow !== s.pollTk;
+      s.pollTk = tkNow;
+      if (s.liveSynced && liveJump() && !hidden() && looping && !s.cssHeld && !s.loadHeld && !call(s, 'viewer_spectate_in_retry')) {
         // (the stream grows while the jump runs: again until it is close)
         // (at the join: a jump past 2 s over; later only a real backlog, 10 s over the floor: a hidden tab, a load. The
         // stream also drifts ahead ~1-2 s over a few round ends, the host's transitions being shorter than ours: the
@@ -4946,7 +4959,9 @@ function liveBegin(s) {  // play(): after viewer_play
       const due = liveExt.thumbDue, extNow = due != null && performance.now() >= due;
       // (cardDark reads the canvas back, a GPU stall of 40-80 ms on a phone: only once the picture is due, never per poll)
       if (s.liveSynced && battle && !hidden() && !s.seeking && performance.now() - s.battleAt > 4000
-          && (extNow || (due == null && performance.now() - (s.liveThumbAt || -1e9) > 120000)) && !cardDark()) {
+          && (extNow || (due == null && performance.now() - (s.liveThumbAt || -1e9) > 120000)) && liveClipCan() && !cardDark()) {
+        // (signed in only: the bridge takes link-card pictures from signed-in viewers alone (AUDIT_1107 F-06); a guest's
+        // POST was a 401 in its console)
         s.liveThumbAt = performance.now(); liveExt.thumbDue = null;
         // (ext: the extension this frame shows; the bridge keeps a frame of the match's current one over an older one's. In the
         // query, not a header: a custom header would need a CORS preflight the bridge does not answer)
