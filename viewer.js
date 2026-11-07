@@ -2900,11 +2900,38 @@ function iconCell(c) {
   const base = CHARA[c] && CHARA[c].startsWith('B. ') ? +Object.keys(CHARA).find(k => CHARA[k] === CHARA[c].slice(3)) : -1;
   return cellOf(base);
 }
-// a moon mark (canvas, the 56x56 select-sheet cell scaled)
+// ---- the game-graphics UI (gx: web/shell/gx/, tools/ui_assets/gx_build.py), on trial for the owner to judge (user
+// 2026-11-07): ?ui=gx turns it on in this browser, ?ui=std off; ?theme=dark|light|auto (auto: the system's), also in the
+// settings menu. gx.css carries the look (the game's plates, bars, timer and names redrawn in CSS, not its bitmaps: user
+// 2026-11-07); here the moon marks (gx/moons.svg, drawn at the canvas's own resolution).
+const GX = (() => {
+  let on = false, th = 'auto';
+  try {
+    const q = new URLSearchParams(location.search);
+    if (q.get('ui') === 'gx') localStorage.setItem('mbaaUi', 'gx'); else if (q.get('ui') === 'std') localStorage.removeItem('mbaaUi');
+    if (/^(dark|light|auto)$/.test(q.get('theme') || '')) localStorage.setItem('mbaaTheme', q.get('theme'));
+    on = localStorage.getItem('mbaaUi') === 'gx'; th = localStorage.getItem('mbaaTheme') || 'auto';
+  } catch (e) {}
+  if (!on) return null;
+  const root = document.documentElement, mq = matchMedia('(prefers-color-scheme: light)');
+  const g = { theme: th, moons: new Image() };
+  g.apply = t => { g.theme = t; try { localStorage.setItem('mbaaTheme', t); } catch (e) {} root.dataset.theme = t === 'auto' ? (mq.matches ? 'light' : 'dark') : t; };
+  mq.addEventListener('change', () => { if (g.theme === 'auto') g.apply('auto'); });
+  root.classList.add('gx'); g.apply(th);
+  const css = document.createElement('link'); css.rel = 'stylesheet'; css.href = 'gx/gx.css?v=' + (document.querySelector('script[src^="viewer.js"]') || { src: '' }).src.split('?')[1];
+  document.head.append(css);
+  g.moons.onload = () => { plKey = ''; for (const cv of document.querySelectorAll('canvas[data-moon]')) drawMoon(cv, +cv.dataset.moon); };
+  g.moons.src = 'gx/moons.svg';
+  return g;
+})();
+// a moon mark (canvas, the 56x56 select-sheet cell scaled; gx: gx/moons.svg's four 48-unit cells)
 function drawMoon(cv, m) {
   const x = cv.getContext('2d');
   x.clearRect(0, 0, cv.width, cv.height);
-  if (plArt && m >= 0 && m <= 2) x.drawImage(plArt.cursor, MOON_X[m], 288, 56, 56, 0, 0, cv.width, cv.height);
+  cv.dataset.moon = m;
+  const k = m >= 0 && m <= 2 ? m : m === 9 ? 3 : -1;
+  if (GX && GX.moons.complete && GX.moons.naturalWidth && k >= 0) { const w = GX.moons.naturalWidth / 4; x.drawImage(GX.moons, k * w, 0, w, GX.moons.naturalHeight, 0, 0, cv.width, cv.height); }
+  else if (plArt && m >= 0 && m <= 2) x.drawImage(plArt.cursor, MOON_X[m], 288, 56, 56, 0, 0, cv.width, cv.height);
 }
 // this tab's random id, sent with live record requests: the feed counts the tabs watching each match (nothing else)
 const VIEWER = Array.from(crypto.getRandomValues(new Uint8Array(12)), b => 'abcdefghijklmnopqrstuvwxyz0123456789'[b % 36]).join('');
@@ -5052,7 +5079,7 @@ function liveGo(id, push = false, entry = null) {
     for (const k of ['r', 'rep', 'l', 'i', 'c', 't']) u.searchParams.delete(k);
     if (push && u.href !== location.href) history.pushState({ live: id }, '', u); else history.replaceState({ live: id }, '', u);
   } catch (e) {}
-  document.body.classList.add('live');
+  document.body.classList.add('live'); syncChips();
   return startLive(id, null, entry);
 }
 // Back / Forward between matches switched in place: the match of that entry, again in place; an entry that is not a
@@ -5064,7 +5091,7 @@ addEventListener('popstate', () => {
   cardSet(((liveListLast && liveListLast.l) || []).find(m => m.id === id)); cardDraw(true);
   liveClickAt = performance.now();
   nextCardHide();
-  document.body.classList.add('live');
+  document.body.classList.add('live'); syncChips();
   startLive(id, null, liveListLast && liveListLast.l.find(m => m.id === id));
 });
 // list: the live list as just read (the watched match may be in it). title: what happened ("Match over", ...)
@@ -5840,10 +5867,14 @@ const ACT = {
 const VIEW_TOGGLES = ['boxes', 'inputs', 'hitstun', 'framebar', 'hud', 'names', 'music'];
 function flipView(id) { const el = document.getElementById(id); el.checked = !el.checked; el.onchange(); }
 function syncChips() {
+  let n = 0;
   for (const b of document.querySelectorAll('[data-flip]')) {
     const on = document.getElementById(b.dataset.flip).checked;
     b.classList.toggle('on', on); b.setAttribute('aria-pressed', String(on));
+    if (on && b.closest('#viewpop') && (!b.classList.contains('liveonly') || document.body.classList.contains('live'))) n++;
   }
+  const vn = document.querySelector('#viewb .vn');
+  if (vn) vn.textContent = n ? String(n) : '';
 }
 function controls() {
   const seek = document.getElementById('seek');
@@ -5877,7 +5908,14 @@ function controls() {
   // its key does
   for (const el of document.querySelectorAll('[data-act]')) el.onclick = e => { e.currentTarget.blur(); ACT[el.dataset.act](); };
   // the view toggles in the bar: each flips its checkbox (the state, kept in the panel / the phone sheet), as its key does
-  for (const el of document.querySelectorAll('[data-flip]')) el.onclick = e => { e.currentTarget.blur(); flipView(el.dataset.flip); };
+  for (const el of document.querySelectorAll('[data-flip]')) el.onclick = e => { e.stopPropagation(); if (!el.closest('#viewpop')) e.currentTarget.blur(); flipView(el.dataset.flip); };
+  // the View button (user 2026-11-07, one button in place of the bar's seven chips): its menu stays open while toggling;
+  // a click outside it or Esc closes it
+  const viewb = document.getElementById('viewb'), viewpop = document.getElementById('viewpop');
+  const viewSet = on => { viewpop.hidden = !on; viewb.setAttribute('aria-expanded', String(on)); syncChips(); };
+  viewb.onclick = e => { e.stopPropagation(); viewSet(viewpop.hidden); viewb.blur(); };
+  document.addEventListener('click', e => { if (!viewpop.hidden && !viewpop.contains(e.target)) viewSet(false); });
+  document.addEventListener('keydown', e => { if (e.key === 'Escape' && !viewpop.hidden) viewSet(false); });
   btn('plprev', () => startItem(pl.i - 1)); btn('plnext', () => startItem(pl.i + 1)); btn('plshare', copyPlaylist);
   btn('plsort', sortByDate);
   btn('plclear', () => { const cur = pl.items[pl.i]; pl.items = cur ? [cur] : []; pl.i = cur ? 0 : -1; renderPlaylist(); });
@@ -8062,6 +8100,17 @@ function placeControls(mob) {
     }
     sizeRow.append(segL, seg);
     pop.append(sizeRow);
+    if (GX) {  // (the gx trial: its theme, as a row like the size's)
+      const row = document.createElement('div'); row.className = 'row';
+      const sg = document.createElement('div'); sg.className = 'sizeseg'; sg.setAttribute('role', 'radiogroup'); sg.setAttribute('aria-label', 'theme');
+      const lb = document.createElement('span'); lb.className = 'lbl'; lb.textContent = 'theme';
+      for (const v of ['auto', 'dark', 'light']) {
+        const bt = document.createElement('button'); bt.type = 'button'; bt.textContent = v; bt.setAttribute('role', 'radio'); bt.setAttribute('aria-checked', String(v === GX.theme));
+        bt.onclick = e => { e.stopPropagation(); GX.apply(v); for (const b of sg.children) b.setAttribute('aria-checked', String(b === bt)); };
+        sg.append(bt);
+      }
+      row.append(lb, sg); pop.prepend(row);
+    }
     for (const [el, to, before] of [[byId('mute'), tr, setb], [byId('vol'), tr, setb], [byId('mixb'), tr, setb], [byId('speed'), tr, setb],
                                     [byId('pip'), tr, null], [byId('full'), tr, null], [byId('helpb'), tr, null],
                                     [chips, pop, sizeRow], [byId('scale'), sizeRow, null], [byId('clipgrp'), tclip, null]]) {
@@ -8161,7 +8210,7 @@ function fsChatPlace() {
 // fullscreen: the bar stays while the mouse is over it (as on YouTube) or its settings / levels popover is open
 function fsBarHeld(stage) {
   const bar = stage.querySelector(':scope > .fsbar'), open = id => { const el = document.getElementById(id); return !!el && !el.hidden; };
-  return !!bar && stage.classList.contains('fs') && (bar.matches(':hover') || open('setpop') || open('mixpop'));
+  return !!bar && stage.classList.contains('fs') && (bar.matches(':hover') || open('setpop') || open('mixpop') || open('viewpop'));
 }
 function fsWake() {
   const stage = document.querySelector('.stage');
@@ -8247,7 +8296,7 @@ async function main() {
       el.blur(); if (session && session.bgmSync && session.M) session.bgmSync(session.M._viewer_frame()); }; } }
   liveListShow();
   if (Q.get('live')) {  // spectating: the live controls and the player block; the replay-only controls go (.replayonly)
-    document.body.classList.add('live');
+    document.body.classList.add('live'); syncChips();
   }
   if (/^[A-Za-z0-9_]{4,64}$/.test(Q.get('live') || '')) {  // a live CCCaster match
     // (after an update reload: the match it was on, and where; liveResumeTake)

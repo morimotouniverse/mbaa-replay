@@ -921,13 +921,18 @@
   body.mob.cardsheet #chatcol > #matchcard > #radiosec { position: relative; z-index: 5; margin-top: 10px; padding-top: 8px; background: var(--panel); isolation: isolate; }
   /* (the sheet holds the radio too: the portraits sized on the picture (full width less the 12-px padding, 256:110), not on
      the card, whose % ran them down through the radio and past the screen: user 2026-11-07, tools/web/mobile_card_e2e.py) */
-  body.mob.cardsheet #chatcol > #matchcard { --pich: calc((100vw - 24px) * 110 / 256); }
+  body.mob.cardsheet #chatcol > #matchcard { --pich: calc((100vw - 24px) * 110 / 256); max-height: none; align-content: start; }
+  /* (the picture at --pich tall, cropped to cover: chat.js sheetFit grows it into the room under the chat tabs) */
+  body.mob.cardsheet #chatcol > #matchcard:has(#stageblk:not([hidden])) .view { aspect-ratio: auto; width: 100%; height: var(--pich); object-fit: cover; }
   body.mob.cardsheet #chatcol > #matchcard.pors:has(#stageblk:not([hidden])) .por:not([hidden]) {
-    top: calc(12px + var(--pich) * (-0.22 + var(--por-y, 0) / 100)); height: calc(var(--pich) * 1.65 * var(--por-s, 1));
+    /* (sized on --porh: the picture's height, up to 1.5x its 256:110 one (chat.js sheetFit grows the picture further);
+       their feet stay at the picture's foot as it grows: the offset from the foot is the plain rule's) */
+    --porh: min(var(--pich), (100vw - 24px) * 110 / 256 * 1.5);
+    --off: calc(var(--pich) - var(--porh) + var(--porh) * (-0.22 + var(--por-y, 0) / 100));
+    top: calc(12px + var(--off)); height: calc(var(--porh) * 1.65 * var(--por-s, 1));
     /* (cut at the picture's top and foot: the sheet scrolls (overflow auto, not hidden), so the figures ran on below the
        picture behind the radio: necoTV #5. Insets in the figure's own box: the picture spans its -off .. pich - off) */
-    --off: calc(var(--pich) * (-0.22 + var(--por-y, 0) / 100));
-    clip-path: inset(max(0px, -1 * var(--off)) 0 max(0px, var(--pich) * 1.65 * var(--por-s, 1) - var(--pich) + var(--off)) 0); }
+    clip-path: inset(max(0px, -1 * var(--off)) 0 max(0px, var(--porh) * 1.65 * var(--por-s, 1) - var(--pich) + var(--off)) 0); }
   body.mob.cardsheet #chatcol > #matchcard #radiosec .radiostg { flex-wrap: wrap; }
   #front { position: absolute; left: 0; top: 0; pointer-events: none; z-index: 1; image-rendering: pixelated; }
   #front[hidden] { display: none; }
@@ -1299,11 +1304,29 @@
       const portPhone = () => document.body.classList.contains('mob') && !document.body.classList.contains('land');
       const inCol = () => getComputedStyle(col).display !== 'none';
       const radioTo = where => { if (!radio) return; if (where) { if (radio.parentNode !== where) where.append(radio); } else if (radio.parentNode !== rHome) rHome.insertBefore(radio, rNext && rNext.parentNode === rHome ? rNext : null); };
+      // the open sheet reaches up to just under the chat tabs (user 2026-11-07: "too much dead space" over it), and the
+      // picture takes the room it gains (taller, cropped to cover; --pich: the figures' cut follows it, their size stops at
+      // 1.5x, CSS --porh), up to 2.2x its own 256:110 height; the radio still fits under it, or the sheet scrolls as before
+      const sheetFit = () => {
+        if (!document.body.classList.contains('cardsheet')) { card.style.removeProperty('top'); card.style.removeProperty('--pich'); return; }
+        const hd = col.querySelector('.chead'), r = hd && hd.getBoundingClientRect();
+        const top = r && r.bottom > 0 && r.bottom < innerHeight * 0.6 ? Math.round(r.bottom + 4) : Math.round(innerHeight * 0.22);
+        card.style.top = top + 'px';
+        const p0 = (card.clientWidth - 24) * 110 / 256;
+        card.style.setProperty('--pich', p0 + 'px');
+        // (the room left under the last block: the card's rows sit at its top (align-content: start), so the grid does
+        // not spread the spare height into them and scrollHeight never shows it)
+        const last = [...card.children].reverse().find(e => e.getBoundingClientRect().height > 0);
+        const spare = last ? Math.floor(card.getBoundingClientRect().bottom - parseFloat(getComputedStyle(card).paddingBottom) - last.getBoundingClientRect().bottom) : 0;
+        if (spare > 0) card.style.setProperty('--pich', Math.min(p0 * 2.2, p0 + spare) + 'px');
+      };
       const sheet = on => {
         document.body.classList.toggle('cardsheet', on);
         card.setAttribute('aria-expanded', String(on));
         radioTo(on ? card : null);
+        sheetFit();
       };
+      addEventListener('resize', () => { if (document.body.classList.contains('cardsheet')) sheetFit(); });
       const paneSet = on => {
         if (portPhone()) { sheet(!document.body.classList.contains('cardsheet')); return; }
         pane.hidden = !on; note.setAttribute('aria-expanded', String(on)); note.classList.toggle('on', on);

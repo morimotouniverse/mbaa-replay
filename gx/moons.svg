@@ -1,0 +1,23 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="384" height="96" viewBox="0 0 192 48">
+  <!-- The moon marks redrawn (gx, user 2026-11-07: remake the game's graphics, not its 48-px bitmaps): crescent, full,
+       half, eclipse in 48-unit cells; white with the HUD icons' blue glow; the eclipse a dark disc in a violet ring.
+       viewer.js drawMoon draws a cell into the moon canvas at the canvas's own resolution. -->
+  <defs>
+    <filter id="glow" x="-40%" y="-40%" width="180%" height="180%">
+      <feMorphology in="SourceAlpha" operator="dilate" radius="1.2" result="d"/>
+      <feGaussianBlur in="d" stdDeviation="2.6" result="b"/>
+      <feFlood flood-color="#2a6bff"/><feComposite in2="b" operator="in" result="g"/>
+      <feMerge><feMergeNode in="g"/><feMergeNode in="g"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+    <radialGradient id="ecl" cx="50%" cy="50%" r="50%"><stop offset="0" stop-color="#2a0f66"/><stop offset=".75" stop-color="#0a0420"/><stop offset="1" stop-color="#050210"/></radialGradient>
+    <mask id="cres"><rect width="48" height="48" fill="#fff"/><circle cx="20" cy="19" r="14" fill="#000"/></mask>
+    <clipPath id="halfc"><path d="M48 6 L48 48 L0 48 L0 36 Z"/></clipPath>
+  </defs>
+  <g filter="url(#glow)">
+    <circle cx="24" cy="24" r="16" fill="#fff" mask="url(#cres)"/>
+    <circle cx="72" cy="24" r="16" fill="#fff"/>
+    <g transform="translate(96 0)"><circle cx="24" cy="24" r="16" fill="#fff" clip-path="url(#halfc)" transform="rotate(-8 24 24)"/></g>
+  </g>
+  <circle cx="168" cy="24" r="16" fill="url(#ecl)" stroke="#5a2cff" stroke-width="2.2"/>
+  <circle cx="168" cy="24" r="17.6" fill="none" stroke="#2a6bff" stroke-opacity=".45" stroke-width="2"/>
+</svg>

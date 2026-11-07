@@ -18,7 +18,7 @@
 <meta name="twitter:description" content="Watch Melty Blood Actress Again Current Code replays in your browser, frame-exact.">
 <meta name="twitter:image" content="https://watch.meltyblood.org/preview.png">
 <meta name="mbaa-manifest" content="2a2e2bac19a8">
-<meta name="mbaa-chatjs" content="chat.js?v=65e55ee1f6e9">
+<meta name="mbaa-chatjs" content="chat.js?v=957d487608b7">
 <meta name="mbaa-announcer" content="announcer/neco.bin?v=932b15248e89">
 <link rel="manifest" href="site.webmanifest">
 <link rel="icon" href="favicon-48.png" sizes="48x48">
@@ -206,14 +206,31 @@
   .tbar .vchip:hover { background: #2a2a3c; color: var(--fg); }
   .tbar .vchip.on { background: #e04a5a2e; color: #ffd6da; box-shadow: inset 0 0 0 1px #e04a5a99; }
   .tg-view { gap: 4px; }
-  /* the hitbox colours while the HB chip is hovered / focused: over the transport's top edge (the picture's bottom),
-     centred on it, so it never leaves the window */
-  .hbwrap { display: inline-flex; }
-  .hblegend { display: none; position: absolute; z-index: 25; bottom: calc(100% + 6px); left: 50%; transform: translateX(-50%);
-              max-width: calc(100% - 8px); width: max-content; box-sizing: border-box; flex-wrap: wrap; justify-content: center;
-              background: #15151ff4; border: 1px solid var(--line); border-radius: 8px; padding: 7px 10px; box-shadow: 0 8px 24px #000a;
-              white-space: nowrap; font-size: 11.5px; gap: 4px 10px; color: var(--fg); pointer-events: none; }
-  .hbwrap:is(:hover, :focus-within) .hblegend { display: flex; }
+  /* the view toggles (user 2026-11-07: "too many little buttons under the player"): one View button, its menu of
+     labelled toggles opening upward over the picture's foot; each row flips its checkbox as its key does (viewer.js
+     syncChips lights it; .vn counts the ones on) */
+  #tview { position: relative; }
+  #viewb { gap: 5px; }  #viewb .i { width: 15px; height: 15px; }
+  #viewb .vn:not(:empty) { min-width: 15px; height: 15px; padding: 0 4px; box-sizing: border-box; border-radius: 999px; background: #e04a5a2e;
+    color: var(--fg); font: 700 10px/15px system-ui, sans-serif; text-align: center; box-shadow: inset 0 0 0 1px #e04a5a99; }
+  #viewb[aria-expanded=true] { color: var(--fg); background: #ffffff14; }
+  #viewpop { position: absolute; z-index: 25; bottom: calc(100% + 8px); right: 0; width: 280px; box-sizing: border-box;
+    background: var(--raise, #1c1c28); border: 1px solid var(--line); border-radius: 10px; padding: 6px; box-shadow: 0 10px 30px #0008;
+    display: flex; flex-direction: column; gap: 1px; }
+  #viewpop[hidden] { display: none; }
+  /* (their checkboxes stay the state, shown in the phones' menu sheet; on desktop the View menu has them, not settings) */
+  #setpop .chip:has(#boxes, #inputs, #hitstun, #framebar, #hud, #names, #music) { display: none; }
+  #viewpop .vrow { all: unset; box-sizing: border-box; display: flex; align-items: center; gap: 10px; padding: 6px 8px; border-radius: 6px;
+    cursor: pointer; color: var(--muted); font-size: 13px; }
+  #viewpop .vrow::before { content: ''; flex: none; width: 15px; height: 15px; box-sizing: border-box; border-radius: 4px; border: 1.5px solid var(--faint, #8a8aa0); }
+  #viewpop .vrow.on { color: var(--fg); }
+  #viewpop .vrow.on::before { border-color: var(--accent, #e8435a); background: var(--accent, #e8435a) url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath d='M3.5 8.5l3 3 6-7' fill='none' stroke='%23fff' stroke-width='2.2' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E") center / 12px no-repeat; }
+  #viewpop .vrow:is(:hover, :focus-visible) { background: #ffffff10; }
+  #viewpop .vt { flex: 1; display: flex; flex-direction: column; line-height: 1.25; }
+  #viewpop .vt small { font-size: 11px; color: var(--faint, #8a8aa0); }
+  #viewpop kbd { font: 600 10.5px ui-monospace, monospace; color: var(--faint, #8a8aa0); border: 1px solid var(--line); border-radius: 4px; padding: 1px 5px; }
+  #viewpop .vleg { display: flex; flex-wrap: wrap; gap: 3px 9px; padding: 0 8px 6px 33px; font-size: 11px; color: var(--muted); }
+  #viewpop .vrow:not(.on) + .vleg { display: none; }
   .hbkey { display: inline-flex; align-items: center; gap: 5px; }
   .hbkey::before { content: ''; width: 10px; height: 10px; border-radius: 2px; background: var(--c); box-shadow: 0 0 0 1px #0008; }
   .tbar #clipgrp { gap: 2px; }
@@ -848,14 +865,17 @@
         <button id="toend" class="deskonly" data-act="end" title="End (End)"><i class="i i-next"></i></button>
       </span>
       <span class="tg tg-view sep" id="tview">
-        <span class="hbwrap"><button class="vchip" data-flip="boxes" title="Hitboxes (H)" aria-pressed="false">HB</button>
-          <span class="hblegend" role="tooltip"><span class="hbkey" style="--c:#30e030">hurt</span><span class="hbkey" style="--c:#ff2828">attack</span><span class="hbkey" style="--c:#ffe020">clash</span><span class="hbkey" style="--c:#40a0ff">shield</span><span class="hbkey" style="--c:#d8d8d8">collision</span><span class="hbkey" style="--c:#c878e6">special</span></span></span>
-        <button class="vchip" data-flip="inputs" title="Input display (I)" aria-pressed="false">IN</button>
-        <button class="vchip" data-flip="hitstun" title="Hitstun bar under the combo counter, ETM's: white = hitstun left; behind it blue, cyan, grey, black as untech decay grows; orange = max bounces (K)" aria-pressed="true">HS</button>
-        <button class="vchip" data-flip="framebar" title="Frame bar, ETM's: green startup / recovery, red active, grey hit / blockstun, dark = frame advantage; startup, total and advantage in frames (G)" aria-pressed="false">FB</button>
-        <button class="vchip" data-flip="hud" title="HUD: health, meter, timer, combo counters (U)" aria-pressed="true">HUD</button>
-        <button class="vchip liveonly" data-flip="names" title="Players' names on the CHALLENGER / WINS banners (T)" aria-pressed="true">NAMES</button>
-        <button class="vchip" data-flip="music" title="Music; sound effects stay (B)" aria-pressed="true"><i class="i i-music"></i></button>
+        <button id="viewb" class="txt" aria-expanded="false" aria-controls="viewpop" title="What's drawn on the picture: hitboxes, inputs, hitstun bar, frame bar, HUD, names, music"><i class="i i-eye"></i>View<span class="vn"></span></button>
+        <div id="viewpop" role="dialog" aria-label="what's drawn on the picture" hidden>
+          <button class="vrow" data-flip="boxes" aria-pressed="false"><span class="vt">Hitboxes</span><kbd>H</kbd></button>
+          <span class="vleg"><span class="hbkey" style="--c:#30e030">hurt</span><span class="hbkey" style="--c:#ff2828">attack</span><span class="hbkey" style="--c:#ffe020">clash</span><span class="hbkey" style="--c:#40a0ff">shield</span><span class="hbkey" style="--c:#d8d8d8">collision</span><span class="hbkey" style="--c:#c878e6">special</span></span>
+          <button class="vrow" data-flip="inputs" aria-pressed="false"><span class="vt">Inputs</span><kbd>I</kbd></button>
+          <button class="vrow" data-flip="hitstun" aria-pressed="true" title="ETM's: white = hitstun left; behind it blue, cyan, grey, black as untech decay grows; orange = max bounces"><span class="vt">Hitstun bar</span><kbd>K</kbd></button>
+          <button class="vrow" data-flip="framebar" aria-pressed="false" title="ETM's: green startup / recovery, red active, grey hit / blockstun, dark = frame advantage; startup, total and advantage in frames"><span class="vt">Frame bar<small>startup, total, advantage</small></span><kbd>G</kbd></button>
+          <button class="vrow" data-flip="hud" aria-pressed="true"><span class="vt">HUD<small>health, meter, timer, combos</small></span><kbd>U</kbd></button>
+          <button class="vrow liveonly" data-flip="names" aria-pressed="true"><span class="vt">Names<small>on the game's banners</small></span><kbd>T</kbd></button>
+          <button class="vrow" data-flip="music" aria-pressed="true"><span class="vt">Music<small>sound effects stay</small></span><kbd>B</kbd></button>
+        </div>
       </span>
       <span class="tg sep" id="tclip"></span>
       <span class="tbreak"></span><span class="tbreak tb2"></span>
@@ -964,6 +984,6 @@
 </div>
 <script src="mbaa.js?v=0ab30dcacef1"></script>
 <script src="bgm_stream.js?v=cad5cabd6328"></script>
-<script src="viewer.js?v=127b4e23ddb1"></script>
+<script src="viewer.js?v=e7f9dd2b0e45"></script>
 </body>
 </html>

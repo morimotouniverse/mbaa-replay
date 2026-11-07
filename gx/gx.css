@@ -1,0 +1,108 @@
+/* The game-graphics UI (gx; viewer.js GX, user 2026-11-07): the site's layout kept, its type, plates, bars, moons, timer
+   and palette after MBAACC's, redrawn in CSS / SVG at any size (user 2026-11-07: "remake it in higher quality", not the
+   game's 15-30 px bitmaps scaled up); only the font files ship (tools/ui_assets/gx_build.py). Dark: the main menu's indigo (Menu_BG) with the select screen's
+   crimson (csel_bg00, menu_sel); light: the style select's lavender (csel_style00 / csel_Disk00) on white. Loaded only
+   with gx on (root .gx, data-theme dark | light). */
+@font-face { font-family: 'Cezanne'; src: url(cezanne.woff2) format('woff2'); font-display: swap; }
+/* (the VS screen's thin geometric caps for the character line: Jost, SIL OFL) */
+@font-face { font-family: 'Jost'; src: url(jost.woff2) format('woff2'); font-weight: 300 600; font-display: swap; }
+
+:root.gx { --gx-f: 'Cezanne', system-ui, sans-serif;
+  /* measured from the game's UI (artifacts/ui_assets/palette_analysis.json): the select / moon-disk glow is blue-violet
+     (#240cfc, #6c54fc, #846cfc: hue ~248), the style plates purple (#3c0c6c, #240c54: ~270), the select backdrop crimson
+     into magenta (#b42424, #3c0c3c), the cursors pure red (#fc0c0c) */
+  --gx-blue: #6c54fc; --gx-glow: #846cfc; --gx-rim: #240cfc; --gx-plum: #3c0c6c; --gx-red: #e8102a; --gx-mag: #9c2458; }
+:root.gx[data-theme="dark"] {
+  --bg: #0d0620; --panel: #170c33; --raise: #26124f; --fg: #f0ebff; --muted: #ab9fd8; --faint: #6a58a8;
+  --accent: #ff2440; --accent2: #ffb84a; --line: #3a2475; --gx-ink: #ffffff; --gx-plate: #120828e6; --gx-glass: #170c33cc; }
+:root.gx[data-theme="light"] {
+  --bg: #f6f2ff; --panel: #ffffff; --raise: #ece3ff; --fg: #1f0f48; --muted: #5e4a9a; --faint: #9a8cc8;
+  --accent: #c8102e; --accent2: #a8480c; --line: #d6c8ff; --gx-ink: #ffffff; --gx-plate: #ffffffeb; --gx-glass: #ffffffd9;
+  color-scheme: light; }
+
+:root.gx body { background: radial-gradient(1200px 700px at 50% -10%, #3c0c3c, var(--bg) 70%) fixed; background-color: var(--bg); }  /* (the select backdrop's plum at the top) */
+:root.gx[data-theme="light"] body { background: linear-gradient(180deg, #e9dcff, var(--bg) 380px) fixed; background-color: var(--bg); }
+
+/* ---- type: the game's face for names, labels, numbers and buttons; chat lines and long text stay in the reading face ---- */
+:root.gx :is(#matchcard, #livesec, .tbar, #transportsec, #nextcard, #setpop, #toolsec) :is(*, *::before, *::after),
+:root.gx :is(.lbl, button.txt, .chip),
+:root.gx #chatcol :is(.cname, .nm, .who, .tabs button, .ctab) { font-family: var(--gx-f); font-synthesis: none; letter-spacing: .02em; }
+:root.gx :is(#status, #chatcol .msg, #chatcol .txt, .cline .t) { font-family: inherit; }
+
+/* ---- the match card: names on the select screen's style plates (redrawn: a thin light rim, black running into the
+   select glow's violet, a sheen line, the outer end cut on the slant; P2 mirrored), the VS in the game's blue glow ---- */
+:root.gx #matchcard #players .nm { position: relative; isolation: isolate; padding: 2px 20px 3px 9px; color: var(--gx-ink); font-weight: 400;
+  background: linear-gradient(90deg, #ffffff 0%, #d9d0ff 100%); clip-path: polygon(0 0, 100% 0, calc(100% - 11px) 100%, 0 100%);
+  text-shadow: 0 0 3px var(--gx-rim), 0 1px 0 #000; }
+:root.gx #matchcard #players .nm::before { content: ''; position: absolute; inset: 1.5px 2px 1.5px 1.5px; z-index: -1;
+  clip-path: polygon(0 0, 100% 0, calc(100% - 10px) 100%, 0 100%);
+  background: linear-gradient(transparent 62%, #ffffff40 62% 68%, transparent 68%), linear-gradient(90deg, #000 0%, #07020f 22%, #2b0f66 62%, #7a35ff 100%); }
+:root.gx #matchcard #players .pl:last-child .nm { padding: 2px 9px 3px 20px; clip-path: polygon(0 0, 100% 0, 100% 100%, 11px 100%);
+  background: linear-gradient(270deg, #ffffff 0%, #d9d0ff 100%); }
+:root.gx #matchcard #players .pl:last-child .nm::before { inset: 1.5px 1.5px 1.5px 2px; clip-path: polygon(0 0, 100% 0, 100% 100%, 10px 100%);
+  background: linear-gradient(transparent 62%, #ffffff40 62% 68%, transparent 68%), linear-gradient(270deg, #000 0%, #07020f 22%, #2b0f66 62%, #7a35ff 100%); }
+:root.gx #matchcard #players .vs { font-family: var(--gx-f); font-style: italic; font-weight: 400; letter-spacing: .08em; color: #fff;
+  text-shadow: 0 0 6px var(--gx-blue), 0 0 2px var(--gx-blue), 0 2px 0 #000; }
+/* the character line: the VS screen's thin spaced caps */
+:root.gx #players .ch .mqx, :root.gx #players .ch .mqx .t { font-family: 'Jost', var(--gx-f); font-weight: 400; text-transform: uppercase; letter-spacing: .16em;
+  text-shadow: 0 0 3px var(--gx-rim), 0 1px 0 #000; }
+/* the eye pill and LIVE: dark plates on the stage select's blue line */
+:root.gx :is(#watching, #toend) { background: var(--gx-plate); color: var(--fg); border: 1px solid var(--gx-blue); border-radius: 3px;
+  box-shadow: 0 0 6px #6c54fc80, inset 0 0 6px #6c54fc40; }
+:root.gx body.live #toend:not(.on) { background: linear-gradient(90deg, #5a0712, var(--gx-red) 60%, #5a0712); border-color: #ff6d7d; color: #fff; }
+
+/* ---- the clock: the HUD timer's look (white, a heavy blue outline, the blue glow), as text ---- */
+:root.gx #time { font: 400 17px/1 var(--gx-f); color: #fff; letter-spacing: .05em; font-variant-numeric: tabular-nums;
+  -webkit-text-stroke: 3.5px #1f45ff; paint-order: stroke fill; text-shadow: 0 0 6px #2a6bffaa; }
+:root.gx[data-theme="light"] #time { background: #1f0f48; border-radius: 3px; padding: 2px 6px; }
+
+/* ---- the live list: rows on the select screen's dark bar, redrawn: a light rim, both ends cut on the slant (the game's
+   bars run in from one screen edge, so each is framed at one end; a row spans both players: user 2026-11-07), black
+   with the grey sheen toward each end; the current / hovered row's rim in the select glow's violet ---- */
+:root.gx #liveitems > li { position: relative; isolation: isolate; border: 0; border-radius: 0; box-shadow: none;
+  background: linear-gradient(#f4f2ff, #a9a6b8); clip-path: polygon(7px 0, calc(100% - 7px) 0, 100% 100%, 0 100%); }
+:root.gx #liveitems > li::before { content: ''; position: absolute; inset: 2px 2.5px; z-index: -1;
+  clip-path: polygon(6px 0, calc(100% - 6px) 0, 100% 100%, 0 100%);
+  background: linear-gradient(90deg, #4c4a58 0%, #050308 20% 80%, #4c4a58 100%); }
+:root.gx #liveitems > li:is(:hover, .cur) { background: linear-gradient(#c9bcff, #6c54fc); }
+:root.gx #liveitems > li :not(.lview, .i) { background-color: transparent; }
+/* (tight rows, user 2026-11-07 "so much padding": the slanted ends take the side room; the count column as wide as its
+   pill, not a fixed 40 px) */
+:root.gx #liveitems a { grid-template-columns: 7px minmax(0, 1fr) 14px minmax(0, 1fr) auto; gap: 4px; padding: 2px 11px; border-radius: 0; }
+:root.gx body.mob #chatcol > #livesec #liveitems a { padding: 5px 11px; }
+/* (a name that fits sits centred in the room beside its icon (user 2026-11-07); a longer one starts at the left and
+   scrolls, viewer.js marquee: .mq) */
+:root.gx #liveitems .lnm { flex: 1 1 0; }
+:root.gx #liveitems .lnm:not(.mq) { text-align: center; }
+:root.gx #liveitems .lnm { text-shadow: 0 0 2px var(--gx-rim), 0 1px 0 #000; color: #fff; }
+:root.gx :is(#liveitems, #nextcard) .lvs { font-style: italic; color: #fff; text-shadow: 0 0 4px var(--gx-blue); }
+:root.gx[data-theme="light"] #liveitems > li { background: linear-gradient(#d6c8ff, #b3a2f0); }
+:root.gx[data-theme="light"] #liveitems > li::before { background: linear-gradient(90deg, #ece5ff 0%, #ffffff 20% 80%, #ece5ff 100%); }
+:root.gx[data-theme="light"] #liveitems > li:is(:hover, .cur) { background: linear-gradient(#8f7bff, var(--gx-blue)); }
+:root.gx[data-theme="light"] #liveitems :is(.lnm, .lvs) { color: var(--fg); text-shadow: none; }
+/* the watcher count: the std site's red pill, made to pop on the black bars (user 2026-11-07: "the red circle / count
+   was better"): the menu cursor's red, a light rim, a red glow */
+/* (a pill as wide as eye + digits: 1 digit near round, growing with 2, 3) */
+:root.gx #liveitems .lview:not(:empty) { background: linear-gradient(#ff4a5c, #d0122e); color: #fff; font-family: var(--gx-f); font-size: 11.5px;
+  gap: 2px; padding: 0 6px 0 5px; line-height: 17px; box-shadow: inset 0 0 0 1px #ffc2ca, 0 0 7px #ff243f99; text-shadow: 0 1px 0 #7a0012; }
+:root.gx #liveitems .lview .i { width: 11px; height: 11px; }
+/* (the moon marks are white with a blue glow: on the light rows they sit on a dark disc) */
+:root.gx[data-theme="light"] #liveitems .lmoon { background: radial-gradient(closest-side, #1f0f48 70%, transparent 100%); border-radius: 50%; }
+
+/* ---- controls: thin frames that light up on the game's blue line (the menu cursor) ---- */
+:root.gx :is(.tbar, #transportsec) button:not(.vrow) { border: 1px solid #ffffff2a; background: var(--gx-glass); border-radius: 2px; }
+:root.gx :is(.tbar, #transportsec) button:not(.vrow):hover { border-color: var(--gx-blue); box-shadow: 0 0 6px #6c54fc70; }
+:root.gx[data-theme="light"] :is(.tbar, #transportsec) button:not(.vrow) { border-color: var(--line); color: var(--fg); }
+:root.gx[data-theme="light"] select { background: #fff; color: var(--fg); border-color: var(--line); }
+
+/* ---- chat: the game face on names and tabs; the lines in the reading face, on the theme's panel ---- */
+:root.gx[data-theme="light"] #chatcol { color: var(--fg); }
+:root.gx[data-theme="light"] #chatcol :is(.cname, .nm, .who) { text-shadow: none; }
+
+/* ---- light: the base sheet's light-on-dark spots, each given the theme's ink ---- */
+:root.gx[data-theme="light"] #radiosec .rtitle { color: var(--fg); }
+:root.gx[data-theme="light"] .chip:has(input:checked) { background: #c8172c14; color: var(--accent); box-shadow: inset 0 0 0 1px #c8172c66; }
+:root.gx[data-theme="light"] #chatsec button.ctab.on { color: #fff; background: var(--accent); border-color: var(--accent); }
+:root.gx[data-theme="light"] #chatlog { background: #f6f4ff; box-shadow: inset 0 0 0 1px var(--line); }
+/* dark: the chat tab lit like the menu cursor */
+:root.gx[data-theme="dark"] #chatsec button.ctab.on { background: linear-gradient(90deg, #5a0712, var(--gx-red)); border-color: #ff6d7d; color: #fff; }
