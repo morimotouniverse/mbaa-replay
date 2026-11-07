@@ -3834,13 +3834,22 @@ setInterval(() => {
 if (window.ResizeObserver && document.getElementById('players'))  // (viewer.js loads at the end of the page: it exists)
   new ResizeObserver(() => marquee(document.getElementById('players'))).observe(document.getElementById('players'));
 // (while a match plays (body.mplay) the shell's own CSS animations hold still: the banner's scroll, the clip link's
-// pulse and the 2x badge; each ran compositor frames between the game's, goal 3a. The name marquees run on: a paused one
-// froze a long name cut off at both ends (user 2026-11-07); each is one compositor transform)
-let mPlay = false;
+// pulse and the 2x badge; each ran compositor frames between the game's, goal 3a. The name marquees go on, stepped
+// from this frame bus: paused, they froze a long name cut off at both ends (user 2026-11-07); free-running, each ticked
+// the compositor at the panel's rate (Moto G 120 Hz: 74-80 presented frames/s, impl frames every 8.3 ms, phone-perf
+// run c_before_1107); stepped, each moves only in the frames the game presents)
+const mqAnims = new Set();
+let mPlay = false, mqAt = 0;
+frameBus.add(function marqueeStep(now) {
+  const dt = Math.min(now - mqAt, 100); mqAt = now;
+  if (!mPlay) return;
+  for (const a of mqAnims) { try { a.currentTime = (a.currentTime || 0) + dt; } catch (e) {} }
+});
 frameBus.add(function playState() {
   const on = !!(session && session.tl && !ui.paused && !document.hidden);
   if (on === mPlay) return;
   mPlay = on; document.body.classList.toggle('mplay', on);
+  for (const a of mqAnims) { try { if (on) a.pause(); else a.play(); } catch (e) {} }
 });
 function marquee(root, sel = '.mqx') {
   for (const nm of root.querySelectorAll(sel)) {
@@ -3850,12 +3859,13 @@ function marquee(root, sel = '.mqx') {
     // (a Web Animation with concrete numbers runs on the compositor; the CSS keyframes with var() re-styled the text
     // every frame on the main thread)
     if (t.__mq && t.__mq.over === over) continue;
-    if (t.__mq) { t.__mq.anim.cancel(); t.__mq = null; }
+    if (t.__mq) { t.__mq.anim.cancel(); mqAnims.delete(t.__mq.anim); t.__mq = null; }
     if (over <= 2 || (window.matchMedia && matchMedia('(prefers-reduced-motion: reduce)').matches) || !t.animate) continue;
     const anim = t.animate([{ transform: 'translateX(0)', offset: 0 }, { transform: 'translateX(0)', offset: 0.15 },
                             { transform: `translateX(${-over}px)`, offset: 0.85 }, { transform: `translateX(${-over}px)`, offset: 1 }],
                            { duration: (over / 60 / 0.7 + 0.5) * 1000, iterations: Infinity, direction: 'alternate', easing: 'ease-in-out' });
-    t.__mq = { over, anim };
+    t.__mq = { over, anim }; mqAnims.add(anim);
+    if (mPlay) anim.pause();
   }
 }
 // the watched match's viewer count (the live list's, every 15 s), on the players panel's VS line
