@@ -5135,6 +5135,7 @@ function nextCardShow(s, list, title) {
   const feat = el.querySelector('.nc-m');
   feat.textContent = '';
   if (next) feat.append(row(next, 'nc-row nc-next'));
+  requestAnimationFrame(() => marquee(el, '.lnm'));   // (a long name scrolls, as in the live list)
   el.querySelector('.nc-go').onclick = e => { e.stopPropagation(); if (nextCard.id) liveGo(nextCard.id, true, nextCard.m); };
   el.querySelector('.nc-stay').onclick = e => { e.stopPropagation(); nextCard.stay = s; nextCardHide(); status('staying on this match (the live list has the others)'); };
   for (const ev of ['pointerdown', 'click', 'touchend']) el['on' + ev] = e => e.stopPropagation();  // (never the picture's)

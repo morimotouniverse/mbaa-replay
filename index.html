@@ -568,7 +568,7 @@
   #nextcard .nc-row .side:nth-of-type(2) { flex-direction: row-reverse; text-align: right; }
   #nextcard .nc-row .lico { width: 28px; height: 28px; flex: none; margin: -3px 0; }
   #nextcard .nc-row .lmoon { width: 12px; height: 12px; flex: none; filter: drop-shadow(0 0 1px #000); }
-  #nextcard .nc-row .lnm { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; min-width: 0; }
+  #nextcard .nc-row .lnm { overflow: hidden; white-space: nowrap; min-width: 0; }  /* (a long name scrolls: viewer.js marquee) */
   #nextcard .nc-row .lvs { text-align: center; font-size: 10px; color: var(--faint); letter-spacing: .08em; }
   #nextcard .nc-row .lview { justify-self: end; display: inline-flex; align-items: center; gap: 3px; font-size: 11px; color: #ccc; }
   #nextcard .nc-next { font-size: 15px; font-weight: 700; padding: 6px 8px; background: #ffffff0a; }
@@ -716,7 +716,7 @@
   #liveitems .side { display: flex; align-items: center; gap: 3px; min-width: 0; flex: 1 1 0; }  /* (equal halves: a long name scrolls in its own) */
   #liveitems .lico { width: 28px; height: 28px; flex: none; margin: -2px 0; }
   #liveitems .lmoon { width: 12px; height: 12px; flex: none; }
-  #liveitems .lchar { display: flex; align-items: center; gap: 3px; flex: none; cursor: help; }
+  :is(#liveitems, #nextcard) .lchar { display: flex; align-items: center; gap: 3px; flex: none; cursor: help; }  /* (the watch-next rows are liveSide too: without it the pair wrapped, the moon under the icon, user 2026-11-07) */
   /* the character card (viewer.js charPopShow): portrait, moon + name, Mizuumi link */
   #charpop { position: fixed; z-index: 120; width: 168px; padding: 8px; box-sizing: border-box; background: var(--raise);
     border: 1px solid var(--line); border-radius: 10px; box-shadow: 0 8px 24px rgba(0,0,0,.5); display: flex; flex-direction: column; gap: 6px; }
@@ -731,10 +731,10 @@
   #charpop .cp-wiki[hidden] { display: none; }
   /* a text longer than its room scrolls to its end and back (viewer.js marquee(): .mqx holding a .t) */
   #liveitems .lnm, .mqx { overflow: hidden; white-space: nowrap; min-width: 0; }
-  #liveitems .lnm .t, .mqx .t { display: inline-block; }
-  #liveitems .lnm.mq .t, .mqx.mq .t { will-change: transform; }  /* (viewer.js marquee: a Web Animation) */
+  :is(#liveitems, #nextcard) .lnm .t, .mqx .t { display: inline-block; }
+  :is(#liveitems, #nextcard) .lnm.mq .t, .mqx.mq .t { will-change: transform; }  /* (viewer.js marquee: a Web Animation) */
   @keyframes lmq { 0%, 15% { transform: translateX(0); } 85%, 100% { transform: translateX(var(--d)); } }
-  @media (prefers-reduced-motion: reduce) { #liveitems .lnm.mq .t, .mqx.mq .t { animation: none; } #liveitems .lnm, .mqx { text-overflow: ellipsis; } }
+  @media (prefers-reduced-motion: reduce) { :is(#liveitems, #nextcard) .lnm.mq .t, .mqx.mq .t { animation: none; } :is(#liveitems, #nextcard) .lnm, .mqx { text-overflow: ellipsis; } }
   #liveitems .lvs { font-size: 10px; color: var(--faint); letter-spacing: .08em; flex: none; }
   #liveitems .lview, #watching { display: inline-flex; align-items: center; gap: 3px; padding: 1px 6px; border-radius: 999px; flex: none;
                                  background: #b8323f; color: #fff; text-shadow: none; font-size: 11px; font-weight: 600; letter-spacing: normal; line-height: 16px; }
@@ -989,6 +989,6 @@
 </div>
 <script src="mbaa.js?v=0ab30dcacef1"></script>
 <script src="bgm_stream.js?v=cad5cabd6328"></script>
-<script src="viewer.js?v=c0925b5628b1"></script>
+<script src="viewer.js?v=c74c026decca"></script>
 </body>
 </html>
