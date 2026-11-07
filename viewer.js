@@ -12,7 +12,11 @@
 //   ?hash=1            state hash run: no pacing, every Game_FrameUpdate's node-runner state row (MBAA_ORACLE_OUT
 //                      format) and audio row; window.__mbaaHash holds them, a link downloads the CSVs
 //                      (tools/web_parity/browser_hash.py compares them with the node runner). &frames=N caps the run.
-//   ?perf=1            frame pacing record (per rAF tick: time, sim ms, steps); window.__mbaaPerf() returns it
+//   ?perf=pace         frame pacing record (per rAF tick: time, sim ms, steps); window.__mbaaPerf() returns it
+//                      (tools/web_parity/browser_perf.py; was ?perf=1)
+//   ?perf=1            the frame profiler (opt-in; harness-design/stage3d_perf/PROFILING.md): ~10 s of per-frame timings,
+//                      then a summary to download or send; ?perf=hud an on-screen readout
+//   ?spector=1         local pages only (127.0.0.1 / localhost): Spector.js WebGL capture (/__spector/, a dev server route)
 //   ?planDrop=REGEX    test: leave the matching files out of the plan (exercises the run-time miss path)
 //   ?files=URL&root=P  dev/capture: load that JSON list of game paths as plain files (no bundle, no plan);
 //   ?capture=1         does not start playback (tools/web_parity/browser_capture.py drives viewer_step)
@@ -159,7 +163,21 @@ window.mbaaNameFx = (() => {
 })();
 // the private live-spectate test copy (live.meltyblood.org/<secret>/, tools/web/cc_live.mjs) loads the public bundle
 const BUNDLE = Q.get('bundle') || (/^(live|spectate)\.meltyblood\.org$/.test(location.hostname) ? 'https://watch.meltyblood.org/bundle/' : 'bundle/');
-const HASH = Q.get('hash') === '1', PERF = Q.get('perf') === '1', CAPTURE = Q.get('capture') === '1';
+const HASH = Q.get('hash') === '1', PERF = Q.get('perf') === 'pace', CAPTURE = Q.get('capture') === '1';
+// ?spector=1 (local test pages only, never the public site: the library is not in the site build; the local dev servers
+// serve it at /__spector/ from tools/stage3d/vendor/spector): Spector.js spies every canvas made after it loads, so the
+// engine waits for it (SPECTOR_P) before its first context. window.__mbaaSpector (tools/stage3d/phone/spector_capture.py)
+const SPECTOR_P = Q.get('spector') === '1' && /^(127\.0\.0\.1|localhost|\[::1\])$/.test(location.hostname) ? new Promise(res => {
+  const sc = document.createElement('script');
+  sc.src = '/__spector/spector.bundle.js';
+  sc.onload = () => {
+    try { const sp = window.__mbaaSpector = new SPECTOR.Spector(); sp.spyCanvases(); if (Q.get('spectorui') === '1') sp.displayUI(); }
+    catch (e) { console.warn('spector:', e); }
+    res();
+  };
+  sc.onerror = () => { console.warn('spector: /__spector/ is not served here'); res(); };
+  document.head.append(sc);
+}) : null;
 const KF_EVERY = Math.max(10, +(Q.get('kf') || 300));  // playback keyframe interval (frames)
 const KF_NEAR = 30;  // a seek that re-simulates further than 3x this keyframes about KF_NEAR frames before its target
 const PAGE = Math.min(65536, Math.max(16384, +(Q.get('page') || 16384)));  // keyframe page size (bytes)
@@ -260,7 +278,7 @@ function fileJob(h, parts, z = null) {
   return new Promise((res, rej) => {
     const id = ++filePool.id;
     filePool.jobs.set(id, { res, rej, h });
-    filePool.ws[filePool.rr++ % filePool.ws.length].postMessage({ id, url: new URL(`${BUNDLE}o/${h.slice(0, 2)}/${h}`, location.href).href, parts, z });
+    filePool.ws[filePool.rr++ % filePool.ws.length].postMessage({ id, url: new URL(`${BUNDLE}o/${h.slice(0, 2)}/${h}`, document.baseURI).href, parts, z });
   });
 }
 // the pool off: every job waiting fails over to this thread's path (the callers fall back on a rejection)
@@ -312,6 +330,7 @@ function status(t) { document.getElementById('status').textContent = t; slogStat
 // console lines, timestamped. ⚙ "copy session log" puts it on the clipboard; a live picture stuck 20 s sends it to the
 // bridge (/live/<id>/diag: kept with the captures, no addresses) once per stall ----
 const SLOG_MAX = 800, slog = [], slogT0 = performance.now();
+let slogTexMiss = false;
 let slogNorm = '';
 function slogAdd(ev, d = '') {
   slog.push([Math.round(performance.now() - slogT0), new Date().toISOString().slice(11, 23), ev, String(d).slice(0, 300)]);
@@ -325,7 +344,16 @@ function slogStatus(t) {
 }
 for (const k of ['warn', 'error']) {
   const o = console[k].bind(console);
-  console[k] = (...a) => { try { const t = a.map(String).join(' '); if (k === 'error' || /^(spectate|live|radio):/.test(t)) slogAdd(k, t); } catch (e) {} o(...a); };
+  console[k] = (...a) => {
+    try {
+      const t = a.map(String).join(' ');
+      if (k === 'error' || /^(spectate|live|radio|gl|bgm):/.test(t)) slogAdd(k, t);
+      // (a texture drawn blank: its pixels gone from the GPU store, d3d9_gl.cpp ensure_uploaded / texture_read. Sent
+      // once a session: the stage "built with wholly missing blocks" a refresh fixes, user 2026-11-07, never caught)
+      if (/^gl: .*missing from the store/.test(t) && !slogTexMiss) { slogTexMiss = true; setTimeout(() => slogSend(session, 'texmiss'), 3000); }
+    } catch (e) {}
+    o(...a);
+  };
 }
 addEventListener('error', e => slogAdd('error', `${e.message} @${(e.filename || '').split('/').pop()}:${e.lineno}`));
 addEventListener('unhandledrejection', e => slogAdd('error', `promise: ${e.reason && e.reason.message || e.reason}`));
@@ -648,14 +676,20 @@ function dsSetPan(ch, pan) {  // ch: {l, r} gain nodes after the stereo split; p
   ch.l.gain.value = pan > 0 ? dsGain(-pan) : 1;
   ch.r.gain.value = pan < 0 ? dsGain(pan) : 1;
 }
+// The chain joins `out` only while it has a sound (dsOn / dsOff): Chrome renders every connected node each 128-sample
+// quantum, silent or not, and a session keeps one chain per sound set it ever touched. Idle chains left connected cost the
+// phone's audio thread 47 % of a core at 50 chains and all of it at 200 (Moto G Power, tools/stage3d/phone/
+// audio_latency_probe.py, 2026-11-06); a live session had that running under every frame.
 function dsVoiceChain(out) {  // gain (volume) -> split -> per-side gain (pan) -> merge -> out
   const g = actx.createGain();
   g.channelCount = 2; g.channelCountMode = 'explicit'; g.channelInterpretation = 'speakers';
   const sp = actx.createChannelSplitter(2), mg = actx.createChannelMerger(2);
   const l = actx.createGain(), r = actx.createGain();
-  g.connect(sp); sp.connect(l, 0); sp.connect(r, 1); l.connect(mg, 0, 0); r.connect(mg, 0, 1); mg.connect(out);
-  return { g, l, r, src: null, vol: 0, pan: 0 };
+  g.connect(sp); sp.connect(l, 0); sp.connect(r, 1); l.connect(mg, 0, 0); r.connect(mg, 0, 1);
+  return { g, l, r, mg, out, on: false, src: null, vol: 0, pan: 0 };
 }
+function dsOn(v) { if (!v.on) { v.mg.connect(v.out); v.on = true; } }
+function dsOff(v) { if (v.on && !v.src) { v.mg.disconnect(); v.on = false; } }
 function audioHooks(Module, s) {
   ensureAudio();
   const running = () => !!actx && actx.state === 'running';
@@ -679,7 +713,7 @@ function audioHooks(Module, s) {
   const seDrop = k => { const x = seBuf.get(k); if (x) { seBuf.delete(k); se.bytes -= x.bytes; } };
   const voices = new Map();  // channel -> chain
   const chain = ch => { let v = voices.get(ch); if (!v) { v = dsVoiceChain(sfxGain); voices.set(ch, v); } return v; };
-  const cut = v => { if (v.src) { try { v.src.stop(); } catch (e) {} v.src.disconnect(); v.src = null; } };
+  const cut = v => { if (v.src) { try { v.src.stop(); } catch (e) {} v.src.disconnect(); v.src = null; } dsOff(v); };
   const apply = (v, vol, pan) => { v.vol = vol; v.pan = pan; v.g.gain.value = dsGain(vol); dsSetPan(v, pan); };
   Module.mbaaVoicePlay = (ch, path, vol, pan) => {
     se.calls++;
@@ -710,7 +744,9 @@ function audioHooks(Module, s) {
     const b = e.p;
     const n = actx.createBufferSource();
     v.src = n;  // claimed now: a Stop or a later Play before the decode resolves cancels it
-    b.then(buf => { if (v.src !== n || !live()) return; n.buffer = buf; n.connect(v.g); n.start(); se.played++; },
+    // (off the mix again when it ends, unless another Play has claimed the voice since)
+    n.onended = () => { if (v.src === n) { v.src = null; dsOff(v); } };
+    b.then(buf => { if (v.src !== n || !live()) return; n.buffer = buf; n.connect(v.g); dsOn(v); n.start(); se.played++; },
            () => { se.decodeFailed++; });
   };
   Module.mbaaVoiceParam = (ch, vol, pan) => {
@@ -735,7 +771,7 @@ function audioHooks(Module, s) {
     if (radioChain) apply(radioChain, radioVol === null ? -1666 : radioVol, 0);
   };
   const graph = () => {
-    if (!bgmChain && actx) { bgmChain = dsVoiceChain(musicGain); radioChain = dsVoiceChain(musicGain); radioLevel(-10000); }
+    if (!bgmChain && actx) { bgmChain = dsVoiceChain(musicGain); radioChain = dsVoiceChain(musicGain); dsOn(bgmChain); dsOn(radioChain); radioLevel(-10000); }
     return !!bgmChain;
   };
   window.__mbaaAudioMade = () => { if (session === s) graph(); };
@@ -968,12 +1004,25 @@ function pipStream(c) {
   if (!pipTrack || typeof pipTrack.requestFrame !== 'function') { pipTrack = null; return c.captureStream(60); }
   return st;
 }
+// ---- one frame for the page (goal 3a, harness-design/stage3d_perf/ASSESSMENT_1107.md item 2): the shell's moving parts
+// (the chat's name effects, the players' icons, the time and seek bar, the radio stage's sync, the pop-out's frames)
+// update inside the game's frame, so Chrome composites one frame per game frame. Was: each on its own
+// requestAnimationFrame (the chat's name worker at the display's rate), and a 120 Hz phone presented 76-83 frames a second
+// for a 60 fps game, half of them 8 ms apart (Buffer Stuffing). Driven by the game's frames as they play (Module.mbaaFrame,
+// once per tick); with none for 50 ms (paused, a seek, between matches, no match) by a 60-a-second timer.
+const frameBus = new Set();
+let frameBusAt = -1e9;
+function frameBusRun(now) {
+  frameBusAt = now;
+  for (const f of frameBus) { try { f(now); } catch (e) { console.warn('frame:', e); } }
+}
+setInterval(() => { const now = performance.now(); if (now - frameBusAt > 50) frameBusRun(now); }, 1000 / 60);
+window.mbaaFrameBus = frameBus;  // (chat.js: its name effects)
 let pipTickN = 0;
-requestAnimationFrame(function pipTick() {
+frameBus.add(function pipTick() {
   if (pipTrack && pipVideo && pipTrack.readyState === 'live') {
     if (document.pictureInPictureElement === pipVideo || ++pipTickN % 30 === 0) { try { pipTrack.requestFrame(); } catch (e) {} }
   }
-  requestAnimationFrame(pipTick);
 });
 function pipSource() {
   if (pipVideo) return pipVideo;
@@ -1102,8 +1151,9 @@ function restoreBoot(s) {
 // page fetches the boot files only (plan.boot), makes the instance and boots it exactly as play() does (the same
 // settings before viewer_boot, the boot textures sealed, the boot snapshot); the first session then takes it over as a
 // reused instance that has never run past its boot (no restore). The match's files and the boot tape meanwhile come in
-// alongside. ?prewarm=0: off (the old order); never in hash / capture runs or with ?reuse=0.
-const PREWARM = !HASH && !CAPTURE && Q.get('prewarm') === '1' && Q.get('reuse') !== '0' && !Q.get('files');
+// alongside. Never in hash / capture runs or with ?reuse=0. (Was behind ?prewarm=1 while it was a suspect for the owner
+// stage squares, 2026-11-06; those were the snapshot's background block, radio_stage.cpp snap_keep_bg_*.)
+const PREWARM = !HASH && !CAPTURE && Q.get('reuse') !== '0' && !Q.get('files');
 let warmP = null;
 function engineWarm() {
   if (warmP || !PREWARM || session || !man || !man.plan || !man.plan.boot) return warmP;
@@ -1113,6 +1163,7 @@ function engineWarm() {
     if (session) return null;
     bootMark('warmModule');
     const wasmV = ((document.querySelector('script[src^="mbaa.js"]') || {}).src || '').split('?')[1];
+    if (SPECTOR_P) await SPECTOR_P;
     const M = await MBAA({ print: t => console.log(t), printErr: t => console.warn(t), canvas: freshCanvas(), mbaaStoreKeep: !LOWMEM,
                            locateFile: p => (wasmV && p.endsWith('.wasm') ? `${p}?${wasmV}` : p) });
     if (session) return null;
@@ -1172,6 +1223,7 @@ async function newSession(rep, name, want) {
   const wasmV = ((document.querySelector('script[src^="mbaa.js"]') || {}).src || '').split('?')[1];
   // mbaaStoreKeep: the texture store keeps the last match's textures for the next one (web/host/browser/d3d9_gl.cpp)
   bootMark('moduleStart');
+  if (SPECTOR_P) await SPECTOR_P;
   const M = await MBAA({ print: t => console.log(t), printErr: t => console.warn(t), canvas: freshCanvas(), mbaaStoreKeep: !LOWMEM,
                          locateFile: p => (wasmV && p.endsWith('.wasm') ? `${p}?${wasmV}` : p) });
   bootMark('module');
@@ -1372,6 +1424,9 @@ const hitstunApply = s => {  // (an engine without it: nothing)
 };
 try { ui.hud = localStorage.getItem('mbaaHud') !== '0'; ui.music = localStorage.getItem('mbaaMusic') !== '0'; } catch (e) {}
 try { ui.skipIntro = localStorage.getItem('mbaaSkipIntro') === '1'; } catch (e) {}
+// the frame bar (ETM's, framebarSet): off unless this browser turned it on; ?framebar=0/1 overrides
+try { ui.framebar = localStorage.getItem('mbaaFramebar') === '1'; } catch (e) { ui.framebar = false; }
+if (Q.get('framebar') === '0' || Q.get('framebar') === '1') ui.framebar = Q.get('framebar') === '1';
 try { ui.names = localStorage.getItem('mbaaNames') !== '0'; } catch (e) { ui.names = true; }
 const tlMax = t => t.end !== null ? t.end : Math.max(t.simMax, t.est, 1);
 function uiApply(s) {
@@ -1389,6 +1444,7 @@ function timelineInit(s) {
   M.mbaaTexKfRef = new Map();  // (a reused instance: the last match's keyframes are gone with its timeline)
   for (const [k, n] of M.mbaaTexHold || []) M.mbaaTexKfRef.set(k, n);  // (a kept live match's: liveKeepTake)
   M.mbaaFrame = f => {
+    if (fb.on) fbSample(s, f);  // (the frame bar: every frame, a seek's re-simulation too)
     if (f > t.simMax) {
       t.simMax = f;
       const scene = M.HEAP32[0x54EEE8 >> 2], round = M.HEAP32[0x77BFA4 >> 2];
@@ -1420,6 +1476,8 @@ function timelineInit(s) {
     // CU_KF_LOW, s.cuNoKf: also not in its last drawn frames, ~2 s at 4x against the frame-0 keyframe; the first is the
     // incremental one after the landing, incTick's slices)
     else if (!s.cuNoKf && f >= t.lastKf + (cu && f < cu.T - CU_KF_TAIL ? CU_KF_EVERY : KF_EVERY) && f >= t.simMax && !M._viewer_files_open() && !(LOWMEM && !t.marks.length)) keyframe(s, f);  // phones: none in the intro (incTick)
+    // (the page's frame, once per tick: a tick stepping two game frames runs it once)
+    if (!s.seeking && !cu && session === s) { const now = performance.now(); if (now - frameBusAt > 4) frameBusRun(now); }
   };
   if (!M._viewer_files_open()) keyframe(s, M._viewer_frame());
 }
@@ -1575,7 +1633,6 @@ function storeGc(t) {
 // Keyframe: every page of the used memory [0, sbrk). A page whose hash equals the previous keyframe's is shared with
 // it, so a keyframe stores only its changed pages (packed, packPage; h = the page's hash). The hash output array is
 // scratch (null pages: never stored, never restored).
-const KF_BOOT = Q.get('kfboot') === '1';
 function keyframe(s, f) {
   const t = s.tl, M = s.M, t0 = performance.now();
   const top = M._viewer_mem_top(), n = Math.ceil(top / PAGE), W = PAGE >> 2;
@@ -1585,8 +1642,8 @@ function keyframe(s, f) {
   if (at > 0 && t.kfs[at - 1].frame === f) return;
   // (the first keyframe: shared with the boot snapshot (same instance), so the pages the match has not changed since the
   // boot (~most of the exe's data and the boot files' heap) are not packed again: at 4x the first keyframe after a
-  // live join took ~350 ms. Only those with a hash (the hash output and the zlib scratch have none)). ?kfboot=0: off
-  const prev = at > 0 ? t.kfs[at - 1].pages : (KF_BOOT && s.boot ? s.boot.pages : []);
+  // live join took ~350 ms. Only those with a hash (the hash output and the zlib scratch have none)).
+  const prev = at > 0 ? t.kfs[at - 1].pages : (s.boot ? s.boot.pages : []);
   const x0 = Math.floor(M._viewer_page_hash_area(0) / PAGE), x1 = Math.ceil(M._viewer_page_hash_area(1) / PAGE);
   const pages = new Array(n);
   let fresh = 0;
@@ -1903,6 +1960,9 @@ async function seekTo(s, T) {
   // the nearest keyframe strictly before T (at least one step is drawn), unless the current state is nearer
   let kf = null;
   for (const k of t.kfs) if (k.frame < T) { if (!k.pending && !k.preSnap) kf = k; } else break;
+  // (the frame bar on, its frames before T not kept: from a keyframe FB_BACK frames further back, so the bar has them)
+  const fbBack = fbSeekBack(T);
+  if (fbBack && kf) for (const k of t.kfs) if (k.frame < T - fbBack) { if (!k.pending && !k.preSnap) kf = k; } else break;
   // (a snapshot join: nothing to restore before the first keyframe after its load)
   if (s.snapFrom != null && !kf && !(T > cur)) { status('live: not kept this far back yet'); return; }
   // low memory: a restore from before the freed files' load (kfSafe) re-simulates it. A replay gets the files back
@@ -1997,10 +2057,13 @@ const REPLAY_STORE = 'https://replays.meltyblood.org';
 // ---- live CCCaster matches (?live=<id>): the bridge's feed (tools/web/cc_live.mjs) played by the game in spectate
 // mode (web/host/spectate.cpp): a boot tape sets the match up, then the stream's index records arrive about once a
 // second and the game plays them ~4 s behind the host (faster while it catches up after joining mid-game)
-const LIVE = Q.get('liveUrl') || location.origin + location.pathname.replace(/\/[^/]*$/, '');  // (the feed is next to the page)
+// (?liveUrl= only on a local test page: on the site a link could otherwise play someone else's feed and send them the
+// viewer's session log and pictures; security AUDIT_1107 F-02)
+const LIVE_URL = /^(127\.0\.0\.1|localhost)$/.test(location.hostname) ? Q.get('liveUrl') : null;
+const LIVE = LIVE_URL || location.origin + location.pathname.replace(/\/[^/]*$/, '');  // (the feed is next to the page)
 // the feed exists only on the spectate path (the Worker gives that page <base href="/">) or where ?liveUrl= names one: the
 // public page has none to ask for
-const LIVE_FEED = !!(Q.get('liveUrl') || document.querySelector('base'));
+const LIVE_FEED = !!(LIVE_URL || document.querySelector('base'));
 // the spectate page: named for what it shows from the first paint on (the replay page's heading until a match loads)
 if (document.querySelector('base')) { document.getElementById('title').textContent = 'MBAACC live'; document.title = 'MBAACC Live'; }
 const LIVE_BEHIND = 240;  // frames kept buffered (4 s)
@@ -2408,7 +2471,7 @@ async function startLive(id, match = null, entry = null) {
   window.__mbaaRepUrl = null;
   // (a switch from a match on screen: quiet, the old picture held until the new match's first frame is drawn and
   // crossfaded into it, not the opening movie; a first load: the movie)
-  await start(new File([boot], `LIVE ${info.names.map(n => n.trim()).join(' vs ')}`), !CU_OLD && session && session.M ? 'switch' : false, id);
+  await start(new File([boot], `LIVE ${info.names.map(n => n.trim()).join(' vs ')}`), session && session.M ? 'switch' : false, id);
 }
 // a start's requests without the join: the boot tape, the first records (the poll's first request, sent now) and the files
 let liveReqs = null;
@@ -2450,19 +2513,22 @@ function liveStartReqs(id, info) {
 // ---- the server snapshot join (artifacts/xz_check/perf_plan/snapjoin): the bridge's snapshot runner (tools/web/cc_snap.mjs)
 // keeps a typed snapshot of each live game every ~1.5 s (web/host/snapshot.cpp: PC's MBAACC typed deep-join format + the
 // web sections). A join loads it at its battle's first frames instead of re-simulating the game up to the live point, then
-// catches up only the seconds after it. Refused / no snapshot / the state hash after the load differs (the keyframe made
-// just before is put back): today's catch-up. The DVR goes back no further than the load (the frames before it are the
+// catches up only the seconds after it. The one way in to a battle under way (2026-11-07, no fallbacks: the join that
+// re-simulated the whole game is gone): no snapshot yet (a bridge just restarted: its runner makes one within seconds)
+// is waited for, asked again each second; a refused load or one whose state hash differs starts the match again (a
+// fresh snapshot), after SNAP_RETRY_MS once it has failed twice. The DVR goes back no further than the load (the frames before it are the
 // joiner's own, not the game's: s.snapFrom), and the game gives no clip replay (its tape lacks the rounds before the join:
-// web/host/spectate.cpp noTape). ?snap=0: off.
-const SNAP_ON = Q.get('snap') !== '0', JOIN_PROF = Q.get('joinprof') === '1';
-let snapSkip = '';   // ("<id>:<game>": its snapshot loaded with a differing state hash once: that game catches up)
-function liveSnapFetch(id, info) {
-  if (!SNAP_ON || snapSkip === `${id}:${info.game}`) return null;
+// web/host/spectate.cpp noTape).
+const JOIN_PROF = Q.get('joinprof') === '1', SNAP_RETRY_MS = 5000;
+const snapBad = new Map();   // ("<id>:<game>" -> loads refused / differing so far: the restarts back off after two)
+function liveSnapFetch(id, info, fresh) {
   // (one fetched for its card a moment ago (liveCardPrefetch: a hover, a touch): that one)
-  const pre = snapPre.get(id);
+  const pre = fresh ? null : snapPre.get(id);
   snapPre.delete(id);
   if (pre && pre.game === info.game && performance.now() - pre.at < SNAP_PRE_MS) return pre.p;
-  return liveFetch(`${LIVE}/live/${id}/snap?game=${info.game}` + (info.match ? `&match=${encodeURIComponent(info.match)}` : ''))
+  // (60 s, not liveFetch's 10: its timeout covers the body too, and the ~1.4 MB snapshot on a slow line takes longer)
+  return liveFetch(`${LIVE}/live/${id}/snap?game=${info.game}` + (info.match ? `&match=${encodeURIComponent(info.match)}` : ''),
+                   AbortSignal.timeout ? { signal: AbortSignal.timeout(60000) } : undefined)
     .then(async r => r.ok ? { bytes: new Uint8Array(await r.arrayBuffer()), frame: +r.headers.get('X-Snap-Frame'), age: +r.headers.get('X-Snap-Age'), got: performance.now() } : null)
     .catch(() => null);
 }
@@ -2545,18 +2611,14 @@ function liveCardPrefetch(m, snap = true) {
 // the join's load: true when loaded (the catch-up then has only the rest); window.__mbaaSnapJoin: what happened (the checks)
 // (goal D) the join's load stores its sprite pages raw and codes them after (viewer_encode_later): desktop all of them;
 // low-memory mode (phones) at most ENC_BUDGET MB raw (?encbudget=<MB>), the pages past it coded in place (user ruling
-// 2026-11-06: a 16-24 MB cap). ?enclater=0: every page coded in place
-const ENC_LATER = !HASH && !CAPTURE && Q.get('enclater') === '1';
+// 2026-11-06: a 16-24 MB cap)
+const ENC_LATER = !HASH && !CAPTURE;
 const ENC_BUDGET = LOWMEM ? Math.max(1, +(Q.get('encbudget') || 24)) : 0;
 async function liveSnapJoin(s) {
   const L = s.liveSrc, M = s.M, t0 = performance.now(), J = window.__mbaaSnapJoin = { t0, ok: false };
   const p = L.snapP;
   L.snapP = null;
   if (!p || !M._viewer_snap_load) return false;
-  const sn = await Promise.race([p, new Promise(r => setTimeout(() => r(null), 2500))]);
-  J.fetched = performance.now() - t0;
-  if (!sn || session !== s) { J.why = sn ? 'left' : 'no snapshot'; return false; }
-  Object.assign(J, { bytes: sn.bytes.length, senderFrame: sn.frame, age: sn.age });
   // the base: this game's battle under way (scene code and committed scene 1, the live session InGame), unrendered
   const base = () => M.HEAP32[0x55D1D0 >> 2] === 1 && M.HEAP32[0x54EEE8 >> 2] === 1 && call(s, 'viewer_spectate_phase') === 2;
   if (JOIN_PROF) console.profile('join-base');   // (?joinprof=1, the checks: a CPU profile of the base's stepping)
@@ -2580,6 +2642,26 @@ async function liveSnapJoin(s) {
   J.baseFrame = f; J.baseMs = performance.now() - t0;
   if (JOIN_PROF) console.profileEnd('join-base');
   if (session !== s || !base()) { J.why = 'no battle base'; return false; }
+  // (a battle under way: its snapshot, waited for; asked again each second while the bridge has none)
+  // A fetch still downloading is waited for, never dropped: a slow line (the ~1.4 MB snapshot over 5 s) used to start a
+  // new fetch every 5 s and ignore the late answers, so it never joined (artifacts/ah3_join_layers run_before_delay). A
+  // new one is asked for only once the last has settled without one (the bridge had none yet, or the request failed).
+  let pend = p, settled = false, sn = null, tries = 0;
+  const watch = q => { settled = false; Promise.resolve(q).then(() => { if (pend === q) settled = true; }, () => { if (pend === q) settled = true; }); };
+  watch(pend);
+  const race = (q, ms) => Promise.race([Promise.resolve(q).catch(() => null), new Promise(r => setTimeout(() => r(null), ms))]);
+  while (session === s) {
+    sn = await race(pend, 2500);
+    if (sn || session !== s) break;
+    if (++tries === 2) { status('live: joining: waiting for the match\'s snapshot'); slogAdd('live', 'waiting for the match\'s snapshot'); }
+    if (!settled) continue;   // (still downloading)
+    await new Promise(r => setTimeout(r, 1000));
+    if (session !== s) break;
+    pend = liveSnapFetch(L.id, L.info, true); watch(pend);
+  }
+  J.fetched = performance.now() - t0; J.tries = tries;
+  if (!sn || session !== s) { J.why = 'left'; return null; }
+  Object.assign(J, { bytes: sn.bytes.length, senderFrame: sn.frame, age: sn.age });
   const t = s.tl;
   if (M._viewer_spectate_set_first_game) M._viewer_spectate_set_first_game(L.firstGame ?? L.info.game);   // (the snapshot's same-game check)
   const buf = M._malloc(sn.bytes.length);
@@ -2590,10 +2672,14 @@ async function liveSnapJoin(s) {
   J.result = r;
   if (r !== 1) {
     J.why = M.ccall('viewer_snap_why', 'string', [], []);
-    console.log(`live: snapshot not used (${J.why}); catching up`);
-    // (loaded but the state hash differs: this session's state is not the game's; the match again without the snapshot)
-    if (r === 2) { snapSkip = `${L.id}:${L.info.game}`; setTimeout(() => startLive(L.id, L.info.match || null), 0); J.restart = true; }
-    return false;
+    // (refused, or loaded with a differing state hash: this session's state is not the game's; the match again, from a
+    // fresh snapshot)
+    const k = `${L.id}:${L.info.game}`, n = (snapBad.get(k) || 0) + 1;
+    snapBad.set(k, n);
+    console.warn(`live: snapshot not used (${J.why}, ${n}): the match again`);
+    setTimeout(() => { if (session === s) startLive(L.id, L.info.match || null); }, n > 2 ? SNAP_RETRY_MS : 0);
+    J.restart = true;
+    return null;
   }
   // the timeline from here: the keyframes before the load are the joiner's own frames, not the game's. The newest stays
   // only as the incremental keyframes' base (its pages shared; preSnap: never restored, seekTo / kfPinned); no keyframe is
@@ -2669,10 +2755,9 @@ const yieldTask = () => (globalThis.scheduler && typeof scheduler.yield === 'fun
 // can act (outside a battle, the retry menu, a scene change, every CU_WATCH frames: frameHook); DVR keyframes every
 // CU_KF_EVERY frames until the last CU_KF_TAIL (there every KF_EVERY, as playback: a seek back from live finds them);
 // one frame drawn every CU_SHOW_MS (the new match on screen at once, a fast-forward under the progress overlay). Drawn
-// and undrawn frames are the same game state (a tick owing several frames draws only its last). ?cuOld=1: the old path
-// (every watcher every frame, a keyframe every KF_EVERY, 600-frame steps, the loading movie on a switch), for the checks
-// (tools/web/live_catchup_check.py: the state at live is the same either way)
-const CU_OLD = Q.get('cuOld') === '1', CU_HASH = Q.get('cuhash') === '1';
+// and undrawn frames are the same game state (a tick owing several frames draws only its last). (The old path, every
+// watcher every frame, deleted 2026-11-07.) ?cuhash=1: the state-hash rows, for the checks
+const CU_HASH = Q.get('cuhash') === '1';
 // (the checks: the landing frame rounded down to a multiple of ?cuRound=, so runs that started catching up a few frames
 // apart land on the same frame)
 const CU_ROUND = +(Q.get('cuRound') || 0);
@@ -2688,12 +2773,12 @@ const cuTurn = () => new Promise(r => { const ch = new MessageChannel(); ch.port
 // frame drawn), cuStart / cuEnd (catch-up), live (caught up)
 async function liveCatchUp(s, n) {
   bootMark('catchUp');
-  if (s.liveSrc && s.liveSrc.snapP && !CU_OLD) {
+  if (s.liveSrc && s.liveSrc.snapP) {
     const was = s.seeking;
     s.seeking = true; s.mute = true; s.stopSes(); s.bgmHalt(); call(s, 'viewer_suppress', 1);
     let ok = false;
     try { ok = await liveSnapJoin(s); } finally { call(s, 'viewer_suppress', 0); s.seeking = was; }
-    if (session !== s) return;
+    if (session !== s || ok === null) return;   // (left, or the match started again for a fresh snapshot)
     if (ok) n = call(s, 'viewer_spectate_buffered') - LIVE_BEHIND;
     if (ok && n <= 2) {
       call(s, 'viewer_represent'); s.mute = ui.paused; uiApply(s); if (!ui.paused) s.bgmSync(s.M._viewer_frame());
@@ -2703,7 +2788,6 @@ async function liveCatchUp(s, n) {
       return;
     }
   }
-  if (CU_OLD) return liveCatchUpOld(s, n);
   const M = s.M, T = cuTarget(M, n), DRAW = 2, t0 = performance.now(), f0 = M._viewer_frame();
   catchUpShow(T - f0, T - f0);
   s.seeking = true; s.mute = true;
@@ -2768,7 +2852,7 @@ async function liveCatchUp(s, n) {
 // (?cuhash=1: viewer_hash_enable at the start) and the hashes of every memory page
 function cuDone(s, f0, t0, drawn) {
   const M = s.M, f = M._viewer_frame(), ms = performance.now() - t0;
-  const r = { frames: f - f0, ms, fps: (f - f0) / (ms / 1000), from: f0, frame: f, drawn, kfs: s.tl ? s.tl.kfs.length : 0, old: CU_OLD, prof: s.cuProf || null,
+  const r = { frames: f - f0, ms, fps: (f - f0) / (ms / 1000), from: f0, frame: f, drawn, kfs: s.tl ? s.tl.kfs.length : 0, prof: s.cuProf || null,
              at: performance.now(), snap: s.snapFrom != null ? { ...window.__mbaaSnapJoin } : null,
              kfMs: s.tl ? s.tl.kfs.filter(k => k.frame >= f0).map(k => Math.round(k.ms)) : [], landMs: s.cuLandMs ?? null };
   s.cuProf = null;
@@ -2789,35 +2873,6 @@ function cuDone(s, f0, t0, drawn) {
   swMark('cuEnd'); swMark('live');
   if (s.cssBgGo) s.cssBgGo();
   console.log(`live: caught up ${r.frames} frames in ${Math.round(ms)} ms (${Math.round(r.fps)} frames/s, ${drawn} drawn)`);
-}
-async function liveCatchUpOld(s, n) {
-  const M = s.M, T = cuTarget(M, n), DRAW = 2, t0 = performance.now(), f0 = M._viewer_frame();
-  catchUpShow(n, n);
-  s.seeking = true; s.mute = true;
-  s.stopSes(); s.bgmHalt();
-  uiApply(s);
-  call(s, 'viewer_suppress', 1);
-  swMark('cuStart', t0);
-  let f = M._viewer_frame();
-  while (f < T - DRAW) {
-    const g = call(s, 'viewer_step', Math.min(T - DRAW - f, 600));
-    if (g === f) break;
-    f = g;
-    status(`live: catching up (${T - f} frames to go)`);
-    catchUpShow(T - f, n);
-    await new Promise(r => setTimeout(r, 0));
-    if (session !== s) { catchUpShow(null); return; }
-  }
-  catchUpShow(null);
-  call(s, 'viewer_suppress', 0);
-  if (f < T) call(s, 'viewer_step', T - f);
-  else call(s, 'viewer_represent');
-  s.seeking = false; s.mute = ui.paused;
-  uiApply(s);
-  if (!ui.paused) s.bgmSync(M._viewer_frame());
-  s.livePic = true;
-  swMark('picture'); swMark('battlePic');
-  cuDone(s, f0, t0, 0);
 }
 // The player block (spectating): per side the character's select-screen icon in its animated 1P / 2P cursor frame, the
 // player's name, the moon and character. The art is the select screen's own (grp/c_sel_aa: icons 48x64, the large row
@@ -3194,7 +3249,7 @@ let plAnimF = -1;
 function playersAnimate(t) {
   const box = document.getElementById('players');
   const fNow = Math.floor(t * 60 / 2000) % 10;
-  if (fNow === plAnimF) { requestAnimationFrame(playersAnimate); return; }  // (the cursor frame changes 30 times a second)
+  if (fNow === plAnimF) return;  // (the cursor frame changes 30 times a second)
   plAnimF = fNow;
   if (!box.hidden && plArt) {
     const f = Math.floor(t * 60 / 2000) % 10;
@@ -3205,9 +3260,8 @@ function playersAnimate(t) {
     const f = Math.floor(t * 60 / 2000) % 10;
     for (const cv of document.querySelectorAll('#liveitems .lico')) selFrame(cv, +cv.dataset.cell, +cv.dataset.side, f);
   }
-  requestAnimationFrame(playersAnimate);
 }
-requestAnimationFrame(playersAnimate);
+frameBus.add(playersAnimate);
 // The stage block and Raito Radio (tools/web/stage_panel.py puts web/stage/* in the bundle, tools/web/old_melty/
 // radio_bundle.py web/radio/*): the stage's select-screen preview and name plate, and the title of the music playing;
 // the radio's pick replaces the match's music (replays and live) until it is set back to the match's. Its game bar
@@ -3263,7 +3317,7 @@ function radioOldLoad() {
 // old.json's, so an approval needs no bundle rebuild. A tile is the Worker's /radio/img/<name>.jpg.
 async function radioOverrides(o) {
   try {
-    const r = await fetch(new URL('/radio/overrides.json', new URL(BUNDLE, location.href)), { cache: 'no-cache', signal: AbortSignal.timeout(4000) });
+    const r = await fetch(new URL('/radio/overrides.json', new URL(BUNDLE, document.baseURI)), { cache: 'no-cache', signal: AbortSignal.timeout(4000) });
     if (!r.ok) return;
     const j = await r.json();
     for (const [k, v] of Object.entries((j && j.tracks) || {})) {
@@ -3613,7 +3667,7 @@ function radioStageSync(s) {
   if (st) st.lights.forEach(([pos, power], i) => M._viewer_radio_stage_light(i, pos, power));
   M.ccall('viewer_radio_stage_want', null, ['string', 'number', 'number'], [st ? st.dat : '', want, st ? st.lights.length : 0]);
 }
-requestAnimationFrame(function radioStageLoop() { try { radioStageSync(session); } catch (e) {} requestAnimationFrame(radioStageLoop); });
+frameBus.add(function radioStageLoop() { radioStageSync(session); });
 // an image cropped to the box of its pixels that are not fully transparent (PNG out)
 async function trimAlpha(blob) {
   const bm = await createImageBitmap(blob), cv = document.createElement('canvas');
@@ -3740,6 +3794,16 @@ setInterval(() => {
 // (the player block's room changes with the layout, the card's banner and its fonts: measured again on every resize)
 if (window.ResizeObserver && document.getElementById('players'))  // (viewer.js loads at the end of the page: it exists)
   new ResizeObserver(() => marquee(document.getElementById('players'))).observe(document.getElementById('players'));
+// (while a match plays (body.mplay) the shell's own animations hold still: these marquees, and in CSS the banner's
+// scroll, the clip link's pulse and the 2x badge; each ran compositor frames between the game's, goal 3a)
+const mqAnims = new Set();
+let mPlay = false;
+frameBus.add(function playState() {
+  const on = !!(session && session.tl && !ui.paused && !document.hidden);
+  if (on === mPlay) return;
+  mPlay = on; document.body.classList.toggle('mplay', on);
+  for (const a of mqAnims) { try { if (on) a.pause(); else a.play(); } catch (e) {} }
+});
 function marquee(root, sel = '.mqx') {
   for (const nm of root.querySelectorAll(sel)) {
     const over = nm.firstChild.scrollWidth - nm.clientWidth;
@@ -3748,12 +3812,13 @@ function marquee(root, sel = '.mqx') {
     // (a Web Animation with concrete numbers runs on the compositor; the CSS keyframes with var() re-styled the text
     // every frame on the main thread)
     if (t.__mq && t.__mq.over === over) continue;
-    if (t.__mq) { t.__mq.anim.cancel(); t.__mq = null; }
+    if (t.__mq) { t.__mq.anim.cancel(); mqAnims.delete(t.__mq.anim); t.__mq = null; }
     if (over <= 2 || (window.matchMedia && matchMedia('(prefers-reduced-motion: reduce)').matches) || !t.animate) continue;
     const anim = t.animate([{ transform: 'translateX(0)', offset: 0 }, { transform: 'translateX(0)', offset: 0.15 },
                             { transform: `translateX(${-over}px)`, offset: 0.85 }, { transform: `translateX(${-over}px)`, offset: 1 }],
                            { duration: (over / 60 / 0.7 + 0.5) * 1000, iterations: Infinity, direction: 'alternate', easing: 'ease-in-out' });
-    t.__mq = { over, anim };
+    t.__mq = { over, anim }; mqAnims.add(anim);
+    if (mPlay) anim.pause();
   }
 }
 // the watched match's viewer count (the live list's, every 15 s), on the players panel's VS line
@@ -3899,7 +3964,7 @@ async function liveListDraw(given) {
     li = document.createElement('li'); li.dataset.key = key;
     const a = document.createElement('a');
     // (the page's <base> is the site root on the live path: a bare ?live= would leave it)
-    a.href = `${location.pathname}?live=${m.id}` + (Q.get('liveUrl') ? `&liveUrl=${encodeURIComponent(Q.get('liveUrl'))}` : '')
+    a.href = `${location.pathname}?live=${m.id}` + (LIVE_URL ? `&liveUrl=${encodeURIComponent(Q.get('liveUrl'))}` : '')
       // (a local test page: its chat switches carry over, as chat.js's links do)
       + (/^(127\.0\.0\.1|localhost)$/.test(location.hostname) ? ['chat', 'chatUrl', 'chatAuth', 'lowmem'].filter(k => Q.has(k)).map(k => `&${k}=${encodeURIComponent(Q.get(k))}`).join('') : '');
     const names = (m.names || []).map(n => (n || '').trim());
@@ -4462,6 +4527,9 @@ function liveKeepTake(s) {
     M, id: L.id, match: L.info.match || null, info: L.info, game: g0 >= 0 ? g0 : L.info.game, rep: s.rep, name: s.name,
     want: new Set([...s.want].filter(p => !s.freed.has(p))), kf: { frame: kf.frame, pages, tex: kf.tex ? Int32Array.from(kf.tex) : new Int32Array(0) },
     recs: L.recs, since: L.since, tapes: L.tapes, firstGame: L.firstGame, marks: t.marks.slice(), fights: t.fights.slice(),
+    // (the game's music requests up to the keyframe: the track playing there started before it, in this session; without
+    // them a switch back played no music until the next game, a live extension's music none either: user 2026-11-07)
+    bgm: (s.bgmLog || []).filter(e => e[0] <= kf.frame),
     streakKnown: s.streakKnown, at: Date.now(), bytes, shared, own, polls: 0, ms: 0, timer: 0 };
   liveHoldTex(M, K.kf.tex, +1);
   K.ms = performance.now() - t0;
@@ -4515,7 +4583,7 @@ function liveResumeApply(s) {
   if (at > 0 && t.kfs[at - 1].frame === kf.frame) { const o = t.kfs.splice(at - 1, 1)[0]; for (const p of o.pages) pageRef(t, p, -1); kfTexDrop(t, o); at--; }
   t.kfs.splice(at, 0, kf);
   t.lastKf = t.kfs[t.kfs.length - 1].frame;
-  t.marks = K.marks; t.fights = K.fights;
+  t.marks = K.marks; t.fights = K.fights; s.bgmLog = K.bgm;  // (later requests come again as the catch-up steps past kf)
   restore(s, kf);
   const scene = M.HEAP32[0x54EEE8 >> 2];
   t.simMax = Math.max(t.simMax, kf.frame); t.scene = scene; t.round = M.HEAP32[0x77BFA4 >> 2]; t.intro = scene === 1 ? M.HEAPU8[0x55D20B] : -1;
@@ -4565,7 +4633,8 @@ function liveFollow(s, on) {
   s.liveFollow = on;
   if (!on && s.liveFF) { s.liveFF = false; call(s, 'viewer_speed', ui.speed); }
   if (!on && s.liveTrim) { s.liveTrim = false; call(s, 'viewer_rate', 1); }
-  document.getElementById('toend').classList.toggle('on', on);
+  const te = document.getElementById('toend');
+  te.classList.toggle('on', on); te.title = on ? 'following live' : 'back to live (End / L)';
 }
 async function liveGoLive() {
   const s = session;
@@ -4875,8 +4944,9 @@ function liveBegin(s) {  // play(): after viewer_play
       if (!battle) s.battleAt = null;
       else if (s.battleAt == null) s.battleAt = performance.now();
       const due = liveExt.thumbDue, extNow = due != null && performance.now() >= due;
-      if (s.liveSynced && battle && !hidden() && !s.seeking && performance.now() - s.battleAt > 4000 && !cardDark()
-          && (extNow || (due == null && performance.now() - (s.liveThumbAt || -1e9) > 120000))) {
+      // (cardDark reads the canvas back, a GPU stall of 40-80 ms on a phone: only once the picture is due, never per poll)
+      if (s.liveSynced && battle && !hidden() && !s.seeking && performance.now() - s.battleAt > 4000
+          && (extNow || (due == null && performance.now() - (s.liveThumbAt || -1e9) > 120000)) && !cardDark()) {
         s.liveThumbAt = performance.now(); liveExt.thumbDue = null;
         // (ext: the extension this frame shows; the bridge keeps a frame of the match's current one over an older one's. In the
         // query, not a header: a custom header would need a CORS preflight the bridge does not answer)
@@ -5128,14 +5198,21 @@ async function shareThumb(id, f, shots) {
   finally { clearTimeout(to); }
 }
 // the picture on screen now: the 640x480 frame centred on a 960x480 dark card (link cards are ~2:1: X crops a 4:3
-// image), as JPEG (X does not reliably take WebP). Call it before any await lets playback move on (the GL canvas keeps
-// its drawing buffer)
+// image), as JPEG (X does not reliably take WebP). Call it before any await lets playback move on (canvasNow:
+// the frame presented again, read in the same task)
 // the game picture's mean brightness under 24 of 255 (a fade, a load, a black stage): not a card
+// the game canvas with the current frame in it: the drawing buffer is not preserved (d3d9_gl.cpp gl_init), so it holds
+// the picture only in the task that presented it. A reader at any other time presents the frame again first (the same
+// picture, with the comments of now)
+function canvasNow() {
+  if (session && session.M && session.M._viewer_represent) try { session.M._viewer_represent(); } catch (e) {}
+  return document.getElementById('canvas');
+}
 function cardDark() {
   try {
     const c = document.createElement('canvas'); c.width = 32; c.height = 24;
     const g = c.getContext('2d', { willReadFrequently: true });
-    g.drawImage(document.getElementById('canvas'), 0, 0, 32, 24);
+    g.drawImage(canvasNow(), 0, 0, 32, 24);
     const d = g.getImageData(0, 0, 32, 24).data;
     let sum = 0;
     for (let i = 0; i < d.length; i += 4) sum += d[i] * 0.299 + d[i + 1] * 0.587 + d[i + 2] * 0.114;
@@ -5162,7 +5239,7 @@ function grabCard() {
       const c = document.createElement('canvas'); c.width = 1280; c.height = 720;
       const g = c.getContext('2d'); g.fillStyle = '#12111c'; g.fillRect(0, 0, 1280, 720);
       g.imageSmoothingEnabled = true; g.imageSmoothingQuality = 'high';  // (1.5x: smoothed, as Steam's own 2.25x)
-      g.drawImage(document.getElementById('canvas'), 160, 0, 960, 720);  // (now: the picture before any await)
+      g.drawImage(canvasNow(), 160, 0, 960, 720);  // (now: the picture before any await)
       const H = session && session.M && session.M.HEAP32;
       if (H) {
         const art = await Promise.all([0, 1].map(p => sidebarArt(H[(BSLOT + p * 0x2C + 8) >> 2], H[(BSLOT + p * 0x2C + 0x14) >> 2], p)));
@@ -5288,7 +5365,7 @@ if (CHAT_PAGE || window.mbaaChatApi.clip) {
   el.src = (document.querySelector('meta[name="mbaa-chatjs"]') || { content: 'chat.js' }).content;
   document.body.append(el);
 }
-window.mbaaViewer = { startItem: i => startItem(i), card: () => grabCard().jpeg, seek: requestSeek, step: stepBy, pause: setPaused, frame: () => session.M._viewer_frame(),
+window.mbaaViewer = { startItem: i => startItem(i), card: () => grabCard().jpeg, canvas: canvasNow, seek: requestSeek, step: stepBy, pause: setPaused, frame: () => session.M._viewer_frame(),
                       tl: () => session.tl, ui, pl, cacheSize: () => cache.size, cacheMap: () => cache, phone: PHONE, lowmem: LOWMEM, bgmStream: () => bgmStreamReady, audioState: () => [actx && actx.state, session && session.mute, session && session.bgmLog && session.bgmLog.length, ui.paused], bgmMap: () => bgmDecoded, clip: () => session && session.clip,
                       clipFirst: () => clipFirst(session), clipPanel: () => clipPanel,
                       stats: () => { const t = session.tl; return { kfs: t.kfs.length, kfFrames: t.kfs.map(k => k.frame),
@@ -5296,6 +5373,224 @@ window.mbaaViewer = { startItem: i => startItem(i), card: () => grabCard().jpeg,
                         memTop: session.M._viewer_mem_top(), heap: session.M.HEAPU8.length, simMax: t.simMax, end: t.end,
                         thinned: t.thinned || 0, page: PAGE, every: KF_EVERY, incDropped: t.incDropped || 0, kfInc: t.kfs.map(k => k.inc ? 1 : 0),
                         marks: t.marks, seekMs: t.seekMs }; } };
+
+// ---- frame bar (necoTV issue #4): Extended Training Mode's frame bar (Extended-Training-Mode-DLL/FrameBar.cpp) over
+// the picture's bottom: per side the last 75 bar frames coloured by state, and ETM's "Startup / Total / Advantage" line.
+// The engine reads the facts once per game frame (viewer_framebar_sample, web/host/browser/framebar.cpp: each side's
+// busy count g_TeamAux +0x208, pattern, hitstop, block / hitstun, attack record, AS canMove / stance, boxes, ...); the
+// page keeps them by frame number (fb.raw, the last FB_CAP frames) and runs ETM's bar logic over them:
+// - advantage: an exchange is a stretch with both sides busy; after its last both-busy frame each side's first free
+//   frame is kept, on a clock of the game's frame count less freeze frames (ETM CalculateAdvantage's: no global or
+//   player super freeze); once both are free the advantage is P2's free frame less P1's, shown until the next exchange
+//   ends. (Not ETM's running count: that nets off the frames the attacker spends busy again before the defender is
+//   free, a dash after a blocked move read +1 for a +4 move, and resets the moment both are busy again)
+// - cells (UpdateBars): busy -> inactionable green / jump startup / hitstun / blockstun / active red; actionable -> dark,
+//   advantage darker, the first free frame dark green; over those: thrown, hitstop, shield, throw active, freeze.
+//   Frames of a global freeze or shared hitstop are left off (ETM's default). Numbers: each run's length at its end.
+// - startup (IncrementFirstActive): busy frames out of hitstop since the last queued pattern, at the first active frame;
+//   total: the last busy count
+// A seek or a step back re-runs it over the frames kept up to the frame shown (the re-simulation refills them). Off: the
+// sampling, drawing and frame bus entry are all gone (fb.on false, fbDraw not on the bus).
+const FB_CAP = 1024, FB_PER = 20, FB_N = 2 * FB_PER + 7, FB_CELLS = 75, FB_MEM = 400, FB_INTERVAL = 20;
+const FB_COL = [null, '#41c800', '#f1e084', '#8c8c8c', '#b4b4b4', '#ff0000', '#202020', '#101010', '#205a00', '#3c3c3c',
+                '#ff8080', '#6e6e6e', '#3c5080', '#91c2ff', '#c00080'];
+const FBC = { INACT: 1, JUMP: 2, HITSTUN: 3, BLOCK: 4, ACTIVE: 5, FREE: 6, ADV: 7, NEUTRAL: 8, FREEZE: 9, THROWN: 11,
+              HITSTOP: 12, SHIELD: 13, THROW: 14 };
+const FB_NUMBERED = new Set([FBC.INACT, FBC.JUMP, FBC.HITSTUN, FBC.BLOCK, FBC.ACTIVE, FBC.ADV, FBC.THROWN, FBC.HITSTOP, FBC.SHIELD, FBC.THROW]);
+const FB_SUB = [null, '#ffffff', '#e1b800', '#c465ea'];  // invulnerable, clash, special box
+const fb = { on: false, s: null, raw: null, tag: null, last: -1, procF: -1, rebuild: false, dirty: false, m: null, cv: null, place: true };
+function fbMachine() {
+  const P = () => ({ main: new Uint8Array(FB_MEM), sub: new Uint8Array(FB_MEM), air: new Uint8Array(FB_MEM), proj: new Uint8Array(FB_MEM),
+                     lastBusy: 0, lastActive: 0, lastProj: 0, firstActive: 0, firstCounter: 0, gotFirst: false, total: 0 });
+  return { p: [P(), P()], counter: 0, interval: 0, intervalMax: FB_CELLS, isReset: false, doReset: false, doAdv: false,
+           shared: 0, lastFc: 0, lastTrue: -1, clock: 0, inEx: false, freeAt: [-1, -1], adv: 0, advCell: -1, any: false };
+}
+function fbResetBars(m) {
+  m.isReset = true; m.counter = 0; m.advCell = -1; m.interval = 0; m.doReset = false; m.intervalMax = FB_CELLS;
+  for (const P of m.p) { P.main.fill(0); P.sub.fill(0); P.air.fill(0); P.proj.fill(0); }
+}
+// one game frame's sample (R from o: side 0, side 1, globals) through ETM's UpdateFrameBar
+function fbStep(m, R, o) {
+  const g = o + 2 * FB_PER, X = [o, o + FB_PER];
+  if (R[g + 3] !== 1) return;  // (not in a battle)
+  const fc = R[g + 1], trueF = R[g + 2];
+  if (trueF === m.lastTrue) return;
+  if (m.lastTrue < 0) m.lastFc = fc;
+  const b0 = R[X[0]], b1 = R[X[1]];
+  if (fc !== m.lastFc && !R[g + 4]) m.clock += fc - m.lastFc;
+  // the advantage (above); doAdv: ETM's, for the cells' advantage colour
+  if (b0 === 0 && b1 === 0) m.doAdv = false;
+  else if (b0 !== 0 && b1 !== 0) m.doAdv = true;
+  if (b0 !== 0 && b1 !== 0) { m.inEx = true; m.freeAt[0] = m.freeAt[1] = -1; }
+  else if (m.inEx) {
+    if (b0 === 0 && m.freeAt[0] < 0) m.freeAt[0] = m.clock;
+    if (b1 === 0 && m.freeAt[1] < 0) m.freeAt[1] = m.clock;
+    if (m.freeAt[0] >= 0 && m.freeAt[1] >= 0) { m.adv = m.freeAt[1] - m.freeAt[0]; m.inEx = false; m.any = true; m.advCell = m.counter; }
+  }
+  // BarHandling
+  let upd = !!(b0 || b1 || R[X[0] + 10] || R[X[1] + 10] || R[X[0] + 14] || R[X[1] + 14]);
+  if (upd) { m.isReset = false; m.interval = 0; } else m.interval++;
+  if (m.counter >= FB_CELLS) m.intervalMax = FB_INTERVAL;
+  if (m.interval > m.intervalMax) m.doReset = true;
+  if (m.doReset && upd) fbResetBars(m);
+  if (m.interval < m.intervalMax && !m.isReset) upd = true;
+  if (upd) {
+    m.shared = R[X[0] + 3] && R[X[1] + 3] ? m.shared + 1 : 0;
+    const freeze = R[g + 6] || m.shared > 1;
+    for (let i = 0; i < 2; i++) {  // IncrementFirstActive
+      const P = m.p[i], x = X[i];
+      if (!R[g] && !R[g + 5] && R[x + 3] === 0 && R[x + 8] === 0) P.firstCounter++;
+    }
+    if (!freeze) {
+      for (let i = 0; i < 2; i++) if (R[X[i]] !== 0) m.p[i].total = R[X[i]];  // HandleInactive
+      for (let i = 0; i < 2; i++) fbCell(m, m.p[i], R, X[i], g);
+      if (fc !== m.lastFc) m.counter++;  // (ETM steps back when the count does: its training mode's rewind; not here)
+    }
+  }
+  for (let i = 0; i < 2; i++) {  // UpdatePlayers
+    const P = m.p[i], x = X[i];
+    P.lastBusy = R[x]; P.lastActive = R[x + 7]; P.lastProj = R[x + 14];
+    if (R[x + 16] !== -1) { P.gotFirst = false; P.firstCounter = 0; }
+  }
+  m.lastFc = fc; m.lastTrue = trueF;
+}
+// ETM UpdateBars: the cell at the bar's counter
+function fbCell(m, P, R, x, g) {
+  const first = () => { if (!P.gotFirst) { P.firstActive = P.firstCounter; P.gotFirst = true; } };
+  let c;
+  if (R[x] !== 0) {
+    c = FBC.INACT;
+    if (R[x + 1] >= 35 && R[x + 1] <= 37) c = FBC.JUMP;
+    else if (R[x + 6] !== 0 && !R[x + 5]) c = FBC.HITSTUN;
+    else if (R[x + 5]) c = FBC.BLOCK;
+    else if (R[x + 7]) { c = FBC.ACTIVE; if (P.lastActive === 0) first(); }
+  } else {
+    c = FBC.FREE;
+    if (P.lastBusy !== 0 || (R[x + 18] === 1 && R[x + 9] !== 1)) c = FBC.NEUTRAL;
+    else if (m.doAdv) c = FBC.ADV;
+  }
+  if (R[x + 4]) c = FBC.THROWN;
+  else if (R[x + 3]) c = FBC.HITSTOP;
+  else if (R[x + 13] & 1) c = FBC.SHIELD;
+  else if (R[x + 13] & 2) { first(); c = FBC.THROW; }
+  if (R[g]) c = FBC.FREEZE;
+  if (R[x + 14] && !P.lastProj) first();
+  const k = m.counter % FB_MEM;
+  P.main[k] = c; P.sub[k] = R[x + 12]; P.air[k] = R[x + 9] === 1 ? (R[x + 11] ? 2 : 1) : 0; P.proj[k] = R[x + 14] ? 1 : 0;
+}
+function fbClear(s) {
+  fb.s = s; fb.last = -1; fb.procF = -1; fb.rebuild = false; fb.m = fbMachine(); fb.dirty = true;
+  if (!fb.raw) { fb.raw = new Int32Array(FB_CAP * FB_N); fb.tag = new Int32Array(FB_CAP); }
+  fb.tag.fill(-1);
+}
+// Module.mbaaFrame (every game frame, also a seek's re-simulation) while the bar is on
+function fbSample(s, f) {
+  const M = s.M;
+  if (!M._viewer_framebar_sample) return;
+  if (fb.s !== s) fbClear(s);
+  const p = M._viewer_framebar_sample() >> 2, i = f % FB_CAP;
+  fb.raw.set(M.HEAP32.subarray(p, p + FB_N), i * FB_N);
+  fb.tag[i] = f;
+  if (f === fb.procF + 1 && !fb.rebuild) { fbStep(fb.m, fb.raw, i * FB_N); fb.procF = f; }
+  else fb.rebuild = true;
+  fb.last = f; fb.dirty = true;
+}
+// a seek to T: how much further back its re-simulation should start for the bar (0: the frames before T are kept)
+const FB_BACK = 180;
+function fbSeekBack(T) {
+  if (!fb.on) return 0;
+  if (!fb.tag || fb.s !== session) return FB_BACK;
+  for (let f = Math.max(0, T - FB_BACK); f < T; f++) if (fb.tag[f % FB_CAP] !== f) return FB_BACK;
+  return 0;
+}
+// after a seek: the bar again from the kept frames up to the one shown
+function fbRebuild() {
+  let a = fb.last;
+  while (a > 0 && fb.last - a < FB_CAP - 1 && fb.tag[(a - 1) % FB_CAP] === a - 1) a--;
+  fb.m = fbMachine();
+  if (fb.last >= 0) for (let f = a; f <= fb.last; f++) fbStep(fb.m, fb.raw, (f % FB_CAP) * FB_N);
+  fb.procF = fb.last; fb.rebuild = false;
+}
+function fbPlace() {
+  const c = fb.cv, gc = document.getElementById('canvas');
+  const L = `${gc.offsetLeft}px`, W = gc.clientWidth, H = gc.clientHeight;
+  const T = `${gc.offsetTop + Math.round(H * 372 / 480)}px`, CH = Math.round(H * 70 / 480);
+  if (c.style.left !== L || c.style.top !== T) { c.style.left = L; c.style.top = T; }
+  if (c.style.width !== `${W}px` || c.style.height !== `${CH}px`) { c.style.width = `${W}px`; c.style.height = `${CH}px`; }
+  const dpr = window.devicePixelRatio || 1, w = Math.round(W * dpr), h = Math.round(CH * dpr);
+  if (c.width !== w || c.height !== h) { c.width = w; c.height = h; }
+  fb.place = false; fb.dirty = true;
+}
+// the frame bus entry (only while on): draws when a frame came in, a seek ended or the picture moved
+function fbDraw() {
+  const s = session;
+  if (!s || s.seeking || fb.s !== s) return;
+  if (fb.place) fbPlace();
+  if (!fb.dirty) return;
+  fb.dirty = false;
+  if (fb.rebuild) fbRebuild();
+  const c = fb.cv, g = c.getContext('2d'), u = c.width / 640, m = fb.m;
+  g.clearRect(0, 0, c.width, c.height);
+  if (!m.any && !m.counter) return;
+  // (640 x 480 game units from the canvas top at y 372: P1's line, the two rows at ETM's 26-unit bar, P2's line)
+  const x0 = 20 * u, bw = 600 * u, cw = bw / FB_CELLS, top = 16 * u, bh = 26 * u, rh = bh * 0.38;
+  g.fillStyle = 'rgba(0,0,0,0.6)'; g.fillRect(x0 - 2 * u, top - 1 * u, bw + 4 * u, bh + 2 * u);
+  const n = Math.min(m.counter, FB_CELLS), k0 = m.counter - n;
+  g.textBaseline = 'middle'; g.textAlign = 'right';
+  for (let r = 0; r < 2; r++) {
+    const P = m.p[r], y = top + bh * (r ? 0.56 : 0.06);
+    for (let j = 0; j < n; j++) {
+      const k = (k0 + j) % FB_MEM, x = x0 + j * cw, c0 = P.main[k];
+      if (!c0) continue;
+      g.fillStyle = FB_COL[c0]; g.fillRect(x, y, cw * 0.9, rh);
+      if (P.sub[k]) { g.fillStyle = FB_SUB[P.sub[k]]; for (let i = 0; i < rh; i += 2 * u) g.fillRect(x, y + i, cw * 0.9, u); }
+      if (P.proj[k]) { g.fillStyle = '#ff0000'; g.fillRect(x, y + rh * 0.9, cw * 0.9, rh * 0.2); }
+      if (P.air[k]) { g.fillStyle = P.air[k] === 2 ? '#e184f1' : '#f1e084'; g.fillRect(x, y - rh * 0.1, cw * 0.9, rh * 0.2); }
+    }
+    // each run's length at its end (ETM's numbers)
+    g.font = `bold ${Math.round(rh * 1.05)}px ui-monospace, monospace`;
+    g.lineWidth = Math.max(1, 1.5 * u); g.strokeStyle = '#000';
+    let run = 0;
+    for (let j = 0; j < n; j++) {
+      const c0 = P.main[(k0 + j) % FB_MEM], nx = j + 1 < n ? P.main[(k0 + j + 1) % FB_MEM] : -1;
+      run = j > 0 && P.main[(k0 + j - 1) % FB_MEM] === c0 ? run + 1 : 1;
+      if (c0 === nx || !FB_NUMBERED.has(c0)) continue;
+      const tx = x0 + (j + 1) * cw - 0.1 * cw, ty = y + rh / 2;
+      g.strokeText(String(run), tx, ty); g.fillStyle = '#fff'; g.fillText(String(run), tx, ty);
+    }
+  }
+  // where the last exchange ended (its advantage is the lines' number): a white tick across both rows
+  if (m.advCell >= k0 && m.advCell < m.counter) { g.fillStyle = '#fff'; g.fillRect(x0 + (m.advCell - k0) * cw - u, top - u, 1.5 * u, bh + 2 * u); }
+  // ETM's lines: Startup / Total / Advantage
+  g.textAlign = 'left'; g.font = `bold ${Math.round(10 * u)}px ui-monospace, monospace`;
+  for (let r = 0; r < 2; r++) {
+    const P = m.p[r], a = r ? -m.adv : m.adv, y = r ? top + bh + 9 * u : top - 8 * u;
+    const parts = [[`P${r + 1}  Startup ${P.firstActive || '-'}  Total ${P.total || '-'}  Advantage `, '#fff'],
+                   [m.any ? (a > 0 ? `+${a}` : `${a}`) : '-', !m.any || a === 0 ? '#fff' : a > 0 ? '#5f5' : '#f66']];
+    let x = x0;
+    for (const [t, col] of parts) {
+      g.strokeText(t, x, y); g.fillStyle = col; g.fillText(t, x, y); x += g.measureText(t).width;
+    }
+  }
+}
+function framebarSet(on) {
+  if (!fb.cv) {
+    fb.cv = document.getElementById('framebar');
+    const pl = () => { fb.place = true; };
+    if (window.ResizeObserver) new ResizeObserver(pl).observe(document.getElementById('canvas'));
+    addEventListener('resize', pl); document.addEventListener('fullscreenchange', pl);
+  }
+  fb.on = on; fb.cv.hidden = !on;
+  if (on) {
+    fb.s = null; fb.place = true; frameBus.add(fbDraw);
+    // paused: the bar filled from the keyframe before the frame shown (the seek's re-simulation samples it)
+    if (session && session.tl && ui.paused) requestSeek(curFrame());
+  } else { frameBus.delete(fbDraw); fb.raw = fb.tag = fb.m = null; fb.s = null; }
+}
+window.__mbaaFramebar = () => (fb.rebuild && session && !session.seeking && fbRebuild(), fb.m) && { counter: fb.m.counter, adv: fb.m.adv, any: fb.m.any, last: fb.last,
+  p: fb.m.p.map(P => ({ startup: P.firstActive, total: P.total, cells: Array.from({ length: Math.min(fb.m.counter, FB_CELLS) },
+    (_, j) => P.main[(fb.m.counter - Math.min(fb.m.counter, FB_CELLS) + j) % FB_MEM]) })),
+  raw: f => fb.tag && fb.tag[f % FB_CAP] === f ? Array.from(fb.raw.subarray((f % FB_CAP) * FB_N, (f % FB_CAP + 1) * FB_N)) : null };  // tests
 
 // ---- overlay: hitboxes and inputs (read-only) ----
 let overlayDirty = true, lastDrawnFrame = -1;
@@ -5387,7 +5682,10 @@ function paintOverlay(g, w, h, dpr, screen = false) {
 }
 
 // ---- controls ----
-function fmtTime(f) { const sec = f / 60; return `${Math.floor(sec / 60)}:${(sec % 60).toFixed(1).padStart(4, '0')}`; }
+function fmtTime(f) {   // (tenths first: 59.96 s is 1:00.0, not 0:60.0)
+  const t = Math.round(f / 6), m = Math.floor(t / 600);
+  return `${m}:${((t - m * 600) / 10).toFixed(1).padStart(4, '0')}`;
+}
 let seekDragging = false, marksKey = '';
 // (the page writes only what changed: a text or a slider rewritten every display frame costs a style / layout pass on
 // phones; the time changes 10 times a second, the slider's fill when it moves a whole pixel, the frame number only
@@ -5403,7 +5701,7 @@ function uiLoop() {
   const s = session;
   // (a live catch-up: the time, seek bar, marks and overlay 4 times a second, not at every animation frame between its
   // slices: the marks redrawn every time, as the timeline grows)
-  if (s && s.cu && performance.now() - (uiLast.cuAt || 0) < 250) { requestAnimationFrame(uiLoop); return; }
+  if (s && s.cu && performance.now() - (uiLast.cuAt || 0) < 250) return;
   if (s && s.cu) uiLast.cuAt = performance.now();
   if (s && s.tl) {
     const t = s.tl, f = s.M._viewer_frame(), max = tlMax(t);
@@ -5431,7 +5729,6 @@ function uiLoop() {
     drawMarks(t, max);
     if (f !== lastDrawnFrame || overlayDirty) { lastDrawnFrame = f; overlayDirty = false; drawOverlay(); }
   }
-  requestAnimationFrame(uiLoop);
 }
 // round starts over the slider; the explored part (seeks inside it restore a keyframe) is shaded
 function drawMarks(t, max) {
@@ -5523,7 +5820,7 @@ const ACT = {
   end: () => { if (session && session.liveSrc) liveGoLive(); else if (session && session.tl) requestSeek(tlMax(session.tl)); },   // (live: back to live, paced)
   back5: () => stepBy(-300, false), back1s: () => stepBy(-60, false), fwd1s: () => stepBy(60, false), fwd5: () => stepBy(300, false),
 };
-const VIEW_TOGGLES = ['boxes', 'inputs', 'hitstun', 'hud', 'names', 'music'];
+const VIEW_TOGGLES = ['boxes', 'inputs', 'hitstun', 'framebar', 'hud', 'names', 'music'];
 function flipView(id) { const el = document.getElementById(id); el.checked = !el.checked; el.onchange(); }
 function syncChips() {
   for (const b of document.querySelectorAll('[data-flip]')) {
@@ -5632,6 +5929,14 @@ function controls() {
     const s = session;
     if (s) { hitstunApply(s); if (ui.paused && s.tl) requestSeek(curFrame()); }  // paused: draw the frame again
   };
+  const fbEl = document.getElementById('framebar');
+  fbEl.checked = ui.framebar;
+  fbEl.onchange = () => {
+    ui.framebar = fbEl.checked; fbEl.blur();
+    try { localStorage.setItem('mbaaFramebar', ui.framebar ? '1' : '0'); } catch (e) {}
+    framebarSet(ui.framebar);
+  };
+  if (ui.framebar) framebarSet(true);
   const namesEl = document.getElementById('names');
   namesEl.checked = ui.names;
   namesEl.onchange = () => {
@@ -5685,10 +5990,11 @@ function controls() {
     else if (k === 'h' || k === 'H') flip('boxes');
     else if (k === 'i' || k === 'I') flip('inputs');
     else if (k === 'k' || k === 'K') flip('hitstun');
+    else if (k === 'g' || k === 'G') flip('framebar');
     else return;
     e.preventDefault();
   });
-  requestAnimationFrame(uiLoop);
+  frameBus.add(uiLoop);
 }
 
 // ?perf=hud: an on-screen readout for measuring a real phone (screenshot it): display rate, game frames a second, the
@@ -5733,6 +6039,340 @@ if (Q.get('perf') === 'hud') (() => {
       `gpu ${gpu}`.slice(0, 60),
     ].join('\n');
   }, 500);
+})();
+// ?perf=1: the frame profiler (harness-design/stage3d_perf/PROFILING.md, layer 2). Opt-in: without the flag nothing below
+// runs (no wrapping, no listeners). Once a battle has played steadily for 3 s (no live catch-up, hold, seek or pause;
+// ?perfwait=0: once frames run; manual: only start()), for
+// ?perfsecs= (10) s, per presented frame (one rAF):
+//   the rAF interval; the engine's rAF callback (Emscripten's main loop: game, render, the 3D stage hook) and the page's
+//   other rAF callbacks (window.requestAnimationFrame is wrapped to time each); the engine tick (viewer_tick_ms) and game
+//   frames; WebGL calls on the game's context (its methods wrapped: all, draws, framebuffer binds and real switches,
+//   uploads and their bytes, approximate); the 3D stage hook (ext_module.js hook.prof: the whole hook, R.draw, the front
+//   objects, upload slices, s3d_render.js R.stats and any other numeric field it adds: s3d.parts); the engine's own split
+//   when the build exports viewer_prof_stats / viewer_prof_on (cpu.parts); the fighter light's tagged sprites and glow
+//   draws; long tasks.
+// 1 engine frame in ?perfgpuN= (30) is a GPU sample, ?perfgpu= sync (default) | fence | off. sync: a 1x1 readPixels from
+// the default framebuffer (a real round trip that waits for the GPU; Chrome's gl.finish() does not wait, measured
+// 2026-11-06: 0 ms while the next readPixels waited 14-35 ms; 'finish' is taken as sync) before the engine's callback
+// (pre: earlier work drained) and after it (tail: the GPU still busy with this frame once its commands were sent; tail +
+// the callback's own time bounds the frame's GPU time from above). fence: a fenceSync after the callback, polled from
+// later tasks: no stall, but coarse (Chrome's sync status lags the GPU by up to a frame). Both are estimates (the floor
+// phone's Chrome has no timer query): they include the GPU process's command decoding and the round trip, and a
+// sampled frame and the one after it are left out of the frame statistics. Then a summary (percentiles, per-part means, GPU string, DPR, sizes, 3D tier / light) on a
+// panel: download it as JSON (with the per-frame rows), or send it (a button: opt-in) to the bridge's diag log
+// (/live/<id>/diag, why 'perf': no address, no names). window.__mbaaProf: start(secs), stop(), summary(), frames().
+if (Q.get('perf') === '1') (() => {
+  const WAIT = Q.get('perfwait') || 'battle', GPU_MODE = /^(fence|off)$/.test(Q.get('perfgpu') || '') ? Q.get('perfgpu') : 'sync';
+  const GPU_N = Math.max(5, +(Q.get('perfgpuN') || 30));
+  let SECS = Math.max(2, Math.min(120, +(Q.get('perfsecs') || 10)));
+  const COLS = ['t', 'iv', 'eng', 'other', 'tick', 'ticks', 'game', 'gl', 'draws', 'fbBind', 'fbSwitch', 'upN', 'upKB',
+    'hook', 'hookN', 'rdraw', 'front', 'upMs', 's3dDraws', 'culled', 'objs', 'clTag', 'clGlow', 'gpuPre', 'gpuCpu', 'gpuTail', 'gpuFence', 'flags'];
+  const C = Object.fromEntries(COLS.map((k, i) => [k, i])), NC = COLS.length;
+  const A = new Float64Array(NC);   // (the frame being recorded)
+  let D = null, cap = 0, n = 0;     // (rows: NC numbers each)
+  const parts = new Map();          // R.stats *Ms fields: name -> Float64Array(cap)
+  const partsA = new Map();
+  // ---- WebGL calls on the game's context ----
+  const G = { tot: 0, draws: 0, fb: 0, fbSw: 0, lastFb: undefined, upN: 0, upB: 0, by: new Float64Array(1024) };
+  const glNames = [], glIdx = new Map(), wrapped = new WeakSet();
+  const DRAW = /^(draw(Arrays|Elements)(Instanced)?|drawRangeElements)$/;
+  const comps = f => ({ 0x1908: 4, 0x8D99: 4, 0x1907: 3, 0x8D98: 3, 0x8227: 2, 0x8228: 2, 0x190A: 2, 0x1903: 1, 0x8D94: 1, 0x1906: 1, 0x1909: 1 })[f] || 4;
+  const bpp = (f, t) => t === 0x1406 || t === 0x1405 || t === 0x1404 ? 4 * comps(f) : t === 0x140B || t === 0x8D61 || t === 0x1403 || t === 0x1402 ? 2 * comps(f)
+    : t === 0x8033 || t === 0x8034 || t === 0x8363 ? 2 : t === 0x8368 || t === 0x8C3B || t === 0x8C3E || t === 0x84FA ? 4 : comps(f);
+  const viewLen = (v, off, len) => !v || typeof v !== 'object' ? 0 : len ? len * (v.BYTES_PER_ELEMENT || 1)
+    : ArrayBuffer.isView(v) ? v.byteLength - (off || 0) * (v.BYTES_PER_ELEMENT || 1) : v.byteLength || 0;
+  const srcDims = v => v && typeof v === 'object' && 'width' in v ? (v.width * v.height * 4) || 0 : 0;
+  // (bytes per upload call; Emscripten passes the whole wasm heap with an offset, so sizes come from the dimensions / length)
+  const UPB = {
+    texImage2D: a => a.length >= 8 ? a[3] * a[4] * bpp(a[6], a[7]) : srcDims(a[5]),
+    texSubImage2D: a => a.length >= 8 ? a[4] * a[5] * bpp(a[6], a[7]) : srcDims(a[6]),
+    texImage3D: a => a[3] * a[4] * a[5] * bpp(a[7], a[8]),
+    texSubImage3D: a => a[5] * a[6] * a[7] * bpp(a[8], a[9]),
+    compressedTexImage2D: a => viewLen(a[6], a[7], a[8]),
+    compressedTexSubImage2D: a => viewLen(a[7], a[8], a[9]),
+    compressedTexImage3D: a => viewLen(a[7], a[8], a[9]),
+    compressedTexSubImage3D: a => viewLen(a[9], a[10], a[11]),
+    bufferData: a => typeof a[1] === 'number' ? a[1] : viewLen(a[1], a[3], a[4]),
+    bufferSubData: a => viewLen(a[2], a[3], a[4]),
+  };
+  let gl = null, glM = null, glFence = null, glWait = null, glDelSync = null, gpuStr = '', gpuVendor = '', timerQ = false, glSync = null;
+  function wrapGl(g) {
+    if (wrapped.has(g)) return;
+    wrapped.add(g);
+    const proto = Object.getPrototypeOf(g);
+    glFence = proto.fenceSync; glWait = proto.clientWaitSync; glDelSync = proto.deleteSync;
+    // (sync: a 1x1 readPixels of the default framebuffer, the read framebuffer and pack buffer put back; unwrapped calls)
+    const px = new Uint8Array(4), gp = proto.getParameter, bf = proto.bindFramebuffer, bb = proto.bindBuffer, rp = proto.readPixels;
+    glSync = h => {
+      const rf = gp.call(h, 0x8CAA), pb = gp.call(h, 0x88ED);   // (READ_FRAMEBUFFER_BINDING, PIXEL_PACK_BUFFER_BINDING)
+      if (rf) bf.call(h, 0x8CA8, null);
+      if (pb) bb.call(h, 0x88EB, null);
+      try { rp.call(h, 0, 0, 1, 1, 0x1908, 0x1401, px); } finally { if (rf) bf.call(h, 0x8CA8, rf); if (pb) bb.call(h, 0x88EB, pb); }
+    };
+    for (const k of Object.getOwnPropertyNames(proto)) {
+      let d; try { d = Object.getOwnPropertyDescriptor(proto, k); } catch (e) { continue; }
+      if (!d || typeof d.value !== 'function' || k === 'constructor') continue;
+      // (under the engine's GL state cache when it holds the method: the calls Chrome gets, d3d9_gl.cpp js_gl_state_cache)
+      const raw = g.__scRaw && g.__scRaw[k] ? g.__scRaw : null, o = raw ? raw[k] : d.value, by = G.by;
+      let id = glIdx.get(k);
+      if (id === undefined) { id = glNames.length; glNames.push(k); glIdx.set(k, id); }
+      if (id >= by.length) continue;
+      let fn;
+      if (DRAW.test(k)) fn = function () { G.tot++; G.draws++; by[id]++; return o.apply(this, arguments); };
+      else if (k === 'bindFramebuffer') fn = function (t, f) { G.tot++; G.fb++; by[id]++; if ((t === 0x8D40 || t === 0x8CA9) && f !== G.lastFb) { G.fbSw++; G.lastFb = f; } return o.apply(this, arguments); };
+      else if (UPB[k]) { const sz = UPB[k]; fn = function () { G.tot++; G.upN++; by[id]++; try { G.upB += sz(arguments) || 0; } catch (e) {} return o.apply(this, arguments); }; }
+      else fn = function () { G.tot++; by[id]++; return o.apply(this, arguments); };
+      if (raw) raw[k] = fn; else g[k] = fn;
+    }
+    try {
+      const x = g.getExtension('WEBGL_debug_renderer_info');
+      gpuStr = String(x ? g.getParameter(x.UNMASKED_RENDERER_WEBGL) : g.getParameter(g.RENDERER)).slice(0, 120);
+      gpuVendor = String(x ? g.getParameter(x.UNMASKED_VENDOR_WEBGL) : g.getParameter(g.VENDOR)).slice(0, 60);
+      timerQ = (g.getSupportedExtensions() || []).includes('EXT_disjoint_timer_query_webgl2');
+    } catch (e) {}
+  }
+  // the game's context, once its engine has drawn (getContext then returns the existing one, never makes one)
+  function glFind() {
+    const M = session && session.M;
+    if (!M || M === glM || !M.canvas || !M._viewer_frame || !(M._viewer_frame() > 0)) return;
+    const g = M.canvas.getContext('webgl2');
+    if (!g) return;
+    glM = M; gl = g; wrapGl(g);
+  }
+  // ---- per frame ----
+  let frameT = -1, prevT = -1, t0 = 0, g0 = { tot: 0, draws: 0, fb: 0, fbSw: 0, upN: 0, upB: 0 }, byStart = null;
+  const ENG_PARTS = ['simMs', 'renderMs', 'submitMs', 'bgExtMs', 'lightMs', 'glowPx', 'specPx', 'tagged'];
+  let lastPS = null, lastM = null, lastTickN = -1, lastF = -1, lastCl = null, gpuCount = 0, skipNext = false, pend = null, longs = [], lo = null, startedAt = 0;
+  const P = window.__mbaaProf = { on: false, done: false, mode: GPU_MODE };
+  function boundary(t) {
+    if (P.on && frameT >= 0) {
+      A[C.t] = frameT - t0; A[C.iv] = prevT >= 0 ? frameT - prevT : 0;
+      A[C.gl] = G.tot - g0.tot; A[C.draws] = G.draws - g0.draws; A[C.fbBind] = G.fb - g0.fb; A[C.fbSwitch] = G.fbSw - g0.fbSw;
+      A[C.upN] = G.upN - g0.upN; A[C.upKB] = (G.upB - g0.upB) / 1024;
+      if (prevT < 0) A[C.flags] = A[C.flags] | 8;   // (the first: no interval)
+      if (n < cap) {
+        D.set(A, n * NC);
+        for (const [k, v] of partsA) { let a = parts.get(k); if (!a) parts.set(k, a = new Float64Array(cap)); a[n] = v; }
+        n++;
+      }
+      if (n >= cap || frameT - t0 >= SECS * 1000) finish();
+    }
+    A.fill(0); partsA.clear();
+    if (skipNext) { A[C.flags] = 2; skipNext = false; }
+    g0.tot = G.tot; g0.draws = G.draws; g0.fb = G.fb; g0.fbSw = G.fbSw; g0.upN = G.upN; g0.upB = G.upB;
+    prevT = P.on ? frameT : -1; frameT = t;
+    if (!glM || (session && session.M !== glM)) glFind();
+    if (!P.on && !P.done && WAIT !== 'manual') autoStart(t);
+  }
+  let battleSince = 0;
+  function autoStart(t) {
+    const M = session && session.M;
+    if (!M || !gl || document.hidden) { battleSince = 0; return; }
+    // (battle: steady play, not a live join's 2x catch-up, a hold or a seek, for 3 s)
+    const s = session, ok = WAIT === '0' ? M._viewer_frame() > 0
+      : M.HEAP32[0x54EEE8 >> 2] === 1 && !s.liveFF && !s.seeking && !s.liveHeld && !s.loadHeld && !s.cssHeld && !(typeof ui !== 'undefined' && ui.paused);
+    if (!ok) { battleSince = 0; return; }
+    if (!battleSince) battleSince = t;
+    if (t - battleSince > (WAIT === '0' ? 2000 : 3000)) start();
+  }
+  // after the engine's callback: its tick, game frames, the 3D hook's counters, the fighter light's
+  function engAfter() {
+    const M = session && session.M;
+    if (!M) return;
+    if (M !== lastM) {   // (a new instance: its counters start again; an engine with viewer_prof_on keeps its split only when asked)
+      lastM = M; lastTickN = -1; lastF = -1; lastCl = null; lastPS = null;
+      if (M._viewer_prof_on) try { M._viewer_prof_on(1); } catch (e) {}
+    }
+    if (M._viewer_tick_count) {
+      const c = M._viewer_tick_count() >>> 0;
+      if (lastTickN >= 0 && c !== lastTickN) { A[C.tick] += M.HEAPF64[M._viewer_tick_ms() / 8 + ((c - 1) & 127)]; A[C.ticks] += (c - lastTickN) >>> 0; }
+      lastTickN = c;
+    }
+    const f = M._viewer_frame ? M._viewer_frame() : -1;
+    if (lastF >= 0 && f >= lastF) A[C.game] += f - lastF;
+    lastF = f;
+    const h = M.__bgExt, pr = h && h.prof;
+    if (pr) {
+      A[C.hook] += pr.ms; A[C.hookN] += pr.n; A[C.rdraw] += pr.rdraw; A[C.front] += pr.front; A[C.upMs] += pr.up;
+      A[C.s3dDraws] += pr.draws; A[C.culled] += pr.culled; A[C.objs] += pr.objs;
+      for (const k in pr.parts) { partsA.set(k, (partsA.get(k) || 0) + pr.parts[k]); pr.parts[k] = 0; }
+      pr.n = pr.ms = pr.rdraw = pr.draws = pr.culled = pr.objs = pr.front = pr.frontN = pr.up = pr.upN = 0;
+    }
+    // (the engine's own split, when the build exports viewer_prof_stats(): a pointer to cumulative doubles, ENG_PARTS order;
+    // PROFILING.md "hooks"): per-frame deltas as cpu.parts engine.<name>
+    if (M._viewer_prof_stats) {
+      const p = M._viewer_prof_stats() / 8, H = M.HEAPF64;
+      if (lastPS) for (let i = 0; i < ENG_PARTS.length; i++) { const d = H[p + i] - lastPS[i]; if (d) partsA.set('engine.' + ENG_PARTS[i], (partsA.get('engine.' + ENG_PARTS[i]) || 0) + d); }
+      lastPS = H.slice(p, p + ENG_PARTS.length);
+    }
+    if (M._viewer_chara_light_stats) {
+      const a = M._viewer_chara_light_stats(0) >>> 0, b = M._viewer_chara_light_stats(1) >>> 0;
+      if (lastCl) { A[C.clTag] += (a - lastCl[0]) >>> 0; A[C.clGlow] += (b - lastCl[1]) >>> 0; }
+      lastCl = [a, b];
+    }
+  }
+  // fence mode: polled from later tasks (the sync's state changes only between tasks): message tasks for the first 30
+  // polls (sub-ms), then setTimeout (~4 ms steps: a busy message loop delays the GPU process's reply); 2 s at most
+  const mc = new MessageChannel(), fenceOut = { ok: 0, timeout: 0, failed: 0 };
+  const fencePoll = () => {
+    if (!pend) return;
+    let r = 0;
+    try { r = glWait.call(pend.g, pend.s, 0, 0); } catch (e) { r = 0x911D; }
+    const dt = performance.now() - pend.t1;
+    if (r === 0x911A || r === 0x911C || r === 0x911D || dt > 2000) {   // (ALREADY_SIGNALED, CONDITION_SATISFIED, WAIT_FAILED)
+      const v = r === 0x911D || dt > 2000 ? NaN : dt;
+      if (pend.row < n) D[pend.row * NC + C.gpuFence] = v; else if (pend.row === n) A[C.gpuFence] = v;
+      fenceOut[r === 0x911D ? 'failed' : dt > 2000 ? 'timeout' : 'ok']++;
+      try { glDelSync.call(pend.g, pend.s); } catch (e) {}
+      pend = null;
+    } else if (++pend.polls < 30) mc.port2.postMessage(0);
+    else setTimeout(fencePoll, 0);
+  };
+  mc.port1.onmessage = fencePoll;
+  // window.requestAnimationFrame wrapped (profiler mode only): each callback timed; Emscripten's main loop (MainLoop_runner)
+  // is the engine
+  const rafOrig = window.requestAnimationFrame.bind(window);
+  window.requestAnimationFrame = cb => rafOrig(t => {
+    if (t !== frameT) boundary(t);
+    if (cb.name !== 'MainLoop_runner') {
+      const a = performance.now();
+      try { return cb(t); } finally { A[C.other] += performance.now() - a; }
+    }
+    const g = gl, samp = P.on && g && GPU_MODE !== 'off' && !pend && ++gpuCount % GPU_N === 0;
+    if (samp && GPU_MODE === 'sync') { const a = performance.now(); glSync(g); A[C.gpuPre] = performance.now() - a; }
+    const a = performance.now();
+    try { return cb(t); } finally {
+      const t1 = performance.now();
+      A[C.eng] += t1 - a; A[C.flags] = A[C.flags] | 4;
+      if (samp) {
+        A[C.flags] = A[C.flags] | 1; A[C.gpuCpu] = t1 - a; skipNext = true;
+        if (GPU_MODE === 'sync') { glSync(g); A[C.gpuTail] = performance.now() - t1; }
+        else { try { pend = { g, s: glFence.call(g, 0x9117, 0), t1, row: n, polls: 0 }; g.flush(); mc.port2.postMessage(0); } catch (e) { pend = null; } }
+      }
+      try { engAfter(); } catch (e) {}
+    }
+  });
+  // ---- recording ----
+  function start(secs) {
+    if (secs) SECS = Math.max(1, Math.min(120, +secs));
+    cap = Math.ceil(SECS * 150) + 64; D = new Float64Array(cap * NC); n = 0; parts.clear(); longs = [];
+    byStart = G.by.slice(); t0 = performance.now(); startedAt = Date.now(); frameT = -1; prevT = -1; gpuCount = 0;
+    fenceOut.ok = fenceOut.timeout = fenceOut.failed = 0;
+    try { lo = new PerformanceObserver(l => { for (const e of l.getEntries()) if (longs.length < 2000) longs.push([e.startTime - t0, e.duration]); }); lo.observe({ type: 'longtask' }); } catch (e) { lo = null; }
+    P.on = true; P.done = false; P.sum = null;
+    panel(`perf: recording ${SECS} s…`);
+  }
+  function finish() {
+    if (!P.on) return;
+    P.on = false; P.done = true;
+    if (lo) { try { lo.disconnect(); } catch (e) {} lo = null; }
+    P.sum = summary();
+    panelResult(P.sum);
+  }
+  // ---- summary ----
+  const r2 = v => v == null || !isFinite(v) ? null : Math.round(v * 100) / 100;
+  function stat(a) {
+    const b = a.filter(v => isFinite(v)).sort((x, y) => x - y), q = p => b.length ? b[Math.min(b.length - 1, Math.floor(p * b.length))] : null;
+    if (!b.length) return null;
+    return { n: b.length, mean: r2(b.reduce((x, y) => x + y, 0) / b.length), p50: r2(q(0.5)), p90: r2(q(0.9)), p95: r2(q(0.95)), p99: r2(q(0.99)), max: r2(b[b.length - 1]) };
+  }
+  const col = (k, keep) => { const o = []; for (let i = 0; i < n; i++) if (!keep || keep(i)) o.push(D[i * NC + C[k]]); return o; };
+  const flags = i => D[i * NC + C.flags];
+  function summary() {
+    const clean = i => !(flags(i) & 11), eng = i => clean(i) && (flags(i) & 4), hooked = i => D[i * NC + C.hookN] > 0;
+    const iv = col('iv', clean), secs = n ? (D[(n - 1) * NC] + (D[(n - 1) * NC + C.iv] || 0)) / 1000 : 0;
+    const share = (a, x) => a.length ? r2(a.filter(v => v > x).length / a.length) : null;
+    const M = session && session.M, h = M && M.__bgExt, cv = M && M.canvas;
+    let s3dq = '', xlight = '';
+    try { s3dq = localStorage.getItem('s3dq') || ''; xlight = localStorage.getItem('xlight') || ''; } catch (e) {}
+    const idle = []; for (let i = 0; i < n; i++) if (clean(i)) idle.push(D[i * NC + C.iv] - D[i * NC + C.eng] - D[i * NC + C.other]);
+    const top = [];
+    for (let i = 0; i < glNames.length; i++) { const d = G.by[i] - (byStart ? byStart[i] : 0); if (d > 0) top.push([glNames[i], r2(d / Math.max(1, n))]); }
+    top.sort((a, b) => b[1] - a[1]);
+    const pt = {}, ept = {};
+    for (const [k, a] of parts) {
+      const e = k.startsWith('engine.');
+      (e ? ept : pt)[e ? k.slice(7) : k] = stat(Array.from(a.subarray(0, n)).filter((v, i) => e ? eng(i) : hooked(i)));
+    }
+    let tex = null; try { tex = h && h.stats ? h.stats().texBytes : null; } catch (e) {}
+    const ua = navigator.userAgent;
+    return {
+      v: 1, kind: 'mbaa-frame-profile', at: new Date(startedAt).toISOString(), secs: r2(secs), frames: n,
+      page: { browser: (ua.match(/(Firefox|Edg|OPR|SamsungBrowser|Chrome|Version)\/[\d.]+/) || [''])[0], os: (ua.match(/\(([^)]*)\)/) || ['', ''])[1].slice(0, 80),
+        mobile: PHONE, dpr: devicePixelRatio, screen: [screen.width, screen.height], canvas: cv ? [cv.width, cv.height] : null,
+        css: cv ? [cv.clientWidth, cv.clientHeight] : null, cores: navigator.hardwareConcurrency || null, mem: navigator.deviceMemory || null,
+        lowmem: !!LOWMEM, live: !!(session && session.liveSrc), paused: !!(typeof ui !== 'undefined' && ui.paused) },
+      gpu: { renderer: gpuStr, vendor: gpuVendor, timerQuery: timerQ },
+      stage: { scene: M ? M.HEAP32[0x54EEE8 >> 2] : null, s3d: !!h, tier: h && h.tier ? h.tier : null, s3dq, xlight,
+        light: h && h.light ? h.light.mode : 0, texMB: tex ? r2(tex / 1048576) : null },
+      display: { fps: secs ? r2(n / secs) : null, iv: stat(iv), over20: share(iv, 20), over33: share(iv, 33.4), over50: share(iv, 50) },
+      game: { fps: secs ? r2(col('game').reduce((a, b) => a + b, 0) / secs) : null },
+      cpu: { engine: stat(col('eng', eng)), tick: stat(col('tick', i => eng(i) && D[i * NC + C.ticks] > 0)), otherRaf: stat(col('other', clean)), idle: stat(idle),
+        parts: Object.keys(ept).length ? ept : null },
+      s3d: h ? { hook: stat(col('hook', i => clean(i) && hooked(i))), rdraw: stat(col('rdraw', i => clean(i) && hooked(i))), front: stat(col('front', i => clean(i) && hooked(i))),
+        draws: stat(col('s3dDraws', hooked)), culled: stat(col('culled', hooked)), objs: stat(col('objs', hooked)), hookedFrames: col('hookN', hooked).length,
+        uploadMs: r2(col('upMs').reduce((a, b) => a + b, 0)), parts: pt } : null,
+      gl: { calls: stat(col('gl', clean)), draws: stat(col('draws', clean)), fbBinds: stat(col('fbBind', clean)), fbSwitches: stat(col('fbSwitch', clean)),
+        uploads: stat(col('upN', clean)), uploadKB: stat(col('upKB')), top: top.slice(0, 20) },
+      light: { tagged: stat(col('clTag', eng)), glow: stat(col('clGlow', eng)) },
+      long: { n: longs.length, totalMs: r2(longs.reduce((a, b) => a + b[1], 0)), max: r2(longs.reduce((a, b) => Math.max(a, b[1]), 0)),
+        worst: longs.slice().sort((a, b) => b[1] - a[1]).slice(0, 10).map(([s, d]) => [r2(s), r2(d)]) },
+      gpuEst: { mode: GPU_MODE, every: GPU_N, samples: col('gpuCpu', i => flags(i) & 1).length,
+        cpu: stat(col('gpuCpu', i => flags(i) & 1)),
+        pre: GPU_MODE === 'sync' ? stat(col('gpuPre', i => flags(i) & 1)) : null, tail: GPU_MODE === 'sync' ? stat(col('gpuTail', i => flags(i) & 1)) : null,
+        fence: GPU_MODE === 'fence' ? stat(col('gpuFence', i => flags(i) & 1)) : null, fenceOutcomes: GPU_MODE === 'fence' ? { ...fenceOut } : null,
+        note: GPU_MODE === 'sync' ? '1x1 readPixels round trip before (pre) and after (tail) the engine callback on sampled frames; tail = GPU time not overlapped with submission (an estimate, includes the GPU process and the round trip)'
+          : GPU_MODE === 'fence' ? 'fenceSync after the engine callback, polled from later tasks: submission end -> signalled (coarse: Chrome updates sync status up to a frame late)' : 'off' },
+    };
+  }
+  function frames() {
+    const rows = [];
+    for (let i = 0; i < n; i++) { const r = {}; for (let k = 0; k < NC; k++) r[COLS[k]] = r2(D[i * NC + k]); for (const [k, a] of parts) r[k] = r2(a[i]); rows.push(r); }
+    return rows;
+  }
+  // ---- the panel: a result to read, download, or send (opt-in) ----
+  let el = null;
+  function panel(text) {
+    if (!el) {
+      el = document.createElement('div');
+      el.id = 'perfprof';
+      el.style.cssText = 'position:fixed;left:4px;bottom:4px;z-index:9999;max-width:min(96vw,460px);padding:6px 8px;background:#000d;color:#9f9;font:11px/1.35 ui-monospace,monospace;border-radius:6px;white-space:pre-wrap';
+      document.body.append(el);
+    }
+    el.textContent = text;
+    return el;
+  }
+  function panelResult(s) {
+    const f = (o, k = 'p50') => o ? o[k] : '-';
+    const lines = [
+      `perf ${s.secs} s, ${s.frames} frames: display ${s.display.fps} fps, >20 ms ${Math.round((s.display.over20 || 0) * 100)}%, rAF p95 ${f(s.display.iv, 'p95')} ms`,
+      `engine p50/p95 ${f(s.cpu.engine)}/${f(s.cpu.engine, 'p95')} ms, other rAF ${f(s.cpu.otherRaf, 'mean')} ms, idle ${f(s.cpu.idle, 'mean')} ms, game ${s.game.fps} fps`,
+      s.s3d ? `3D hook p50/p95 ${f(s.s3d.hook)}/${f(s.s3d.hook, 'p95')} ms (draw ${f(s.s3d.rdraw)}, front ${f(s.s3d.front)}), ${f(s.s3d.draws)} draws` : '3D stage: off',
+      `GL ${f(s.gl.calls)} calls, ${f(s.gl.draws)} draws, ${f(s.gl.fbSwitches)} target switches a frame; long tasks ${s.long.n} (max ${s.long.max} ms)`,
+      `GPU est (${s.gpuEst.mode}, ${s.gpuEst.samples}): ` + (s.gpuEst.mode === 'fence' ? `signalled ${f(s.gpuEst.fence)} ms after submit` : `tail p50/p95 ${f(s.gpuEst.tail)}/${f(s.gpuEst.tail, 'p95')} ms, pre ${f(s.gpuEst.pre)} ms`),
+      `${s.gpu.renderer}`.slice(0, 70),
+    ];
+    panel(lines.join('\n'));
+    const btn = (t, fn) => { const b = document.createElement('button'); b.textContent = t; b.style.cssText = 'margin:4px 6px 0 0;font:11px ui-monospace,monospace'; b.onclick = fn; el.append(document.createElement('wbr'), b); return b; };
+    el.append('\n');
+    btn('download JSON', () => {
+      const blob = new Blob([JSON.stringify({ summary: s, columns: COLS, frames: frames(), longTasks: longs }, null, 1)], { type: 'application/json' });
+      const a = Object.assign(document.createElement('a'), { href: URL.createObjectURL(blob), download: `mbaa_perf_${s.at.replace(/[:.]/g, '-')}.json` });
+      document.body.append(a); a.click(); a.remove(); setTimeout(() => URL.revokeObjectURL(a.href), 5000);
+    });
+    const sb = btn('send to the devs', async () => {
+      sb.disabled = true;
+      const id = (session && session.liveSrc && session.liveSrc.id) || 'perf';
+      try {
+        const r = await fetch(`${LIVE}/live/${encodeURIComponent(id)}/diag`, { method: 'POST', body: JSON.stringify({ why: 'perf', text: JSON.stringify(s) }) });
+        sb.textContent = r.ok ? 'sent ✓' : `not sent (${r.status}): download it instead`;
+      } catch (e) { sb.textContent = 'not sent: download it instead'; }
+    });
+    btn('again', () => start());
+    btn('×', () => { el.remove(); el = null; });
+  }
+  P.start = start; P.stop = finish; P.summary = () => P.sum || (n ? summary() : null); P.frames = frames;
+  if (WAIT !== 'manual') panel(WAIT === '0' ? 'perf: waiting for the game' : 'perf: waiting for a battle');
 })();
 window.__mbaaPerf = () => {
   const M = session.M, n = call(session, 'viewer_perf_count'), p = call(session, 'viewer_perf_data');
@@ -5853,7 +6493,7 @@ function loading(on) {
   }
 }
 // The stage crossfade (user 2026-11-01): a new match / live switch, a radio stage pick. The picture on screen is copied
-// (the GL canvas keeps its drawing buffer) into #xfcv, laid over the game canvas; once the new stage is drawn (until():
+// (canvasNow: the frame presented again) into #xfcv, laid over the game canvas; once the new stage is drawn (until():
 // true for 2 frames; 4 s at most) it fades out over XF_STAGE_MS and is hidden (display: none, its pixels let go): no
 // per-frame work once done, and the game is never held back (it runs and draws under the copy). Reduced motion: a cut.
 const XF_STAGE_MS = 350;
@@ -5866,7 +6506,7 @@ function xfGrab(until, max = 4000) {
   if (!xf || xf.fading) {  // (a grab already up: it holds the older picture, which is what was on screen)
     try {
       c.width = src.width; c.height = src.height;
-      c.getContext('2d').drawImage(src, 0, 0);
+      c.getContext('2d').drawImage(canvasNow(), 0, 0);
     } catch (e) { return false; }
     Object.assign(c.style, { left: `${src.offsetLeft}px`, top: `${src.offsetTop}px`, width: `${src.offsetWidth}px`,
                              height: `${src.offsetHeight}px`, transition: 'none', opacity: '1' });
@@ -5947,7 +6587,7 @@ function liveCssBg(s, paths) {
   s.cssBgP = gate.then(() => fetchAll(man, paths, '', true))
     .then(() => { if (session !== s) return; liveInstall(s, paths); s.cssBgReady = true; if (s.cssBgHeld) { s.cssBgHeld = false; liveHoldApply(s); } })
     .catch(e => { console.warn('live: select screen files:', e); if (session === s) { s.cssBgP = null; s.cssBgHeld = false; liveHoldApply(s); } });
-  if (CU_OLD || s.livePic) s.cssBgGo(); else setTimeout(s.cssBgGo, 20000);
+  if (s.livePic) s.cssBgGo(); else setTimeout(s.cssBgGo, 20000);
 }
 // ---- playlist: several replays played back to back (each from round 1); the next one's files load during play ----
 async function prefetch(it, cur) {
@@ -7204,7 +7844,7 @@ async function exportRealtime(s, c) {
 function recDraw() {
   const r = rec;
   const W = r.out.width, H = r.out.height;
-  r.g.imageSmoothingEnabled = false; r.g.drawImage(document.getElementById('canvas'), 0, 0, W, H);
+  r.g.imageSmoothingEnabled = false; r.g.drawImage(canvasNow(), 0, 0, W, H);
   if (ui.boxes || ui.inputs || (clipChat && !clipNative)) paintOverlay(r.g, W, H, W / 960);
   if (r.track.requestFrame) r.track.requestFrame();
   r.frames++;

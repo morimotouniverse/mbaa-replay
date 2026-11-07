@@ -56,27 +56,21 @@ function bgmStreamPlay(ctx, o, out, loop, loopPos, offset, when) {
   const SR = 48000, AHEAD = 2.0, PREROLL = 3840;  // 80 ms of decoder pre-roll before a start point (RFC 7845 4.6)
   const loopS = Math.max(0, Math.min(Math.round(loopPos * SR), o.total));
   const srcs = new Set();
+  // Decoded packets (20 ms each) are gathered into chunks of CHUNK samples, one buffer source each (a chunk due to start
+  // within SOON s goes out as it is: a start or a seek sounds at once, then the decoder is ahead and chunks are whole): every source connected and scheduled is processed by the audio thread each 128-sample
+  // quantum, sounding or not, and one per packet kept ~100 alive 2 s ahead (the phone's audio thread: 25 % of a core,
+  // user 2026-11-07 "audio SHOULD NOT BE INTENSIVE AT ALL"). The samples and their times are the packets' own.
+  const CHUNK = 24000, SOON = 0.3;
+  let ck = null;  // {from: track sample of its first, n, cap, data: per channel}
+  let outEnd = -1;  // track sample (pre-skip in) after the last one decoded in this segment
   let dec = null, pi = 0, segFrom = 0, segWhen = 0, segEnd = 0, endTime = when, stopped = false, flushing = false;
   // a segment: track samples [from, total) sounding from time `at`
-  function segment(from, at) {
-    if (dec) { try { dec.close(); } catch (e) {} }
-    dec = new AudioDecoder({ output, error: () => {} });
-    dec.ondequeue = pump;  // refilled as the decoder takes packets, not only on the timer
-    dec.configure({ codec: 'opus', sampleRate: SR, numberOfChannels: o.ch, description: o.head });
-    segFrom = from + o.preSkip; segWhen = at; segEnd = o.total + o.preSkip;
-    let lo = 0, hi = o.starts.length - 1;
-    const target = Math.max(0, segFrom - PREROLL);
-    while (lo < hi) { const m = (lo + hi + 1) >> 1; if (o.starts[m] <= target) lo = m; else hi = m - 1; }
-    pi = lo; flushing = false;
-  }
-  function output(d) {
-    const d0 = Math.round(d.timestamp * SR / 1e6), n = d.numberOfFrames;
-    const a = Math.max(d0, segFrom), b = Math.min(d0 + n, segEnd);
-    if (stopped || b <= a) { d.close(); return; }
-    const buf = ctx.createBuffer(o.ch, b - a, SR), plane = new Float32Array(n);
-    for (let c = 0; c < o.ch; c++) { d.copyTo(plane, { planeIndex: c, format: 'f32-planar' }); buf.copyToChannel(plane.subarray(a - d0, b - d0), c); }
-    d.close();
-    const t = segWhen + (a - segFrom) / SR, now = ctx.currentTime;
+  function emit() {
+    const c = ck; ck = null;
+    if (!c || !c.n || stopped) return;
+    const buf = ctx.createBuffer(o.ch, c.n, SR);
+    for (let k = 0; k < o.ch; k++) buf.copyToChannel(c.data[k].subarray(0, c.n), k);
+    const t = segWhen + (c.from - segFrom) / SR, now = ctx.currentTime;
     endTime = Math.max(endTime, t + buf.duration);
     if (t + buf.duration <= now) { if (typeof window !== 'undefined' && window.mbaaBgmStream) window.mbaaBgmStream.late++; return; }  // late (a stalled tab): dropped
     const st = (typeof window !== 'undefined') && (window.mbaaBgmStream || (window.mbaaBgmStream = { buffers: 0, seconds: 0, late: 0 }));
@@ -85,6 +79,51 @@ function bgmStreamPlay(ctx, o, out, loop, loopPos, offset, when) {
     s.buffer = buf; s.connect(out);
     s.start(Math.max(t, now), Math.max(0, now - t));
     srcs.add(s); s.onended = () => { srcs.delete(s); s.disconnect(); };
+  }
+  function segment(from, at) {
+    emit();  // (the segment before: its last chunk, at its own times)
+    if (dec) { try { dec.close(); } catch (e) {} }
+    const mine = new AudioDecoder({ output, error: e => recover(mine, e) });
+    dec = mine;
+    dec.ondequeue = pump;  // refilled as the decoder takes packets, not only on the timer
+    dec.configure({ codec: 'opus', sampleRate: SR, numberOfChannels: o.ch, description: o.head });
+    segFrom = from + o.preSkip; segWhen = at; segEnd = o.total + o.preSkip;
+    let lo = 0, hi = o.starts.length - 1;
+    const target = Math.max(0, segFrom - PREROLL);
+    while (lo < hi) { const m = (lo + hi + 1) >> 1; if (o.starts[m] <= target) lo = m; else hi = m - 1; }
+    pi = lo; flushing = false; outEnd = -1;
+  }
+  // The decoder can fail or be reclaimed by the browser (a background tab, an idle codec: "Codec reclaimed"): the music
+  // went silent until the next track (user 2026-11-07, desktop: "the audio drops out ... the music at least"). A new
+  // decoder takes over from the first sample not yet decoded, at its own time, or from now when that has passed.
+  function recover(d, e) {
+    if (stopped || d !== dec) return;
+    if (typeof console !== 'undefined') console.warn('bgm: decoder ' + (e && e.message || e) + '; restarted');
+    if (typeof window !== 'undefined' && window.mbaaBgmStream) window.mbaaBgmStream.restarts = (window.mbaaBgmStream.restarts || 0) + 1;
+    let from = (outEnd >= 0 ? outEnd : segFrom) - o.preSkip, at = segWhen + (from + o.preSkip - segFrom) / SR;
+    const now = ctx.currentTime;
+    if (at < now + 0.05) { from += Math.round((now + 0.05 - at) * SR); at = now + 0.05; }
+    if (from >= o.total) { if (!loop || o.total <= loopS) return; from = loopS + ((from - loopS) % (o.total - loopS)); }
+    segment(from, at);
+    pump();
+  }
+  function output(d) {
+    const d0 = Math.round(d.timestamp * SR / 1e6), n = d.numberOfFrames;
+    const a = Math.max(d0, segFrom), b = Math.min(d0 + n, segEnd);
+    if (stopped || b <= a) { d.close(); return; }
+    outEnd = Math.max(outEnd, b);
+    if (ck && a !== ck.from + ck.n) emit();  // (not contiguous: a chunk never spans a gap)
+    if (!ck) ck = { from: a, n: 0, cap: CHUNK, data: Array.from({ length: o.ch }, () => new Float32Array(CHUNK)) };
+    const m = b - a;
+    if (ck.n + m > ck.cap) {  // (grow: a packet is never split across chunks)
+      const cap = ck.n + m;
+      ck.data = ck.data.map(x => { const y = new Float32Array(cap); y.set(x.subarray(0, ck.n)); return y; }); ck.cap = cap;
+    }
+    const plane = new Float32Array(n);
+    for (let c = 0; c < o.ch; c++) { d.copyTo(plane, { planeIndex: c, format: 'f32-planar' }); ck.data[c].set(plane.subarray(a - d0, b - d0), ck.n); }
+    d.close();
+    ck.n += m;
+    if (ck.n >= ck.cap || segWhen + (ck.from - segFrom) / SR < ctx.currentTime + SOON) emit();
   }
   function pump() {
     if (stopped || flushing) return;
@@ -95,7 +134,7 @@ function bgmStreamPlay(ctx, o, out, loop, loopPos, offset, when) {
     if (pi >= o.packets.length) {  // the track's end: everything out, then back to loopPos (or done)
       flushing = true;
       const d = dec, at = segWhen + (segEnd - segFrom) / SR;
-      d.flush().then(() => { if (!stopped && d === dec && loop && o.total > loopS) segment(loopS, at); }, () => {});
+      d.flush().then(() => { if (d === dec) emit(); if (!stopped && d === dec && loop && o.total > loopS) segment(loopS, at); }, () => {});
     }
   }
   let from = Math.round(offset * SR);
@@ -109,7 +148,7 @@ function bgmStreamPlay(ctx, o, out, loop, loopPos, offset, when) {
   return {
     stop(at) {
       if (stopped) return;
-      stopped = true; clearInterval(timer);
+      stopped = true; clearInterval(timer); ck = null;
       try { dec.close(); } catch (e) {}
       for (const s of srcs) { try { s.stop(at); } catch (e) {} }
     },

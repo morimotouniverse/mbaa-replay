@@ -722,14 +722,17 @@
                    background: var(--raise); border: 1px solid var(--line); border-radius: 8px; padding-right: 3px; }
   #chatsec .cinw:focus-within { border-color: var(--accent2, #8ab4ff); }
   #chatsec .cform .cinw input { flex: 1 1 auto; width: 100%; padding-right: 32px; }
-  /* the message box (composerUpgrade): a one-line contenteditable dressed as the input it replaced; its emotes inline */
+  /* the message box (composerUpgrade): a contenteditable dressed as the input it replaced; its emotes inline. It wraps and
+     grows downward (to ~5 lines, then scrolls down), never sideways (user 2026-11-07: no horizontal scroll bar EVER) */
   #chatsec .cform #chatin { flex: 1 1 auto; width: 100%; min-width: 0; box-sizing: border-box; background: var(--raise); color: var(--fg);
                             border: none; border-radius: 8px 0 0 8px; padding: 5px 4px 5px 8px; font: inherit; line-height: 1.35;
-                            min-height: calc(1.35em + 12px); white-space: pre; overflow-x: auto; overflow-y: hidden; scrollbar-width: none;
-                            cursor: text; outline: none; -webkit-user-modify: read-write-plaintext-only; overflow-wrap: normal; }
+                            min-height: calc(1.35em + 12px); max-height: calc(5 * 1.35em + 12px); white-space: pre-wrap; overflow-wrap: anywhere;
+                            overflow-x: hidden; overflow-y: auto; scrollbar-width: none;
+                            cursor: text; outline: none; -webkit-user-modify: read-write-plaintext-only; }
   #chatsec .cform #chatin::-webkit-scrollbar { display: none; }
   #chatsec .cform #chatin:focus { border-color: transparent; }
-  #chatsec .cform #chatin:empty::before { content: attr(data-ph); color: var(--faint); pointer-events: none; }
+  #chatsec .cform #chatin:empty::before { content: attr(data-ph); color: var(--faint); pointer-events: none; display: block;
+                                         white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   #chatsec .cform #chatin img.cemote { height: 1.35em; width: auto; vertical-align: -0.3em; margin: 0; }
   #chatsec .cemo { position: static; flex: none; order: 3; width: 26px; height: 26px; padding: 0; border: none;
                    border-radius: 6px; background: none; color: var(--faint); cursor: pointer; display: inline-flex; align-items: center; justify-content: center; }
@@ -1620,8 +1623,7 @@
           (window.matchMedia && matchMedia('(prefers-reduced-motion: reduce)').matches)) return off;
     } catch (e) { return off; }
     const SRC = `'use strict';
-const L = new Map(); let pic = null, off = 0, raf = 0;
-const req = self.requestAnimationFrame ? f => self.requestAnimationFrame(f) : f => setTimeout(() => f(performance.now()), 16);
+const L = new Map(); let pic = null;
 function gradAt(cs, u, p) { const n = cs.length, v = Math.min(1, Math.max(0, u)) * 0.5 + p, s = (v - Math.floor(v)) * n, i = Math.floor(s), f = s - i, a = cs[i % n], b = cs[(i + 1) % n];
   return 'rgb(' + a.map((x, k) => Math.round(x + (b[k] - x) * f)).join(',') + ')'; }
 function ease(x) { let s = x;
@@ -1645,16 +1647,17 @@ function draw(l, t) {
       x.drawImage(r.atlas, c[0], c[1], c[2], c[3], c[4], c[5] + a * (1 - 2 * ease(uu < 1 ? uu : 2 - uu)), c[2], c[3]); }
   }
 }
-function frame(ts) {
-  raf = 0; const t = pic != null ? pic : (ts + off) / 1000; let any = false;
-  for (const [id, l] of L) { if (!l.vis || !l.ready) continue; any = true; draw(l, t); if (l.fresh) { l.fresh = false; postMessage({ drawn: id }); } }
-  if (any && pic == null) raf = req(frame);
+// (drawn on the page's tick, the game's frame (viewer.js frameBus): its time in the page's clock; a clip page's picture
+// time instead while it sets one)
+function frame(now) {
+  const t = pic != null ? pic : now / 1000;
+  for (const [id, l] of L) { if (!l.vis || !l.ready) continue; draw(l, t); if (l.fresh) { l.fresh = false; postMessage({ drawn: id }); } }
 }
-const kick = () => { if (!raf) raf = req(frame); };
+const kick = () => {};
 function drop(l) { for (const n of l.names) { n.mask.close(); if (n.under) n.under.close(); } for (const r of l.runs) r.atlas.close(); }
 onmessage = ({ data: m }) => {
-  if (m.op === 'origin') { off = performance.timeOrigin - m.o; return; }
-  if (m.op === 'clock') { pic = m.t; kick(); return; }
+  if (m.op === 'tick') { frame(m.now); return; }
+  if (m.op === 'clock') { pic = m.t; return; }
   let l = L.get(m.id);
   if (m.op === 'del') { if (l) { drop(l); L.delete(m.id); } return; }
   if (m.op === 'vis') { if (!l || l.vis === m.on) return; l.vis = m.on;
@@ -1676,8 +1679,11 @@ onmessage = ({ data: m }) => {
       wk = new Worker(URL.createObjectURL(new Blob([SRC], { type: 'text/javascript' })));
       wk.onmessage = ({ data }) => { const r = recs.get(data.drawn); if (r) shown(r); };
       wk.onerror = e => console.warn('chat name fx worker:', e.message || e);
-      post({ op: 'origin', o: performance.timeOrigin });
       if (pic != null) post({ op: 'clock', t: pic });
+      // (its frames: one a game frame, from the page's frame (viewer.js frameBus), while a line is on screen; a page
+      // without it, every 16 ms)
+      const tick = now => { for (const r of recs.values()) if (r.vis && r.sent) { post({ op: 'tick', now }); return; } };
+      if (window.mbaaFrameBus) window.mbaaFrameBus.add(tick); else setInterval(() => tick(performance.now()), 16);
       return wk;
     }
     // (the line's first canvas frame is up: its DOM glyphs go transparent; the still phase set on them is dropped)
@@ -4404,13 +4410,16 @@ onmessage = ({ data: m }) => {
       .finally(() => { tl.clockBusy = false; });
   }
   function tlDrop() {
-    if (tl.raf) cancelAnimationFrame(tl.raf);
     tl.raf = 0; tl.recs = null; tl.T = -1;
     if (tl.st) { dmClear(tl.st); tl.st.box.remove(); tl.st = null; }
     for (const e of tl.entries) e.c = null;
   }
   function following() { const lv = api.live(); return !!(lv && lv.follow); }
-  function tlKick() { if (!tl.raf && tl.st && overOn.checked) tl.raf = requestAnimationFrame(tlFrame); }
+  // (its turns: the page's frame, viewer.js frameBus (one a game frame), while armed (tl.raf))
+  function tlKick() {
+    if (!tl.busOn && window.mbaaFrameBus) { tl.busOn = true; window.mbaaFrameBus.add(() => { if (tl.raf) tlFrame(); }); }
+    if (!tl.raf && tl.st && overOn.checked) tl.raf = 1;
+  }
   // (watching back only: the comments on screen at the picture's time, moved by transform, which the compositor applies;
   // following live they run on the wall clock (danmaku) and this does nothing but wait)
   function tlFrame() {
@@ -4428,7 +4437,7 @@ onmessage = ({ data: m }) => {
         if (T !== tl.T) { tl.T = T; M._viewer_ov_clock(T); }
       }
     }
-    tl.raf = requestAnimationFrame(tlFrame);
+    tl.raf = 1;
   }
   function tlReset(name) { tlDrop(); tl.entries = []; tl.clock = null; tl.clockAt = -1e9; tl.chan = name; }
   // (each second: pending entries, a session that started meanwhile, the overlay's loop after a hidden spell)
@@ -5154,13 +5163,11 @@ onmessage = ({ data: m }) => {
       emoOpen(false); inputBack(null, false); return;
     }
     let a = input.selectionStart ?? input.value.length, b = input.selectionEnd ?? a;
-    // (an emote's ":name:" and a space, so the next word stays apart; a second emote picked straight after takes that
-    // space back, so two in a row touch: ":a::b:", autoSp)
-    if (reactEmote(ch) && a === b && autoSp >= 0 && a === autoSp + 1 && input.value[autoSp] === ' ') { input.setRangeText('', autoSp, autoSp + 1, 'end'); a = b = autoSp; }
-    const ins = reactEmote(ch) ? `${ch} ` : ch;
+    // (an emote goes in as ":name:" alone, no space after it: user 2026-11-07, "its still putting a space automatically
+    // after it")
+    const ins = ch;
     if (input.value.length - (b - a) + ins.length > MAXLEN) return;
     input.setRangeText(ins, a, b, 'end');
-    autoSp = reactEmote(ch) ? a + ins.length - 1 : -1;
     inputBack(a + ins.length, true); cePrevDraw();
     store.set(EMO_RECENT, [ch, ...(store.get(EMO_RECENT, []) || []).filter(x => x !== ch)].slice(0, 24));
   }
@@ -5189,7 +5196,6 @@ onmessage = ({ data: m }) => {
   const cePrev = $('.ceprev');
   let cePrevV = null;
   let ment = null;  // {start, items: [nick], i}
-  let autoSp = -1;  // value index of the space a pick put after a server emote (taken back by a ":" typed next)
   let mentMore = false;  // (the older games' music and stages asked for: the first "!" / "^")
   const foldName = t => String(t).normalize('NFKD').replace(/[̀-ͯ]/g, '').toLowerCase();
   function nameOf(nick, c) {
@@ -5297,20 +5303,14 @@ onmessage = ({ data: m }) => {
   }
   function mentionPick() {
     if (!ment || mpop.hidden) return false;
-    const x = ment.items[ment.i], ins = ment.pre ? `${ment.pre}${x.slug} ` : ment.kind === 'emo' ? (x.emote ? `${x.ch} ` : x.ch) : `@${x.nick} `;
+    const x = ment.items[ment.i], ins = ment.pre ? `${ment.pre}${x.slug} ` : ment.kind === 'emo' ? x.ch : `@${x.nick} `;
     const v = input.value.slice(0, ment.start) + ins + (ment.slash ? '' : input.value.slice(ment.end));
-    if (v.length <= MAXLEN) { input.value = v; input.setSelectionRange(ment.start + ins.length, ment.start + ins.length); autoSp = x.emote ? ment.start + ins.length - 1 : -1; }
+    if (v.length <= MAXLEN) { input.value = v; input.setSelectionRange(ment.start + ins.length, ment.start + ins.length); }
     cePrevV = null;
     const at = input.selectionStart;
     mentionClose(); inputBack(at, true);
     return true;
   }
-  // (the space a pick put after a server emote goes again when the very next thing typed is ":", another emote: ":a::b:")
-  input.addEventListener('input', () => {
-    const p = autoSp; autoSp = -1;
-    if (p < 0) return;
-    if (input.selectionStart === p + 2 && input.selectionEnd === p + 2 && input.value.slice(p, p + 2) === ' :') { input.setRangeText('', p, p + 1, 'end'); input.setSelectionRange(p + 1, p + 1); }
-  });
   input.addEventListener('input', mentionScan);
   input.addEventListener('input', cePrevDraw);
   if (cePrev) cePrev.addEventListener('pointerdown', e => e.preventDefault());  // (a touch on it keeps the input's focus: the keyboard stays up)

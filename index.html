@@ -18,10 +18,11 @@
 <meta name="twitter:description" content="Watch Melty Blood Actress Again Current Code replays in your browser, frame-exact.">
 <meta name="twitter:image" content="https://watch.meltyblood.org/preview.png">
 <meta name="mbaa-manifest" content="2a2e2bac19a8">
-<meta name="mbaa-chatjs" content="chat.js?v=e0b92e03bed9">
+<meta name="mbaa-chatjs" content="chat.js?v=496608f01c6d">
 <meta name="mbaa-announcer" content="announcer/neco.bin?v=932b15248e89">
 <link rel="manifest" href="site.webmanifest">
-<link rel="icon" href="icon-192.png">
+<link rel="icon" href="favicon-48.png" sizes="48x48">
+<link rel="icon" href="icon-192.png" sizes="192x192">
 <link rel="apple-touch-icon" href="icon-192.png">
 <meta name="theme-color" content="#0d0d14">
 <link rel="stylesheet" href="icons.css?v=4db5e6fecf18">
@@ -88,6 +89,7 @@
   .fs-out, .stage.fs .fs-in { display: none; }
   .stage.fs .fs-out { display: inline-block; }
   #overlay { position: absolute; left: 0; top: 0; width: 100%; height: 100%; pointer-events: none; }
+  #framebar { position: absolute; left: 0; top: 0; pointer-events: none; }  #framebar[hidden] { display: none; }
   /* while a match loads: the game's opening movie (muted) over the black picture */
   #loadvid { position: absolute; left: 0; top: 0; width: 100%; aspect-ratio: 4 / 3; object-fit: cover; background: #000; pointer-events: none; }
   #loadvid[hidden] { display: none; }
@@ -576,6 +578,8 @@
     color: #fff; font-size: 13px; font-weight: 800; letter-spacing: .03em; pointer-events: none; box-shadow: 0 3px 12px #0009;
     animation: ffpulse 1s ease-in-out infinite alternate; }
   @keyframes ffpulse { from { opacity: 1; } to { opacity: .65; } }
+  /* (a match playing: the shell's animations hold still, so Chrome composites only the game's frames; viewer.js playState) */
+  body.mplay .banner.scroll span, body.mplay #clippanel #cplink.pend, body.mplay #ffbadge { animation-play-state: paused; }
   #livenotice.down { border-color: var(--accent); }
   #tunepanel { position: fixed; left: 12px; bottom: 12px; z-index: 50; background: #15131fee; border: 1px solid #ffffff2a;
     border-radius: 10px; padding: 10px 12px; font-size: 12px; display: flex; flex-direction: column; gap: 4px; max-width: 300px; }
@@ -623,6 +627,8 @@
   #time { font-size: 20px; font-weight: 600; letter-spacing: .02em; }
   #fc { color: var(--faint); font-size: 11px; margin-left: auto; font-variant-numeric: tabular-nums; }
   .clock > :is(#time, #fc, #dur) { contain: layout paint style; }  /* (their text changes: laid out on their own) */
+  /* (fixed widths: a changing time / length / frame number never moves the controls or wraps the row; the longest of each) */
+  body:not(.mob) #time { min-width: 7ch; }  body:not(.mob) #dur { min-width: 10ch; }  body:not(.mob) #fc { min-width: 12ch; }
   /* timeline: round marks above a thin seek track */
   .timeline { display: flex; flex-direction: column; gap: 2px; }
   #marks { width: 100%; height: 16px; display: block; cursor: pointer; }
@@ -673,6 +679,9 @@
   #plitems li:hover { background: #ffffff0c; }
   /* (live: End is the way back to live; lit while following it. necoTV #3: the LIVE button went, one row of controls) */
   body.live #toend.on { color: var(--accent); }
+  /* (the button says LIVE on a live match: filled while watching back (the status line's "LIVE to catch up"), lit while following) */
+  body.live #toend::after { content: 'LIVE'; font-size: 10.5px; font-weight: 700; letter-spacing: .04em; margin-left: 3px; }
+  body.live #toend:not(.on) { background: #e04a5a; color: #fff; border-radius: 999px; padding: 0 8px 0 5px; }
   body.mob.live .tbar #toend { display: inline-flex !important; }   /* (phones too: it replaced their LIVE button) */
   #liveitems { margin: 0; padding: 0; list-style: none; max-height: 200px; overflow-y: auto; display: flex; flex-direction: column; gap: 2px; }
   #liveitems a { display: block; padding: 4px 8px; border-radius: 8px; color: inherit; text-decoration: none; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
@@ -747,6 +756,7 @@
   <canvas id="canvas" width="640" height="480" oncontextmenu="event.preventDefault()"></canvas>
   <canvas id="xfcv" aria-hidden="true" hidden></canvas>
   <canvas id="overlay"></canvas>
+  <canvas id="framebar" hidden></canvas>
   <div class="banner" id="banner0" hidden><span></span></div><div class="banner" id="banner1" hidden><span></span></div>
   <div id="livenotice" role="status" aria-live="polite" hidden></div>
   <div id="catchup" role="status" hidden><div class="cu-t">Catching up to live</div><div class="cu-s"></div><div class="cu-bar"><i></i></div></div>
@@ -795,6 +805,7 @@
             <tr><td><kbd>H</kbd></td><td>hitboxes</td></tr>
             <tr><td><kbd>I</kbd></td><td>input display</td></tr>
             <tr><td><kbd>K</kbd></td><td>hitstun bar under the combo counter (ETM's)</td></tr>
+            <tr><td><kbd>G</kbd></td><td>frame bar (ETM's): startup, active, recovery, block / hitstun per frame; startup, total and frame advantage</td></tr>
             <tr><td><kbd>U</kbd></td><td>HUD (health, meter, timer)</td></tr>
             <tr class="liveonly"><td><kbd>T</kbd></td><td>players' names on the CHALLENGER / WINS banners</td></tr>
             <tr><td><kbd>B</kbd></td><td>music on / off (sound effects stay)</td></tr>
@@ -841,6 +852,7 @@
           <span class="hblegend" role="tooltip"><span class="hbkey" style="--c:#30e030">hurt</span><span class="hbkey" style="--c:#ff2828">attack</span><span class="hbkey" style="--c:#ffe020">clash</span><span class="hbkey" style="--c:#40a0ff">shield</span><span class="hbkey" style="--c:#d8d8d8">collision</span><span class="hbkey" style="--c:#c878e6">special</span></span></span>
         <button class="vchip" data-flip="inputs" title="Input display (I)" aria-pressed="false">IN</button>
         <button class="vchip" data-flip="hitstun" title="Hitstun bar under the combo counter, ETM's: white = hitstun left; behind it blue, cyan, grey, black as untech decay grows; orange = max bounces (K)" aria-pressed="true">HS</button>
+        <button class="vchip" data-flip="framebar" title="Frame bar, ETM's: green startup / recovery, red active, grey hit / blockstun, dark = frame advantage; startup, total and advantage in frames (G)" aria-pressed="false">FB</button>
         <button class="vchip" data-flip="hud" title="HUD: health, meter, timer, combo counters (U)" aria-pressed="true">HUD</button>
         <button class="vchip liveonly" data-flip="names" title="Players' names on the CHALLENGER / WINS banners (T)" aria-pressed="true">NAMES</button>
         <button class="vchip" data-flip="music" title="Music; sound effects stay (B)" aria-pressed="true"><i class="i i-music"></i></button>
@@ -909,6 +921,7 @@
       <label class="chip" title="Hitboxes (H)"><input id="boxes" type="checkbox">hitboxes</label>
       <label class="chip" title="Input display (I)"><input id="inputs" type="checkbox">inputs</label>
       <label class="chip" title="Hitstun bar under the combo counter, ETM's (K)"><input id="hitstun" type="checkbox" checked>hitstun bar</label>
+      <label class="chip" title="Frame bar, ETM's: each frame's state, startup / total / frame advantage (G)"><input id="framebar" type="checkbox">frame bar</label>
       <label class="chip" title="HUD: health, meter, timer, combo counters (U)"><input id="hud" type="checkbox" checked>HUD</label>
       <label class="chip liveonly" title="Players' names on the CHALLENGER / WINS banners (T)"><input id="names" type="checkbox" checked>names</label>
       <label class="chip" title="Music; sound effects stay (B)"><input id="music" type="checkbox" checked>music</label>
@@ -949,8 +962,8 @@
   </div>
 </div>
 </div>
-<script src="mbaa.js?v=cc52b8c7cae8"></script>
-<script src="bgm_stream.js?v=407ac29e5c89"></script>
-<script src="viewer.js?v=5fa902329532"></script>
+<script src="mbaa.js?v=0ab30dcacef1"></script>
+<script src="bgm_stream.js?v=cad5cabd6328"></script>
+<script src="viewer.js?v=4b9de66ef96e"></script>
 </body>
 </html>

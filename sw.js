@@ -12,7 +12,7 @@ self.addEventListener('fetch', e => {
   const r = e.request;
   if (r.method !== 'GET') return;
   const url = new URL(r.url);
-  if (url.origin !== location.origin || url.pathname.startsWith('/bundle/') || url.pathname.includes('/live/')) return;
+  if (url.origin !== location.origin || url.pathname.includes('/bundle/') || url.pathname.includes('/live/')) return;
   // (sign-in: /auth/discord answers with a redirect to discord.com and /auth/callback with one back to the page, setting
   // the session cookie: left to the browser. Fetched from here, the redirect was followed to another origin, which a
   // worker cannot hand to a navigation: "FetchEvent.respondWith received an error: Load failed" / ERR_FAILED)
