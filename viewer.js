@@ -1764,6 +1764,11 @@ function preCopyHot(M, c) {
 }
 function incTick(s, f) {
   const t = s.tl, M = s.M;
+  // (a live match being left for another (liveWant: the tap's match) keeps playing until the new one's first frame, ~3 s
+  // on a phone while the new match's files decode; its keyframe slices ran on through that: 0.45-0.65 s of the Moto G's
+  // main thread per switch (join_phone_nokf_1107 profiles, deflate under incTick from the tap to the files mark).
+  // Paused while another match is wanted; a want back to this one resumes them)
+  if (s.liveSrc && liveWant && liveWant !== s.liveSrc.id) return;
   let c = t.inc;
   if (!c) {
     const base = t.kfs[t.kfs.length - 1];
@@ -3296,9 +3301,12 @@ function selStrip(box, cell, p) {
     c.drawImage(plArt.cursor, (tag % 8) * 64, Math.floor(tag / 8) * 64, 64, 64, x, 0, 64, 64);
   }
 }
-// the strip's frame f shown (a box not rendered, e.g. the players' icons hidden on a phone: left alone)
+// the strip's frame f shown (a box not rendered, e.g. the players' icons hidden on a phone: left alone; the visibility
+// read forces style, so it is taken once per loop of the 10 frames, ~3 times a second: 180 reads/s cost 12 ms/s on the
+// Moto G, join_phone_1107 profiles)
 function selStep(box, cell, p, f) {
-  if (box.checkVisibility ? !box.checkVisibility() : box.offsetParent === null) return;
+  if (f === 0 || box.__vis == null) box.__vis = box.checkVisibility ? box.checkVisibility() : box.offsetParent !== null;
+  if (!box.__vis) return;
   selStrip(box, cell, p);
   const cv = box.firstElementChild, tr = `translateX(${-10 * f}%)`;
   if (cv.style.transform !== tr) cv.style.transform = tr;
