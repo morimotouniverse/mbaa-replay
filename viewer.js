@@ -3276,13 +3276,32 @@ if (porTune) {
 }
 // the cursor frames' loop over the icons, at the select screen's rate (CharaSelectIcons_Update, CE 0x48BAB0: the next of
 // 10 frames every 2 game ticks)
-// one select-screen cell (64x64, scaled to the canvas): the character icon, side p's cursor frame f (of 10), its P1/P2 tag
-function selFrame(cv, cell, p, f) {
-  const c = cv.getContext('2d'), k = cv.width / 64, fr = 10 * p + f, tag = 20 + p;
+// one select-screen icon as a strip of its 10 cursor frames (a 640x64 canvas inside the .ico / .lico box, which clips it):
+// the character icon, side p's cursor frame f (of 10) and its P1/P2 tag per frame, drawn once per (icon, side); the
+// animation then moves the strip by a transform from the frame bus (a compositor move: no 2D-canvas raster per step).
+// Before, each icon canvas was cleared and redrawn 30 times a second: on the Moto G ~1 ms of CrGpuMain raster per
+// redraw, 112-130 ms/s for four icons (phone runs e_trace_1107 / canvas_tally_1107)
+function selStrip(box, cell, p) {
+  let cv = box.firstElementChild;
+  if (!cv) { cv = document.createElement('canvas'); cv.width = 640; cv.height = 64; box.append(cv); }
+  const key = `${cell}/${p}`;
+  if (box.dataset.strip === key) return;
+  box.dataset.strip = key;
+  const c = cv.getContext('2d'), tag = 20 + p;
   c.clearRect(0, 0, cv.width, cv.height);
-  if (cell >= 0) c.drawImage(plArt.icons, 48 * (cell % 10), (Math.floor(cell / 10) + 4) * 64, 48, 64, 8 * k, 0, 48 * k, 64 * k);  // (centred in the frame, as CharaSelectIcons_Draw)
-  c.drawImage(plArt.cursor, (fr % 8) * 64, Math.floor(fr / 8) * 64, 64, 64, 0, 0, 64 * k, 64 * k);
-  c.drawImage(plArt.cursor, (tag % 8) * 64, Math.floor(tag / 8) * 64, 64, 64, 0, 0, 64 * k, 64 * k);
+  for (let f = 0; f < 10; f++) {
+    const x = 64 * f, fr = 10 * p + f;
+    if (cell >= 0) c.drawImage(plArt.icons, 48 * (cell % 10), (Math.floor(cell / 10) + 4) * 64, 48, 64, x + 8, 0, 48, 64);  // (centred in the frame, as CharaSelectIcons_Draw)
+    c.drawImage(plArt.cursor, (fr % 8) * 64, Math.floor(fr / 8) * 64, 64, 64, x, 0, 64, 64);
+    c.drawImage(plArt.cursor, (tag % 8) * 64, Math.floor(tag / 8) * 64, 64, 64, x, 0, 64, 64);
+  }
+}
+// the strip's frame f shown (a box not rendered, e.g. the players' icons hidden on a phone: left alone)
+function selStep(box, cell, p, f) {
+  if (box.checkVisibility ? !box.checkVisibility() : box.offsetParent === null) return;
+  selStrip(box, cell, p);
+  const cv = box.firstElementChild, tr = `translateX(${-10 * f}%)`;
+  if (cv.style.transform !== tr) cv.style.transform = tr;
 }
 let plAnimF = -1;
 function playersAnimate(t) {
@@ -3290,15 +3309,10 @@ function playersAnimate(t) {
   const fNow = Math.floor(t * 60 / 2000) % 10;
   if (fNow === plAnimF) return;  // (the cursor frame changes 30 times a second)
   plAnimF = fNow;
-  if (!box.hidden && plArt) {
-    const f = Math.floor(t * 60 / 2000) % 10;
-    box.querySelectorAll('.pl').forEach((row, p) => selFrame(row.querySelector('.ico'), plCells[p], p, f));
-  }
+  if (!box.hidden && plArt) box.querySelectorAll('.pl').forEach((row, p) => selStep(row.querySelector('.ico'), plCells[p], p, fNow));
   // the live list's icons too (each side's cursor, as on the select screen)
-  if (plArt && !document.getElementById('livesec').hidden) {
-    const f = Math.floor(t * 60 / 2000) % 10;
-    for (const cv of document.querySelectorAll('#liveitems .lico')) selFrame(cv, +cv.dataset.cell, +cv.dataset.side, f);
-  }
+  if (plArt && !document.getElementById('livesec').hidden)
+    for (const b of document.querySelectorAll('#liveitems .lico, #nextcard .lico')) selStep(b, +b.dataset.cell, +b.dataset.side, fNow);
 }
 frameBus.add(playersAnimate);
 // The stage block and Raito Radio (tools/web/stage_panel.py puts web/stage/* in the bundle, tools/web/old_melty/
@@ -3944,11 +3958,11 @@ function liveSide(m, p) {
   const el = (tag, cls, txt) => { const e = document.createElement(tag); if (cls) e.className = cls; if (txt != null) e.textContent = txt; return e; };
   const names = (m.names || []).map(n => (n || '').trim());
   const c = m.chara && m.chara[p], mo = m.moon && m.moon[p], sp = el('span', 'side');
-  const ico = el('canvas', 'lico'); ico.width = ico.height = 64;
+  const ico = el('span', 'lico');  // (the icon's cursor-frame strip goes inside: selStrip)
   ico.dataset.cell = iconCell(c); ico.dataset.side = p;
   const moon = el('canvas', 'lmoon'); moon.width = 14; moon.height = 14;
   if (plArt && iconCell(c) >= 0) {
-    selFrame(ico, iconCell(c), p, 0); drawMoon(moon, mo);
+    selStrip(ico, iconCell(c), p); drawMoon(moon, mo);
     const ch = el('span', 'lchar'); ch.append(ico, moon); charPopWire(ch, c, mo); sp.append(ch);
   }
   const nm = el('span', 'lnm');

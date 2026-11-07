@@ -416,6 +416,10 @@
   #players { display: flex; flex-direction: column; gap: 4px; margin-bottom: 4px; }
   #players .pl { display: flex; align-items: center; gap: 8px; min-width: 0; }
   #players .ico { width: 64px; height: 64px; flex: none; }
+  /* a select-screen icon box clips its strip of 10 cursor frames (viewer.js selStrip); the frame shown is a transform
+     step from the frame bus, a compositor move and no canvas redraw */
+  .ico, .lico { display: inline-block; overflow: hidden; position: relative; }
+  .ico > canvas, .lico > canvas { display: block; width: 1000%; height: 100%; will-change: transform; }
   #players .who { min-width: 0; display: flex; flex-direction: column; line-height: 1.25; }
   #players .nm { font-size: 14px; font-weight: 650; white-space: nowrap; overflow: hidden; }
   #players .nm > .mqx { display: block; }  /* (the name's own clip box, inside the plate's padding: viewer.js marquee) */
@@ -905,9 +909,9 @@
     <div id="matchcard">
     <img class="por" alt="" hidden><img class="por p2" alt="" hidden>
     <div id="players" hidden>
-      <div class="pl"><canvas class="ico" width="64" height="64"></canvas><div class="who"><span class="nm"><span class="mqx"><span class="t"></span></span></span><span class="ch"><canvas class="moon" width="56" height="56"></canvas><span class="mqx"><span class="t"></span></span></span></div></div>
+      <div class="pl"><span class="ico"></span><div class="who"><span class="nm"><span class="mqx"><span class="t"></span></span></span><span class="ch"><canvas class="moon" width="56" height="56"></canvas><span class="mqx"><span class="t"></span></span></span></div></div>
       <div class="vs">VS <span id="watching"></span></div>
-      <div class="pl"><canvas class="ico" width="64" height="64"></canvas><div class="who"><span class="nm"><span class="mqx"><span class="t"></span></span></span><span class="ch"><canvas class="moon" width="56" height="56"></canvas><span class="mqx"><span class="t"></span></span></span></div></div>
+      <div class="pl"><span class="ico"></span><div class="who"><span class="nm"><span class="mqx"><span class="t"></span></span></span><span class="ch"><canvas class="moon" width="56" height="56"></canvas><span class="mqx"><span class="t"></span></span></span></div></div>
     </div>
     <div id="stageblk" hidden><img class="view" alt=""><div class="plate"><img class="name" alt=""><div class="trk" id="trk"></div></div></div>
     </div>
@@ -989,6 +993,6 @@
 </div>
 <script src="mbaa.js?v=0ab30dcacef1"></script>
 <script src="bgm_stream.js?v=cad5cabd6328"></script>
-<script src="viewer.js?v=c74c026decca"></script>
+<script src="viewer.js?v=0ba717d1262b"></script>
 </body>
 </html>
