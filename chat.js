@@ -918,7 +918,13 @@
     background: var(--panel); border-top: 1px solid var(--line); border-radius: 14px 14px 0 0; padding: 12px 12px calc(12px + env(safe-area-inset-bottom));
     box-shadow: 0 -10px 30px rgba(0,0,0,.5); }
   body.mob.cardsheet #chatcol > #matchcard .cardnote { display: none; }
-  body.mob.cardsheet #chatcol > #matchcard > #radiosec { position: relative; z-index: 5; margin-top: 10px; padding-top: 8px; background: var(--panel); }
+  body.mob.cardsheet #chatcol > #matchcard > #radiosec { position: relative; z-index: 5; margin-top: 10px; padding-top: 8px; background: var(--panel); isolation: isolate; }
+  /* (the sheet holds the radio too: the portraits sized on the picture (full width less the 12-px padding, 256:110), not on
+     the card, whose % ran them down through the radio and past the screen: user 2026-11-07, tools/web/mobile_card_e2e.py) */
+  body.mob.cardsheet #chatcol > #matchcard { --pich: calc((100vw - 24px) * 110 / 256); }
+  body.mob.cardsheet #chatcol > #matchcard.pors:has(#stageblk:not([hidden])) .por:not([hidden]) {
+    top: calc(12px + var(--pich) * (-0.22 + var(--por-y, 0) / 100)); height: calc(var(--pich) * 1.65 * var(--por-s, 1)); }
+  body.mob.cardsheet #chatcol > #matchcard #radiosec .radiostg { flex-wrap: wrap; }
   #front { position: absolute; left: 0; top: 0; pointer-events: none; z-index: 1; image-rendering: pixelated; }
   #front[hidden] { display: none; }
   #chatover { position: absolute; left: 0; top: 0; width: 100%; height: 100%; overflow: hidden; pointer-events: none; z-index: 1; }
