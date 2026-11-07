@@ -3,7 +3,7 @@
 <head>
 <!-- the site's look (gx: MBAACC's, redrawn; gx/gx.css, user 2026-11-07 "ship it"): its theme set before the first paint
      (viewer.js GX keeps it: ?theme=dark|light|auto and the settings menu's theme row; auto follows the device) -->
-<script>try { var t = localStorage.getItem('mbaaTheme') || 'auto'; document.documentElement.dataset.theme = t === 'auto' ? (matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark') : t; } catch (e) { document.documentElement.dataset.theme = 'dark'; }</script>
+<script>try { var t = localStorage.getItem('mbaaTheme') || 'auto'; document.documentElement.dataset.theme = t === 'auto' ? (matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark') : t; } catch (e) { document.documentElement.dataset.theme = 'dark'; } document.addEventListener('DOMContentLoaded', function () { var m = document.querySelector('meta[name=theme-color]'); if (m) m.content = document.documentElement.dataset.theme === 'light' ? '#f6f2ff' : '#0d0620'; });</script>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, interactive-widget=resizes-content">
 <title>MBAACC Replay Viewer</title>
@@ -21,13 +21,13 @@
 <meta name="twitter:description" content="Watch Melty Blood Actress Again Current Code replays in your browser, frame-exact.">
 <meta name="twitter:image" content="https://watch.meltyblood.org/preview.png">
 <meta name="mbaa-manifest" content="2a2e2bac19a8">
-<meta name="mbaa-chatjs" content="chat.js?v=b00398d7149a">
+<meta name="mbaa-chatjs" content="chat.js?v=9203486199c9">
 <meta name="mbaa-announcer" content="announcer/neco.bin?v=932b15248e89">
 <link rel="manifest" href="site.webmanifest">
 <link rel="icon" href="favicon-48.png" sizes="48x48">
 <link rel="icon" href="icon-192.png" sizes="192x192">
 <link rel="apple-touch-icon" href="icon-192.png">
-<meta name="theme-color" content="#0d0d14">
+<meta name="theme-color" content="#0d0620">  <!-- (the phone browser's bar: the theme's background; set with it, viewer.js GX.apply / the head script) -->
 <link rel="stylesheet" href="icons.css?v=4db5e6fecf18">
 <link rel="stylesheet" href="gx/gx.css?v=1ffeef6825c5">
 <style>
@@ -988,6 +988,6 @@
 </div>
 <script src="mbaa.js?v=0ab30dcacef1"></script>
 <script src="bgm_stream.js?v=cad5cabd6328"></script>
-<script src="viewer.js?v=f1213d0f10ed"></script>
+<script src="viewer.js?v=ac79834a700c"></script>
 </body>
 </html>

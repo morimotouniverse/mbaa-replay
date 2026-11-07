@@ -915,6 +915,12 @@
   body.mob:not(.land):not(.cardsheet) #chatcol > #matchcard #players .ico { width: 28px; height: 28px; display: block; }
   body.mob:not(.land):not(.cardsheet) #chatcol > #matchcard #players .pl:last-child { flex-direction: row-reverse; text-align: right; }
   body.mob:not(.land):not(.cardsheet) #chatcol > #matchcard #players .ch { display: none; }
+  /* (the moon on the icon's corner: the character line is hidden in the slim row, its moon was with it: user 2026-11-07) */
+  body.mob:not(.land):not(.cardsheet) #chatcol > #matchcard #players .pl { position: relative; }
+  body.mob:not(.land):not(.cardsheet) #chatcol > #matchcard #players .ch { display: block !important; position: absolute; left: 17px; bottom: -3px; width: 15px; height: 15px; pointer-events: none; }
+  body.mob:not(.land):not(.cardsheet) #chatcol > #matchcard #players .pl:last-child .ch { left: auto; right: 17px; }
+  body.mob:not(.land):not(.cardsheet) #chatcol > #matchcard #players .ch .mqx { display: none !important; }
+  body.mob:not(.land):not(.cardsheet) #chatcol > #matchcard #players .ch .moon { display: block !important; width: 15px !important; height: 15px !important; }
   body.mob:not(.land):not(.cardsheet) #chatcol > #matchcard #players .vs { padding: 0; }
   body.mob:not(.land):not(.cardsheet) #chatcol > #matchcard .cardnote { top: 50%; bottom: auto; transform: translateY(-50%); }
   /* (over the portrait card's grid / display: contents rules) */

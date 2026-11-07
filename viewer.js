@@ -2913,7 +2913,12 @@ const GX = (() => {
   } catch (e) {}
   const root = document.documentElement, mq = matchMedia('(prefers-color-scheme: light)');
   const g = { theme: th, moons: new Image() };
-  g.apply = t => { g.theme = t; try { localStorage.setItem('mbaaTheme', t); } catch (e) {} root.dataset.theme = t === 'auto' ? (mq.matches ? 'light' : 'dark') : t; };
+  g.apply = t => {
+    g.theme = t; try { localStorage.setItem('mbaaTheme', t); } catch (e) {}
+    root.dataset.theme = t === 'auto' ? (mq.matches ? 'light' : 'dark') : t;
+    const tc = document.querySelector('meta[name=theme-color]');   // (the phone browser's address bar in the theme's background)
+    if (tc) tc.content = root.dataset.theme === 'light' ? '#f6f2ff' : '#0d0620';
+  };
   mq.addEventListener('change', () => { if (g.theme === 'auto') g.apply('auto'); });
   g.apply(th);
   g.moons.onload = () => { plKey = ''; for (const cv of document.querySelectorAll('canvas[data-moon]')) drawMoon(cv, +cv.dataset.moon); };
