@@ -1,6 +1,9 @@
 <!doctype html>
-<html lang="en">
+<html lang="en" class="gx">
 <head>
+<!-- the site's look (gx: MBAACC's, redrawn; gx/gx.css, user 2026-11-07 "ship it"): its theme set before the first paint
+     (viewer.js GX keeps it: ?theme=dark|light|auto and the settings menu's theme row; auto follows the device) -->
+<script>try { var t = localStorage.getItem('mbaaTheme') || 'auto'; document.documentElement.dataset.theme = t === 'auto' ? (matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark') : t; } catch (e) { document.documentElement.dataset.theme = 'dark'; }</script>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, interactive-widget=resizes-content">
 <title>MBAACC Replay Viewer</title>
@@ -18,7 +21,7 @@
 <meta name="twitter:description" content="Watch Melty Blood Actress Again Current Code replays in your browser, frame-exact.">
 <meta name="twitter:image" content="https://watch.meltyblood.org/preview.png">
 <meta name="mbaa-manifest" content="2a2e2bac19a8">
-<meta name="mbaa-chatjs" content="chat.js?v=957d487608b7">
+<meta name="mbaa-chatjs" content="chat.js?v=b00398d7149a">
 <meta name="mbaa-announcer" content="announcer/neco.bin?v=932b15248e89">
 <link rel="manifest" href="site.webmanifest">
 <link rel="icon" href="favicon-48.png" sizes="48x48">
@@ -26,6 +29,7 @@
 <link rel="apple-touch-icon" href="icon-192.png">
 <meta name="theme-color" content="#0d0d14">
 <link rel="stylesheet" href="icons.css?v=4db5e6fecf18">
+<link rel="stylesheet" href="gx/gx.css?v=1ffeef6825c5">
 <style>
   :root { --bg: #0d0d14; --panel: #15151f; --raise: #1d1d2a; --fg: #ececf4; --muted: #8a8aa2; --faint: #5c5c74;
           --accent: #e04a5a; --accent2: #ffb84a; --line: #262636; --w: min(100%, 960px); }
@@ -984,6 +988,6 @@
 </div>
 <script src="mbaa.js?v=0ab30dcacef1"></script>
 <script src="bgm_stream.js?v=cad5cabd6328"></script>
-<script src="viewer.js?v=e7f9dd2b0e45"></script>
+<script src="viewer.js?v=f1213d0f10ed"></script>
 </body>
 </html>

@@ -2888,7 +2888,7 @@ function cuDone(s, f0, t0, drawn) {
 // set from row 4; cursor frames 64x64, P1 0-9 and P2 10-19, the 1P / 2P tags 20 / 21; moon icons 56x56 at y 288),
 // placed as CharaSelectIcons_Draw does (the icon cell from the game's chara -> cell table). The characters come from the
 // battle slots, so a game after a character select shows its new picks.
-const ICON_CELL = 0x5519F8, BSLOT = 0x74D838, MOON_X = [112, 0, 224], MOON_NAME = ['Crescent', 'Full', 'Half'];
+const ICON_CELL = 0x5519F8, BSLOT = 0x74D838, MOON_NAME = ['Crescent', 'Full', 'Half'];
 // the select screen's icon cell per character id (MBAA.exe .data ICON_CELL, ids 0..51; -1: none), for drawing before
 // a game has booted (the live list)
 const ICON_CELLS = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 33, 16, 17, 18, 19, -1, 20, 21, -1, 23, -1, -1, 22,
@@ -2900,26 +2900,22 @@ function iconCell(c) {
   const base = CHARA[c] && CHARA[c].startsWith('B. ') ? +Object.keys(CHARA).find(k => CHARA[k] === CHARA[c].slice(3)) : -1;
   return cellOf(base);
 }
-// ---- the game-graphics UI (gx: web/shell/gx/, tools/ui_assets/gx_build.py), on trial for the owner to judge (user
-// 2026-11-07): ?ui=gx turns it on in this browser, ?ui=std off; ?theme=dark|light|auto (auto: the system's), also in the
-// settings menu. gx.css carries the look (the game's plates, bars, timer and names redrawn in CSS, not its bitmaps: user
-// 2026-11-07); here the moon marks (gx/moons.svg, drawn at the canvas's own resolution).
+// ---- the site's look (gx: MBAACC's, redrawn in CSS / SVG; web/shell/gx/, user 2026-11-07 "ship it"): index.html loads
+// gx.css and sets the theme before the first paint; here ?theme=dark|light|auto (auto: the device's), the settings menu's
+// theme row, the device's own switch while on auto, and the moon marks (gx/moons.svg, drawn at the canvas's resolution).
 const GX = (() => {
-  let on = false, th = 'auto';
+  let th = 'auto';
   try {
     const q = new URLSearchParams(location.search);
-    if (q.get('ui') === 'gx') localStorage.setItem('mbaaUi', 'gx'); else if (q.get('ui') === 'std') localStorage.removeItem('mbaaUi');
     if (/^(dark|light|auto)$/.test(q.get('theme') || '')) localStorage.setItem('mbaaTheme', q.get('theme'));
-    on = localStorage.getItem('mbaaUi') === 'gx'; th = localStorage.getItem('mbaaTheme') || 'auto';
+    localStorage.removeItem('mbaaUi');  // (the trial's switch, gone)
+    th = localStorage.getItem('mbaaTheme') || 'auto';
   } catch (e) {}
-  if (!on) return null;
   const root = document.documentElement, mq = matchMedia('(prefers-color-scheme: light)');
   const g = { theme: th, moons: new Image() };
   g.apply = t => { g.theme = t; try { localStorage.setItem('mbaaTheme', t); } catch (e) {} root.dataset.theme = t === 'auto' ? (mq.matches ? 'light' : 'dark') : t; };
   mq.addEventListener('change', () => { if (g.theme === 'auto') g.apply('auto'); });
-  root.classList.add('gx'); g.apply(th);
-  const css = document.createElement('link'); css.rel = 'stylesheet'; css.href = 'gx/gx.css?v=' + (document.querySelector('script[src^="viewer.js"]') || { src: '' }).src.split('?')[1];
-  document.head.append(css);
+  g.apply(th);
   g.moons.onload = () => { plKey = ''; for (const cv of document.querySelectorAll('canvas[data-moon]')) drawMoon(cv, +cv.dataset.moon); };
   g.moons.src = 'gx/moons.svg';
   return g;
@@ -2930,8 +2926,8 @@ function drawMoon(cv, m) {
   x.clearRect(0, 0, cv.width, cv.height);
   cv.dataset.moon = m;
   const k = m >= 0 && m <= 2 ? m : m === 9 ? 3 : -1;
-  if (GX && GX.moons.complete && GX.moons.naturalWidth && k >= 0) { const w = GX.moons.naturalWidth / 4; x.drawImage(GX.moons, k * w, 0, w, GX.moons.naturalHeight, 0, 0, cv.width, cv.height); }
-  else if (plArt && m >= 0 && m <= 2) x.drawImage(plArt.cursor, MOON_X[m], 288, 56, 56, 0, 0, cv.width, cv.height);
+  // (until the SVG is in: nothing; its onload draws every moon canvas)
+  if (GX.moons.complete && GX.moons.naturalWidth && k >= 0) { const w = GX.moons.naturalWidth / 4; x.drawImage(GX.moons, k * w, 0, w, GX.moons.naturalHeight, 0, 0, cv.width, cv.height); }
 }
 // this tab's random id, sent with live record requests: the feed counts the tabs watching each match (nothing else)
 const VIEWER = Array.from(crypto.getRandomValues(new Uint8Array(12)), b => 'abcdefghijklmnopqrstuvwxyz0123456789'[b % 36]).join('');
@@ -8100,7 +8096,7 @@ function placeControls(mob) {
     }
     sizeRow.append(segL, seg);
     pop.append(sizeRow);
-    if (GX) {  // (the gx trial: its theme, as a row like the size's)
+    {  // (the theme, as a row like the size's)
       const row = document.createElement('div'); row.className = 'row';
       const sg = document.createElement('div'); sg.className = 'sizeseg'; sg.setAttribute('role', 'radiogroup'); sg.setAttribute('aria-label', 'theme');
       const lb = document.createElement('span'); lb.className = 'lbl'; lb.textContent = 'theme';

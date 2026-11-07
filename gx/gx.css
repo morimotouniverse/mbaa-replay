@@ -90,9 +90,11 @@
 :root.gx[data-theme="light"] #liveitems .lmoon { background: radial-gradient(closest-side, #1f0f48 70%, transparent 100%); border-radius: 50%; }
 
 /* ---- controls: thin frames that light up on the game's blue line (the menu cursor) ---- */
-:root.gx :is(.tbar, #transportsec) button:not(.vrow) { border: 1px solid #ffffff2a; background: var(--gx-glass); border-radius: 2px; }
-:root.gx :is(.tbar, #transportsec) button:not(.vrow):hover { border-color: var(--gx-blue); box-shadow: 0 0 6px #6c54fc70; }
-:root.gx[data-theme="light"] :is(.tbar, #transportsec) button:not(.vrow) { border-color: var(--line); color: var(--fg); }
+/* (the frames as inset outlines, not borders: borders widened every button, and the phone's bar ran off the screen,
+   its comments and menu buttons past the edge) */
+:root.gx :is(.tbar, #transportsec) button:not(.vrow) { box-shadow: inset 0 0 0 1px #ffffff2a; background: var(--gx-glass); border-radius: 2px; }
+:root.gx :is(.tbar, #transportsec) button:not(.vrow):hover { box-shadow: inset 0 0 0 1px var(--gx-blue), 0 0 6px #6c54fc70; }
+:root.gx[data-theme="light"] :is(.tbar, #transportsec) button:not(.vrow) { box-shadow: inset 0 0 0 1px var(--line); color: var(--fg); }
 :root.gx[data-theme="light"] select { background: #fff; color: var(--fg); border-color: var(--line); }
 
 /* ---- chat: the game face on names and tabs; the lines in the reading face, on the theme's panel ---- */
@@ -106,3 +108,15 @@
 :root.gx[data-theme="light"] #chatlog { background: #f6f4ff; box-shadow: inset 0 0 0 1px var(--line); }
 /* dark: the chat tab lit like the menu cursor */
 :root.gx[data-theme="dark"] #chatsec button.ctab.on { background: linear-gradient(90deg, #5a0712, var(--gx-red)); border-color: #ff6d7d; color: #fff; }
+
+/* ---- phones held upright: the bar fits the screen (user's 393-px phone: the wider game face ran the comments and menu
+   buttons off the edge). The clock smaller, and the base sheet's narrow-screen squeeze (no R labels, slimmer buttons;
+   index.html, <= 380 px there) up to 430 px ---- */
+:root.gx body.mob:not(.land) #time { font-size: 14px; -webkit-text-stroke-width: 3px; letter-spacing: 0; }
+@media (max-width: 430px) {
+  :root.gx body.mob .tbar .rl { display: none; }
+  :root.gx body.mob .tbar button { min-width: 25px; padding: 0 2px; }
+  :root.gx body.mob .tbar #toend { padding: 0 5px 0 3px; }
+  :root.gx body.mob.live .tbar #toend::after { font-size: 9.5px; letter-spacing: 0; margin-left: 2px; }
+}
+@media (max-width: 400px) { :root.gx body.mob .tbar button { min-width: 24px; } }

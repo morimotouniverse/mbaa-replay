@@ -80,7 +80,12 @@
   // chathistory-maxmessages; its CHATHISTORY= token lowers it), the next page after the last msgid
   const HIST_FROM = '2026-01-01T00:00:00.000Z';
   let PAGE = 200;
-  const MOON_X = [112, 0, 224], MOON_NAME = ['Crescent', 'Full', 'Half'];
+  const MOON_NAME = ['Crescent', 'Full', 'Half'];
+  // the moon marks: the site's (viewer.js GX.moons, gx/moons.svg: crescent, full, half, eclipse in four cells), drawn when
+  // it is in (whenMoons: now, or on its load)
+  const moonDraw = (x, m, dx, dy, dw, dh) => { const im = GX.moons, k = m === 9 ? 3 : m; if (!im.naturalWidth || k < 0 || k > 3) return;
+    const w = im.naturalWidth / 4; x.drawImage(im, k * w, 0, w, im.naturalHeight, dx, dy, dw, dh); };
+  const whenMoons = f => { if (GX.moons.complete && GX.moons.naturalWidth) f(); else GX.moons.addEventListener('load', f, { once: true }); };
   // ---- server emotes: the Melty Blood Discord server's custom emotes (tools/chat/discord_emotes.mjs lists them,
   // tools/chat/fetch_emotes.py makes our copies), hosted as our own files (emotes/<file>.webp, 48 px tall; animated ones
   // animated webp): Discord's CDN is never loaded by a viewer. The text sent stays ":name:" (plain IRC clients read the
@@ -515,9 +520,10 @@
       const x = cv.getContext('2d'), W = cv.width, H = cv.height, cell = validChara(chara) ? api.iconCell(chara) : -1;
       x.clearRect(0, 0, W, H);
       if (cell >= 0) x.drawImage(art.icons, 48 * (cell % 10), (Math.floor(cell / 10) + 4) * 64, 48, 64, 0, 0, W, H);
-      if (moon >= 0 && moon <= 2) { const m = W * 0.5; x.drawImage(art.cursor, MOON_X[moon], 288, 56, 56, W - m, H - m, m, m); }
+      if (moon >= 0 && moon <= 2) { const m = W * 0.5; moonDraw(x, moon, W - m, H - m, m, m); }
     };
     if (art) draw(); else artWait.push(draw);
+    whenMoons(() => { if (art) draw(); });
   }
   const iconCanvas = (cls, size, chara, moon) => {
     const cv = document.createElement('canvas');
@@ -557,9 +563,13 @@
   body.mob.land #chatsec .chead:has(.cspread:not([hidden])) { flex-wrap: wrap; row-gap: 4px; }
   body.mob.land #chatsec .cspread { order: 9; flex: 1 0 100%; box-sizing: border-box; justify-content: space-between; }
   body.mob.land #chatsec .cspread input { flex: 1 1 auto; }
-  #chatsec .ctabs { display: flex; gap: 4px; flex: 1 1 auto; min-width: 0; }
+  /* (the tabs whole, never cut ("#melty..." / "this match...": user 2026-11-07): a row that runs out of room scrolls
+     sideways; "on picture" is the player bar's comments button (#cmtog, the same #chatover_on), not repeated here) */
+  #chatsec .ctabs { display: flex; gap: 4px; flex: 1 1 auto; min-width: 0; overflow-x: auto; scrollbar-width: none; }
+  #chatsec .ctabs::-webkit-scrollbar { display: none; }
   #chatsec button.ctab { line-height: 1.4; font-size: 11px; padding: 2px 8px; border-radius: 999px; color: var(--faint); background: none; border: 1px solid var(--line);
-                   cursor: pointer; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 140px; }
+                   cursor: pointer; white-space: nowrap; flex: none; }
+  #chatsec .chead label.tog:has(#chatover_on) { display: none; }
   #chatsec button.ctab.on { color: #fff; background: #e04a5a33; border-color: #e04a5a88; }
   #chatsec .ctab .n { opacity: .6; margin-left: 4px; }
   #chatsec .cstate { font-size: 10px; color: var(--faint); }
@@ -2250,8 +2260,8 @@ onmessage = ({ data: m }) => {
   $('#chatcolor').oninput = e => { prof.color = e.target.value; saveProf(); profShow(); };
   [0, 1, 2].forEach(m => {
     const cv = document.createElement('canvas'); cv.width = cv.height = 24; cv.title = MOON_NAME[m] ? MOON_NAME[m] + ' Moon' : '';
-    const draw = () => cv.getContext('2d').drawImage(art.cursor, MOON_X[m], 288, 56, 56, 0, 0, 24, 24);
-    if (art) draw(); else artWait.push(draw);
+    cv.width = cv.height = 48; cv.style.width = cv.style.height = '24px';  // (2x: the SVG drawn sharp)
+    whenMoons(() => moonDraw(cv.getContext('2d'), m, 0, 0, 48, 48));
     cv.onclick = () => { prof.moon = m; saveProf(); profShow(); };
     $('.moons').append(cv);
   });
