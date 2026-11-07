@@ -3050,7 +3050,9 @@ const porUrls = new Map();
 // each portrait's fit on the card, by the portrait's character id (a boss uses its base's): y = down by % of the card's
 // height, s = scale (of today's height), x = inward by % of the card's width (P2 mirrored). {0, 1, 0} = the plain rule.
 // Dialled on the real card with ?portune=1 (its "Copy JSON" output is pasted here as it is).
-const POR_ADJ = {};
+// Neco-Arc (20) and Neco-Arc Chaos (25): their splashes stand the figure in the image's lower half (head at row ~254 / 262
+// of 512, the rest at ~40-150), so on the plain rule the head sat at the picture's foot or under it: raised (necoTV #5)
+const POR_ADJ = { 20: { y: -55 }, 25: { y: -57 } };
 function porApply(el, path) {
   const id = path ? +path.match(/csel_c(\d+)\.png$/)[1] : -1, a = (porTune ? porTune.adj : POR_ADJ)[id] || {};
   el.style.setProperty('--por-y', +a.y || 0); el.style.setProperty('--por-s', a.s > 0 ? +a.s : 1); el.style.setProperty('--por-x', +a.x || 0);

@@ -923,7 +923,11 @@
      the card, whose % ran them down through the radio and past the screen: user 2026-11-07, tools/web/mobile_card_e2e.py) */
   body.mob.cardsheet #chatcol > #matchcard { --pich: calc((100vw - 24px) * 110 / 256); }
   body.mob.cardsheet #chatcol > #matchcard.pors:has(#stageblk:not([hidden])) .por:not([hidden]) {
-    top: calc(12px + var(--pich) * (-0.22 + var(--por-y, 0) / 100)); height: calc(var(--pich) * 1.65 * var(--por-s, 1)); }
+    top: calc(12px + var(--pich) * (-0.22 + var(--por-y, 0) / 100)); height: calc(var(--pich) * 1.65 * var(--por-s, 1));
+    /* (cut at the picture's top and foot: the sheet scrolls (overflow auto, not hidden), so the figures ran on below the
+       picture behind the radio: necoTV #5. Insets in the figure's own box: the picture spans its -off .. pich - off) */
+    --off: calc(var(--pich) * (-0.22 + var(--por-y, 0) / 100));
+    clip-path: inset(max(0px, -1 * var(--off)) 0 max(0px, var(--pich) * 1.65 * var(--por-s, 1) - var(--pich) + var(--off)) 0); }
   body.mob.cardsheet #chatcol > #matchcard #radiosec .radiostg { flex-wrap: wrap; }
   #front { position: absolute; left: 0; top: 0; pointer-events: none; z-index: 1; image-rendering: pixelated; }
   #front[hidden] { display: none; }
@@ -1309,7 +1313,10 @@
       px.onclick = () => paneSet(false);
       card.addEventListener('click', e => { if (portPhone() && !e.target.closest('button, a, input, select, #radiosec')) sheet(!document.body.classList.contains('cardsheet')); });
       document.addEventListener('keydown', e => { if (e.key === 'Escape') { if (!pane.hidden) paneSet(false); if (document.body.classList.contains('cardsheet')) sheet(false); } });
-      document.addEventListener('pointerdown', e => { if (document.body.classList.contains('cardsheet') && !card.contains(e.target)) sheet(false); });
+      // (a tap outside closes the sheet on its click, not its press: closed on the press, the slim card row came back under
+      // the finger and the release reopened the sheet, and the tapped live match never got the tap: necoTV #6. The click's
+      // target is already picked, so it still gets it; a drag that scrolls leaves the sheet up)
+      document.addEventListener('click', e => { if (document.body.classList.contains('cardsheet') && !card.contains(e.target)) sheet(false); }, true);
       const cplace = () => {
         if (inCol()) {
           if (card.parentNode !== col) { col.prepend(card); card.append(note); col.append(pane); }
