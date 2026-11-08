@@ -21,7 +21,7 @@
 <meta name="twitter:description" content="Live Melty Blood: Actress Again Current Code matches, chat and replays in your browser.">
 <meta name="twitter:image" content="https://watch.meltyblood.org/preview.png">
 <meta name="mbaa-manifest" content="2a2e2bac19a8">
-<meta name="mbaa-chatjs" content="chat.js?v=abe678bca163">
+<meta name="mbaa-chatjs" content="chat.js?v=b704a8e1f566">
 <meta name="mbaa-announcer" content="announcer/neco.bin?v=932b15248e89">
 <link rel="manifest" href="site.webmanifest">
 <link rel="icon" href="favicon-48.png" sizes="48x48">
@@ -449,7 +449,9 @@
     display: flex; flex-direction: column; align-items: center; width: 52%; margin-top: var(--stack-top, 40px); pointer-events: none; }
   #matchcard:has(#stageblk:not([hidden])) #stageblk .plate .name { width: 100%; max-height: none; margin: 0; align-self: auto; }
   #matchcard:has(#stageblk:not([hidden])) #stageblk .plate .trk { position: static; background: none; margin: 1px 0 0; padding: 0; max-width: 100%;
-    color: #fff; text-shadow: 0 1px 2px #000, 0 0 6px #000; }
+    color: #fff; text-shadow: 0 1px 2px #000, 0 0 6px #000;
+    white-space: normal; overflow: visible; text-align: center; text-wrap: balance; line-height: 1.25;
+    width: max-content; max-width: min(170%, 300px); }  /* (the whole title, up to 1.7x the plate (~90% of a narrow card), wrapped past that; never "Strange Drea…": user 2026-11-08) */
   #matchcard:has(#stageblk:not([hidden])) #players { grid-area: 1 / 1; z-index: 1; flex-direction: row; align-items: flex-start;
     justify-content: space-between; gap: 4px; margin: 0; padding: 6px 6px 0; text-shadow: 0 1px 2px #000, 0 0 6px #000; }
   /* each player a 2x2 grid: icon | name over moon | character (P2 mirrored), so both texts get the full width beside */

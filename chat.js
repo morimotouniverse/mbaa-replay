@@ -567,10 +567,12 @@
   body.mob.land #chatsec .cspread input { flex: 1 1 auto; }
   /* (the tabs whole, never cut ("#melty..." / "this match...": user 2026-11-07): a row that runs out of room scrolls
      sideways; "on picture" is the player bar's comments button (#cmtog, the same #chatover_on), not repeated here) */
-  #chatsec .ctabs { display: flex; gap: 4px; flex: 1 1 auto; min-width: 0; overflow-x: auto; scrollbar-width: none; }
+  /* (the tabs wrap onto more rows: a sideways strip with no scrollbar cut the third tab off and a mouse could not move it,
+     user 2026-11-08; a tab longer than the column is cut with an ellipsis) */
+  #chatsec .ctabs { display: flex; flex-wrap: wrap; gap: 4px; flex: 1 1 auto; min-width: 0; }
   #chatsec .ctabs::-webkit-scrollbar { display: none; }
   #chatsec button.ctab { line-height: 1.4; font-size: 11px; padding: 2px 8px; border-radius: 999px; color: var(--faint); background: none; border: 1px solid var(--line);
-                   cursor: pointer; white-space: nowrap; flex: none; }
+                   cursor: pointer; white-space: nowrap; flex: none; max-width: 100%; overflow: hidden; text-overflow: ellipsis; }
   #chatsec .chead label.tog:has(#chatover_on) { display: none; }
   #chatsec button.ctab.on { color: #fff; background: #e04a5a33; border-color: #e04a5a88; }
   #chatsec .ctab .n { opacity: .6; margin-left: 4px; }
