@@ -3963,8 +3963,11 @@ onmessage = ({ data: m }) => {
   const GLOV_FILE = ['fonts/chatfont.ttf?v=1', 'fonts/chatfont_gothic.ttf?v=1', 'fonts/chatfont_mincho.ttf?v=1', 'fonts/kiwisoda.ttf?v=1'];  /* (bump v with a new font) */
   // a font's bytes, also as a page font (MbaaOv0..2) so text runs drawn by the canvas use it for what it covers
   function glovFaceLoad(f) {
-    if (!glov.faceP[f]) glov.faceP[f] = fetch(GLOV_FILE[f]).then(r => r.ok ? r.arrayBuffer() : null).then(async b => {
-      if (!b) return null;
+    // (a failed fetch is tried again by the next comment wanting it, 30 s on: it was kept for good, so a font missing for
+    // a minute after a deploy stayed missing until a reload, user 2026-11-08)
+    if (glov.faceP[f] && glov.faceBad && glov.faceBad[f] && performance.now() - glov.faceBad[f] > 30e3) { glov.faceP[f] = null; glov.faceBad[f] = 0; }
+    if (!glov.faceP[f]) glov.faceP[f] = fetch(GLOV_FILE[f]).then(r => r.ok ? r.arrayBuffer() : null, () => null).then(async b => {
+      if (!b) { (glov.faceBad || (glov.faceBad = []))[f] = performance.now(); return null; }
       try { const ff = new FontFace(`MbaaOv${f}`, b.slice(0)); await ff.load(); document.fonts.add(ff); } catch (e) {}
       glov.faces[f] = new Uint8Array(b);
       glovRunMeasure.clear();
