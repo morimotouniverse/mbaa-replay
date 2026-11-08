@@ -2914,23 +2914,26 @@ function iconCell(c) {
 // gx.css and sets the theme before the first paint; here ?theme=dark|light|auto (auto: the device's), the settings menu's
 // theme row, the device's own switch while on auto, and the moon marks (gx/moons.svg, drawn at the canvas's resolution).
 const GX = (() => {
-  let th = 'auto';
+  // dark unless the viewer chose (user 2026-11-07); only a choice is stored (mbaaTheme2). The old mbaaTheme was written as
+  // 'auto' on every visit, so only an explicit dark / light in it carries over (theme.js does the same before first paint)
+  let th = 'dark';
   try {
     const q = new URLSearchParams(location.search);
-    if (/^(dark|light|auto)$/.test(q.get('theme') || '')) localStorage.setItem('mbaaTheme', q.get('theme'));
+    if (/^(dark|light|auto)$/.test(q.get('theme') || '')) localStorage.setItem('mbaaTheme2', q.get('theme'));
     localStorage.removeItem('mbaaUi');  // (the trial's switch, gone)
-    th = localStorage.getItem('mbaaTheme') || 'auto';
+    const o = localStorage.getItem('mbaaTheme');
+    th = localStorage.getItem('mbaaTheme2') || (o === 'light' || o === 'dark' ? o : 'dark');
   } catch (e) {}
   const root = document.documentElement, mq = matchMedia('(prefers-color-scheme: light)');
   const g = { theme: th, moons: new Image() };
-  g.apply = t => {
-    g.theme = t; try { localStorage.setItem('mbaaTheme', t); } catch (e) {}
+  g.apply = (t, save = true) => {
+    g.theme = t; if (save) try { localStorage.setItem('mbaaTheme2', t); } catch (e) {}
     root.dataset.theme = t === 'auto' ? (mq.matches ? 'light' : 'dark') : t;
     const tc = document.querySelector('meta[name=theme-color]');   // (the phone browser's address bar in the theme's background)
     if (tc) tc.content = root.dataset.theme === 'light' ? '#f6f2ff' : '#0d0620';
   };
-  mq.addEventListener('change', () => { if (g.theme === 'auto') g.apply('auto'); });
-  g.apply(th);
+  mq.addEventListener('change', () => { if (g.theme === 'auto') g.apply('auto', false); });
+  g.apply(th, false);
   g.moons.onload = () => { plKey = ''; for (const cv of document.querySelectorAll('canvas[data-moon]')) drawMoon(cv, +cv.dataset.moon); };
   g.moons.src = 'gx/moons.svg';
   return g;
@@ -3875,26 +3878,51 @@ frameBus.add(function marqueeStep(now) {
   if (!mPlay) return;
   for (const a of mqAnims) { try { a.currentTime = (a.currentTime || 0) + dt; } catch (e) {} }
 });
+// a row rebuilt (the live list every 15 s) keeps its name's place in the loop: the old row's animation hands its time on;
+// animations whose text left the page are dropped (they were stepped forever)
+function mqTakeOver(key) {
+  let t0 = 0;
+  for (const a of mqAnims) {
+    const el = a.effect && a.effect.target;
+    if (el && el.isConnected) continue;
+    if (a.__key === key) t0 = a.currentTime || 0;
+    a.cancel(); mqAnims.delete(a);
+  }
+  return t0;
+}
 frameBus.add(function playState() {
   const on = !!(session && session.tl && !ui.paused && !document.hidden);
   if (on === mPlay) return;
   mPlay = on; document.body.classList.toggle('mplay', on);
   for (const a of mqAnims) { try { if (on) a.pause(); else a.play(); } catch (e) {} }
 });
+// a name longer than its room scrolls one way and loops, as the game's own HUD names do (main_browser.cpp banner_draw:
+// 40 px/s, a 24 px gap between laps; a viewer, 2026-11-07: ours went to the end and back): the text and a copy of it
+// after the gap move left by one lap, linearly, forever, so the copy takes the original's place seamlessly
+const MQ_SPEED = 40, MQ_GAP = 24;
 function marquee(root, sel = '.mqx') {
   for (const nm of root.querySelectorAll(sel)) {
-    const over = nm.firstChild.scrollWidth - nm.clientWidth;
-    nm.classList.toggle('mq', over > 2);
     const t = nm.firstChild;
+    if (!t) continue;
+    const q = t.__mq;
+    if (q && q.clone.parentNode === t) q.clone.remove();  // (measured without the copy; a new name replaced both anyway)
+    const w = t.scrollWidth, over = w - nm.clientWidth;
+    nm.classList.toggle('mq', over > 2);
     // (a Web Animation with concrete numbers runs on the compositor; the CSS keyframes with var() re-styled the text
     // every frame on the main thread)
-    if (t.__mq && t.__mq.over === over) continue;
-    if (t.__mq) { t.__mq.anim.cancel(); mqAnims.delete(t.__mq.anim); t.__mq = null; }
+    if (q && q.w === w && over > 2 && q.anim.playState !== 'idle') { t.appendChild(q.clone); continue; }
+    if (q) { q.anim.cancel(); mqAnims.delete(q.anim); t.__mq = null; }
     if (over <= 2 || (window.matchMedia && matchMedia('(prefers-reduced-motion: reduce)').matches) || !t.animate) continue;
-    const anim = t.animate([{ transform: 'translateX(0)', offset: 0 }, { transform: 'translateX(0)', offset: 0.15 },
-                            { transform: `translateX(${-over}px)`, offset: 0.85 }, { transform: `translateX(${-over}px)`, offset: 1 }],
-                           { duration: (over / 60 / 0.7 + 0.5) * 1000, iterations: Infinity, direction: 'alternate', easing: 'ease-in-out' });
-    t.__mq = { over, anim }; mqAnims.add(anim);
+    const key = t.textContent, t0 = mqTakeOver(key);
+    const clone = document.createElement('span');
+    clone.className = 'mqc'; clone.setAttribute('aria-hidden', 'true'); clone.style.paddingLeft = `${MQ_GAP}px`;
+    for (const c of [...t.childNodes]) clone.appendChild(c.cloneNode(true));
+    t.appendChild(clone);
+    const lap = w + MQ_GAP;
+    const anim = t.animate([{ transform: 'translateX(0)' }, { transform: `translateX(${-lap}px)` }],
+                           { duration: lap / MQ_SPEED * 1000, iterations: Infinity, easing: 'linear' });
+    anim.__key = key; if (t0) anim.currentTime = t0;
+    t.__mq = { w, over, anim, clone }; mqAnims.add(anim);
     if (mPlay) anim.pause();
   }
 }

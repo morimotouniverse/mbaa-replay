@@ -3,7 +3,7 @@
 <head>
 <!-- the site's look (gx: MBAACC's, redrawn; gx/gx.css, user 2026-11-07 "ship it"): its theme set before the first paint
      (viewer.js GX keeps it: ?theme=dark|light|auto and the settings menu's theme row; auto follows the device) -->
-<script src="theme.js?v=c2ad34d3e632"></script>
+<script src="theme.js?v=f9f1ca8924db"></script>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, interactive-widget=resizes-content">
 <title>MBAACC Replay Viewer</title>
@@ -21,7 +21,7 @@
 <meta name="twitter:description" content="Watch Melty Blood Actress Again Current Code replays in your browser, frame-exact.">
 <meta name="twitter:image" content="https://watch.meltyblood.org/preview.png">
 <meta name="mbaa-manifest" content="2a2e2bac19a8">
-<meta name="mbaa-chatjs" content="chat.js?v=3fa5ffa33f5a">
+<meta name="mbaa-chatjs" content="chat.js?v=941e67213746">
 <meta name="mbaa-announcer" content="announcer/neco.bin?v=932b15248e89">
 <link rel="manifest" href="site.webmanifest">
 <link rel="icon" href="favicon-48.png" sizes="48x48">
@@ -740,11 +740,10 @@
   #charpop .cp-wiki { font-size: 12px; color: var(--accent); text-decoration: none; }
   #charpop .cp-wiki:hover { text-decoration: underline; }
   #charpop .cp-wiki[hidden] { display: none; }
-  /* a text longer than its room scrolls to its end and back (viewer.js marquee(): .mqx holding a .t) */
+  /* a text longer than its room scrolls one way and loops, as the game's HUD names (viewer.js marquee(): .mqx holding a .t + its copy .mqc) */
   #liveitems .lnm, .mqx { overflow: hidden; white-space: nowrap; min-width: 0; }
   :is(#liveitems, #nextcard) .lnm .t, .mqx .t { display: inline-block; }
   :is(#liveitems, #nextcard) .lnm.mq .t, .mqx.mq .t { will-change: transform; }  /* (viewer.js marquee: a Web Animation) */
-  @keyframes lmq { 0%, 15% { transform: translateX(0); } 85%, 100% { transform: translateX(var(--d)); } }
   @media (prefers-reduced-motion: reduce) { :is(#liveitems, #nextcard) .lnm.mq .t, .mqx.mq .t { animation: none; } :is(#liveitems, #nextcard) .lnm, .mqx { text-overflow: ellipsis; } }
   #liveitems .lvs { font-size: 10px; color: var(--faint); letter-spacing: .08em; flex: none; }
   #liveitems .lview, #watching { display: inline-flex; align-items: center; gap: 3px; padding: 1px 6px; border-radius: 999px; flex: none;
@@ -1000,6 +999,6 @@
 </div>
 <script src="mbaa.js?v=4b41dfd31d9d"></script>
 <script src="bgm_stream.js?v=cad5cabd6328"></script>
-<script src="viewer.js?v=be519447dd2c"></script>
+<script src="viewer.js?v=564fecb354e2"></script>
 </body>
 </html>

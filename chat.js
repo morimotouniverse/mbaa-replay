@@ -3387,8 +3387,12 @@ onmessage = ({ data: m }) => {
   const SERVICES = new Set(['histserv', 'chanserv', 'nickserv']);
   function membersShow() {
     const c = chan(shown);
-    const people = [...c.names].filter(n => !SERVICES.has(key(n)));
-    membBtn.textContent = people.length ? `people ${people.length}` : 'people';
+    const all = [...c.names].filter(n => !SERVICES.has(key(n)));
+    // (only signed-in accounts are listed by name; guests are one count: user 2026-11-07, tired of a list of "viewer1826",
+    // "viewer1926468" -- guests read only, their names are random)
+    const signed = n => key(n) === key(irc.nick) ? !!irc.account : key(n) === key(BOT) || !!irc.accts.get(key(n));
+    const people = all.filter(signed), guests = all.length - people.length;
+    membBtn.textContent = all.length ? `people ${all.length}` : 'people';
     membBtn.setAttribute('aria-expanded', String(membOpen));
     membEl.hidden = !membOpen;
     if (!membOpen) return;
@@ -3412,7 +3416,8 @@ onmessage = ({ data: m }) => {
     rows.sort((a, b) => ((a.aw != null) - (b.aw != null)) || (rank(a) - rank(b)) || a.name.localeCompare(b.name, undefined, { sensitivity: 'base' }));
     const away = rows.filter(r => r.aw != null).length;
     const h = document.createElement('div'); h.className = 'mh';
-    h.textContent = `${rows.length - away} here${away ? ` · ${away} away` : ''}`;
+    h.textContent = `${rows.length - away} here${away ? ` · ${away} away` : ''}${guests ? ` · ${guests} guest${guests === 1 ? '' : 's'}` : ''}`;
+    if (guests) h.title = `${guests} watching without signing in${irc.account ? '' : ' (you too)'}`;
     const els = rows.map(r => {
       const d = document.createElement('div'); d.className = 'mm' + (r.aw != null ? ' away' : '') + (r.idle ? ' idle' : '');
       const dot = document.createElement('i'); dot.className = 'dot';
@@ -4554,9 +4559,11 @@ onmessage = ({ data: m }) => {
   setInterval(() => { if (matchChan && tl.entries.length) { tlPlace(); tlKick(); } }, 1000);
 
   // ---- IRC ----
-  const irc = { ws: null, registered: false, nick: prof.nick, caps: new Set(), batches: new Map(), retry: 0, lastSend: -1e9, account: null, away: new Map(), spreadGot: false, stylesAsk: 0, profGot: false, profAsk: 0 };
+  const irc = { ws: null, registered: false, nick: prof.nick, caps: new Set(), batches: new Map(), retry: 0, lastSend: -1e9, account: null, away: new Map(), accts: new Map(), spreadGot: false, stylesAsk: 0, profGot: false, profAsk: 0 };
   const WANT = ['message-tags', 'server-time', 'echo-message', 'batch', 'draft/chathistory', 'chathistory', 'draft/message-redaction',
     'multi-prefix', 'sasl', 'account-tag',
+    // (who is signed in, for the people list: an account on every JOIN, its changes, and WHOX's account column at joining)
+    'extended-join', 'account-notify',
     // read markers (MARKREAD), presence (AWAY to channel members), history's TAGMSGs (reactions, when the server stores
     // them: tagmsg-storage) and its joins / parts as events (dropped: history, not now)
     'draft/read-marker', 'away-notify', 'draft/event-playback'];
@@ -4684,16 +4691,6 @@ onmessage = ({ data: m }) => {
       sign.append(a);
     }
     if (!signedIn) menuFill([['edit profile', profEdit]]);
-    // a guest on the random name: a light, dismissible prompt (the people list shows everyone's nick)
-    if (!signedIn && unnamed() && !prof.namePromptOff && auth.state !== 'denied' && auth.state !== 'name') {
-      const t = document.createElement('span'); t.className = 'cnamep';
-      const set = document.createElement('a'); set.href = '#'; set.textContent = 'set a name';
-      set.onclick = e => { e.preventDefault(); profEdit(); const i = $('#chatnick'); i.focus(); i.select(); };
-      const x = document.createElement('button'); x.type = 'button'; x.className = 'txt'; x.textContent = '✕'; x.title = 'keep this name'; x.setAttribute('aria-label', 'dismiss');
-      x.onclick = () => { prof.namePromptOff = 1; store.set('mbaa-chat-profile', prof); authShow(); };
-      t.append(`others see you as ${prof.nick} · `, set, auth.state === 'guest' ? ' (sign in to chat)' : '', ' ', x);
-      authEl.append(t);
-    }
     if (auth.err) { const e = document.createElement('span'); e.className = 'cerr'; e.textContent = auth.err; authEl.append(e); }
     authEl.hidden = !authEl.childElementCount;
     // a guest on a server with sign-in: no input (channels are +M); without sign-in (auth 'none'): as before
@@ -4701,7 +4698,7 @@ onmessage = ({ data: m }) => {
     $('#chatnick').disabled = signedIn;
     // (signed in, the name is the account: "change name" above renames it; a guest names the nick the people list shows,
     // speaking or not)
-    $('#chatnick').closest('.prow').hidden = signedIn;
+    $('#chatnick').closest('.prow').hidden = signedIn || formEl.hidden;  // (a guest who cannot chat is listed as a count, unnamed)
     if (signedIn) {  // (the nick box shows the name, not the IRC nick "Name-1234"; renaming is "change name")
       const full = shownNick(irc.account, irc.account, auth.name);
       $('.mynick').textContent = disp(full); $('.mynick').title = full; $('#chatnick').value = disp(full);
@@ -4847,7 +4844,7 @@ onmessage = ({ data: m }) => {
         }
         return;
       case '001':
-        irc.registered = true; irc.retry = 0; irc.nick = p[0]; irc.away.clear(); idleSet = false; if (hiddenNow()) idleStart();
+        irc.registered = true; irc.retry = 0; irc.nick = p[0]; irc.away.clear(); irc.accts.clear(); idleSet = false; if (hiddenNow()) idleStart();
         // (said once a page and when the name changes: a phone drops the socket each time the page is left, and every
         // reconnect printed it again; user 2026-11-03 "I keep getting logged out")
         if (irc.nick !== prof.nick && irc.nick !== irc.saidAs) sys(`connected as ${irc.nick}`);
@@ -4868,6 +4865,7 @@ onmessage = ({ data: m }) => {
         const meNick = m.nick === irc.nick;
         if (meNick) irc.nick = to;
         const aw = irc.away.get(key(m.nick)); irc.away.delete(key(m.nick)); if (aw != null) irc.away.set(key(to), aw);
+        if (irc.accts.has(key(m.nick))) { const ac = irc.accts.get(key(m.nick)); irc.accts.delete(key(m.nick)); irc.accts.set(key(to), ac); }
         if (meNick) { spreadAdmin(); render(); }  // (the mod buttons drawn again with the new nick)
         typingGone(m.nick); membersShow();
         return;
@@ -4875,19 +4873,23 @@ onmessage = ({ data: m }) => {
       case 'JOIN': {
         const c = chan(p[0]);
         if (m.nick === irc.nick) { c.joined = true; c.tries = 0; c.retryAt = 0; c.ops.clear(); c.modes.clear(); }
-        c.names.add(m.nick); tabs();
+        c.names.add(m.nick); if (p[1] !== undefined) irc.accts.set(key(m.nick), p[1] === '*' ? null : p[1]);
+        tabs(); membersShow();
         return;
       }
+      case 'ACCOUNT': irc.accts.set(key(m.nick), p[0] === '*' ? null : p[0]); membersShow(); return;
       case 'PART': { const c = chan(p[0]); c.names.delete(m.nick); c.typing.delete(key(m.nick)); c.ops.delete(key(m.nick)); c.modes.delete(key(m.nick)); if (m.nick === irc.nick) { c.joined = false; c.names.clear(); } tabs(); return; }
       case 'KICK': { const c = chan(p[0]); c.names.delete(p[1]); if (p[1] === irc.nick) { c.joined = false; c.names.clear(); sys(`kicked from ${p[0]}`, p[0]); } tabs(); return; }
-      case 'QUIT': for (const c of chans.values()) { c.names.delete(m.nick); c.typing.delete(key(m.nick)); } irc.away.delete(key(m.nick)); typingShow(); tabs(); return;
+      case 'QUIT': for (const c of chans.values()) { c.names.delete(m.nick); c.typing.delete(key(m.nick)); } irc.away.delete(key(m.nick)); irc.accts.delete(key(m.nick)); typingShow(); tabs(); return;
       // presence: away-notify's AWAY (a reason: away; none: back), our own (305 / 306), WHO's H / G at joining
       case 'AWAY': if (p[0]) irc.away.set(key(m.nick), clean(p[0]).slice(0, 100)); else irc.away.delete(key(m.nick)); membersShow(); return;
       case '305': irc.away.delete(key(irc.nick)); membersShow(); return;
       case '306': irc.away.set(key(irc.nick), idleSet ? 'idle' : 'away'); membersShow(); return;
-      case '352': {
-        const nk = p[5], fl = p[6] || '';
+      case '354': {  // (our WHOX: 152 nick flags account)
+        if (p[1] !== '152') return;
+        const nk = p[2], fl = p[3] || '';
         if (!nk) return;
+        irc.accts.set(key(nk), p[4] && p[4] !== '0' ? p[4] : null);
         if (fl[0] === 'G') { if (!irc.away.has(key(nk))) irc.away.set(key(nk), 'away'); } else if (fl[0] === 'H') irc.away.delete(key(nk));
         return;
       }
@@ -4948,7 +4950,7 @@ onmessage = ({ data: m }) => {
       }
       case '366': {
         const c = chan(p[1]); tabs();
-        if (irc.caps.has('away-notify')) irc.send(`WHO ${c.name}`);
+        irc.send(`WHO ${c.name} %tnfa,152`);  // (WHOX: nick, H / G, account: 354 below)
         // (the first join: the divider and the mentions start at the read point; history fills up to backAt)
         if (!c.histDone) { c.divTs = c.readTs; c.backAt = Infinity; c.backHist = true; c.firstMark = true; }
         if (!c.names.has(BOT) && ![...c.names].some(n => key(n) === key(BOT))) { c.retryAt = 0; irc.send(`PRIVMSG ${BOT} :open ${c.name}`); }
