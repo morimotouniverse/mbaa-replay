@@ -157,8 +157,8 @@
      the four groups in one row under it. Narrow: the timeline; the clock and the right group; seek; view and clip.
      Phones keep frame step and rounds in the bar (the rest in the menu sheet). viewer.js fitStage measures the
      transport's height at each picture width it tries. */
-  #transportsec { display: flex; flex-direction: row; flex-wrap: wrap; align-items: center; gap: 4px 0; position: relative; container: tp / inline-size;
-    will-change: transform; }  /* (its own compositing layer: the clock's digits and the seek thumb repaint it, not the page (a root repaint ~30/s cost
+  #transportsec { display: flex; flex-direction: row; flex-wrap: wrap; align-items: center; gap: 4px 0; position: relative; container: tp / inline-size; }
+  #transportsec .timeline, .tbar .clock { will-change: transform; }  /* (its own compositing layer: the clock's digits and the seek thumb repaint it, not the page (a root repaint ~30/s cost
     the Moto G 0.13 ms of main thread and a cc tile raster on the GPU process per frame: phone e_trace_1107)) */
   .tbar .clock { contain: layout; }  .tbar .clock :is(#time, #dur, #fc) { font-variant-numeric: tabular-nums; }  /* (a digit change lays out the clock only) */
   #transportsec .timeline { flex: 1 1 100%; min-width: 0; }
