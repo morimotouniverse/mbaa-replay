@@ -866,6 +866,15 @@
   #chatlog a.xcard.xtw .xtwt { font-size: 12.5px; line-height: 1.35; white-space: pre-wrap; overflow-wrap: anywhere; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 6; overflow: hidden; }
   #chatlog a.xcard.xtw .xtwm { position: relative; display: block; }
   #chatlog a.xcard.xtw .xtwm img { width: 100%; }
+  /* a song: artwork, title, artist, a preview button */
+  #chatlog a.xcard.xsong .xsr { display: flex; align-items: center; gap: 8px; min-width: 0; }
+  #chatlog a.xcard.xsong img.xart { width: 56px; height: 56px; flex: none; border-radius: 4px; object-fit: cover; }
+  #chatlog a.xcard.xsong .xst { display: flex; flex-direction: column; min-width: 0; flex: 1; font-size: 12px; color: var(--muted); }
+  #chatlog a.xcard.xsong .xst > * { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  #chatlog a.xcard.xsong .xst b { color: var(--fg); font-size: 13px; }
+  #chatlog a.xcard.xsong .xsv { font-size: 10.5px; opacity: .8; }
+  #chatlog a.xcard.xsong .xpv { flex: none; width: 32px; height: 32px; border-radius: 50%; display: grid; place-items: center; font-style: normal;
+    font-size: 12px; background: var(--accent2, #8ab4ff); color: #000; cursor: pointer; }
   #chatlog .cts { cursor: pointer; color: var(--accent2, #8ab4ff); border-bottom: 1px dotted currentColor; }
   #chatlog .ctime.cts { color: var(--faint); }
   #chatlog .ctime.cts:hover, #chatlog .cts:hover { color: var(--fg); }
@@ -2691,6 +2700,24 @@ onmessage = ({ data: m }) => {
     }
     return tweets.get(id);
   }
+  // a song's card data from Apple's lookup API (CORS open), one fetch per song: {title, artist, art, preview} or null
+  const songs = new Map();
+  function songOf(id) {
+    if (!songs.has(id)) {
+      if (songs.size > 200) songs.delete(songs.keys().next().value);
+      songs.set(id, fetch(`https://itunes.apple.com/lookup?id=${id}`, AbortSignal.timeout ? { signal: AbortSignal.timeout(8000) } : {})
+        .then(r => r.ok ? r.json() : null).then(j => {
+          const t = j && j.results && j.results.find(x => x.kind === 'song');
+          if (!t) return null;
+          const https = (v, re) => typeof v === 'string' && re.test(v) ? v : '';
+          return { title: String(t.trackName || '').slice(0, 120), artist: String(t.artistName || '').slice(0, 80),
+                   art: https(String(t.artworkUrl100 || '').replace(/\/100x100bb\./, '/160x160bb.'), /^https:\/\/is\d+-ssl\.mzstatic\.com\//),
+                   preview: https(t.previewUrl, /^https:\/\/audio-ssl\.itunes\.apple\.com\//) };
+        }).catch(() => null));
+    }
+    return songs.get(id);
+  }
+  let songAudio = null;  // (one preview plays at a time)
   function extEmbed(u) {
     const x = extUrl(u);
     if (!x) return null;
@@ -2733,6 +2760,39 @@ onmessage = ({ data: m }) => {
         }
         c0.replaceWith(...parts);
         a.dispatchEvent(new Event('load'));  // (the log re-sticks to the newest line: the card grew)
+      });
+      return a;
+    }
+    // a song (Shazam / Apple Music): its artwork, title and artist from Apple's lookup, a button for its 30 s preview
+    // (user 2026-11-08: a Shazam link "didnt embed")
+    const sid = (/^shazam\.com$/.test(h) && /\/song\/(\d{5,12})(?:\/|$)/.exec(x.pathname) || [])[1]
+      || (/^(?:music|itunes)\.apple\.com$/.test(h) && (/\/song\/(?:[^/]+\/)?(\d{5,12})$/.exec(x.pathname) || [])[1])
+      || (/^(?:music|itunes)\.apple\.com$/.test(h) && /\/album\//.test(x.pathname) && /^\d{5,12}$/.test(x.searchParams.get('i') || '') && x.searchParams.get('i'));
+    if (sid) {
+      const svc = h === 'shazam.com' ? 'Shazam' : 'Apple Music', c0 = cap(svc, cleanUrl(u));
+      a.classList.add('xsong'); a.append(c0);
+      songOf(sid).then(t => {
+        if (!t || !t.title) return;
+        const row = document.createElement('span'); row.className = 'xsr';
+        if (t.art) { const ar = img(t.art); ar.className = 'xart'; ar.onerror = () => ar.remove(); row.append(ar); }
+        const tx = document.createElement('span'); tx.className = 'xst';
+        const ti = document.createElement('b'); ti.textContent = t.title; const by = document.createElement('span'); by.textContent = t.artist;
+        const sv = document.createElement('span'); sv.className = 'xsv'; sv.textContent = svc;
+        tx.append(ti, by, sv); row.append(tx);
+        if (t.preview) {
+          const pb = document.createElement('i'); pb.className = 'xpv'; pb.textContent = '▶'; pb.title = 'play a preview'; pb.setAttribute('role', 'button');
+          pb.onclick = e => {
+            e.preventDefault(); e.stopPropagation();
+            if (songAudio && songAudio.__pb === pb) { songAudio.pause(); songAudio = null; pb.textContent = '▶'; return; }
+            if (songAudio) { songAudio.pause(); songAudio.__pb.textContent = '▶'; }
+            const au = new Audio(t.preview); au.__pb = pb; au.volume = 0.6; songAudio = au;
+            au.onended = au.onerror = () => { if (songAudio === au) songAudio = null; pb.textContent = '▶'; };
+            au.play().then(() => { if (songAudio === au) pb.textContent = '❚❚'; }, () => { if (songAudio === au) songAudio = null; });
+          };
+          row.append(pb);
+        }
+        c0.replaceWith(row);
+        a.dispatchEvent(new Event('load'));
       });
       return a;
     }
