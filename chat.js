@@ -461,6 +461,8 @@
 
   // ---- profile ----
   const NICK_RE = /^[A-Za-z_\[\]\\^{}|`][A-Za-z0-9_\-\[\]\\^{}|`]{0,23}$/;
+  // (a line's own time goes to 5 s before it was said: people react after the moment, user 2026-11-07; a typed m:ss is exact)
+  const LEAD = 5 * 60;
   const randNick = () => 'viewer' + Math.floor(1000 + Math.random() * 9000);
   // (a guest still on the random name: the light "set a name" prompt, user 2026-11-03 "viewer2237 / viewer4381 in the
   // user list"; dismissed once, kept)
@@ -572,8 +574,16 @@
   #chatsec .chead label.tog:has(#chatover_on) { display: none; }
   #chatsec button.ctab.on { color: #fff; background: #e04a5a33; border-color: #e04a5a88; }
   #chatsec .ctab .n { opacity: .6; margin-left: 4px; }
+  /* (other matches' chats as tabs, user 2026-11-07: new lines bold, a mention lit; pin / on-picture / close inside the tab) */
+  #chatsec button.ctab.act { font-weight: 700; color: var(--fg); }
+  #chatsec button.ctab.ment { color: var(--accent, #e04a5a); border-color: var(--accent, #e04a5a); font-weight: 700; }
+  #chatsec .ctab .cxb { display: inline-flex; vertical-align: -2px; margin-left: 5px; opacity: .55; cursor: pointer; }
+  #chatsec .ctab .cxb:hover { opacity: 1; }
+  #chatsec .ctab .cxb.on { opacity: 1; color: var(--accent, #e04a5a); }
+  #chatsec .ctab .cxb svg { width: 12px; height: 12px; }
   #chatsec .cstate { font-size: 10px; color: var(--faint); }
-  #chatlog { list-style: none; margin: 0; padding: 4px; height: 220px; overflow-y: auto; background: #00000033; border-radius: 8px;
+  #chatlog { list-style: none; margin: 0; padding: 4px; height: 220px; overflow-y: auto; overflow-x: hidden;  /* (the name FX canvases reach past a line by their glow: no sideways scroll, user 2026-11-07) */
+    background: #00000033; border-radius: 8px;
              display: flex; flex-direction: column; gap: 2px; font-size: 12px; line-height: 1.35; overscroll-behavior: contain; }
   #chatlog li { display: flex; gap: 5px; align-items: flex-start; word-break: break-word; }
   #chatlog li.sys { color: var(--faint); font-size: 11px; font-style: italic; }
@@ -1015,7 +1025,7 @@
   #chatsec .ctyping { position: relative; z-index: 1; height: 15px; margin-top: -15px; padding: 0 8px; font-size: 10.5px; line-height: 15px; color: var(--muted);
                       font-style: italic; pointer-events: none; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; border-radius: 0 0 8px 8px; }
   #chatsec .ctyping:empty { visibility: hidden; }
-  #chatsec .ctyping:not(:empty) { background: linear-gradient(#0000, #000c 45%); }
+  #chatsec .ctyping:not(:empty) { background: linear-gradient(#0000, color-mix(in srgb, var(--panel) 90%, #0000) 45%); }  /* (the theme's panel: was black in light mode too, user 2026-11-07) */
   #chatlog .creacts { display: flex; flex-wrap: wrap; gap: 3px; margin-top: 2px; }
   #chatlog .creacts button { display: inline-flex; align-items: center; gap: 3px; font: inherit; font-size: 11px; line-height: 1; padding: 2px 6px; border-radius: 999px;
                              border: 1px solid var(--line); background: #ffffff0a; color: var(--muted); cursor: pointer; font-variant-numeric: tabular-nums; }
@@ -1121,6 +1131,8 @@
                                  -webkit-text-fill-color: transparent; text-shadow: none; animation: ogslide var(--og-p, 4s) linear infinite; }
   #chatsec .og-grad.og-glow .cnick.own, #chatsec .og-grad.og-glow .mynick.own { filter: drop-shadow(0 0 calc(var(--og-r) / 2) var(--og-c)); }
   #chatsec .og-sh .cnick.own, #chatsec .og-sh .mynick.own { text-shadow: var(--os-ts); }
+  /* (the site owner's name in KiwiSoda, a pixel font: 16 px, its own pixel grid, so it stays crisp; user 2026-11-08) */
+  #chatsec .og-kiwi .cnick.own, #chatsec .og-kiwi .mynick.own { font-family: MbaaOv3, sans-serif; font-size: 16px; font-weight: 400; line-height: 1; letter-spacing: 0; -webkit-font-smoothing: none; font-smooth: never; }
   #chatsec .og-sh.og-glow .cnick.own, #chatsec .og-sh.og-glow .mynick.own { text-shadow: var(--os-ts), 0 0 var(--og-r) var(--og-c), 0 0 var(--og-r2) var(--og-c); }
   #chatsec .og-sh.og-grad .cnick.own, #chatsec .og-sh.og-grad .mynick.own { text-shadow: none; filter: var(--os-f); }
   #chatsec .og-sh.og-grad.og-glow .cnick.own, #chatsec .og-sh.og-grad.og-glow .mynick.own { filter: var(--os-f) drop-shadow(0 0 calc(var(--og-r) / 2) var(--og-c)); }
@@ -1220,7 +1232,8 @@
       <span class="cseg" data-k="font">
         <button type="button" data-v="" title="default font" aria-label="default font">Aa</button>
         <button type="button" data-v="gothic" title="gothic" aria-label="gothic" style="font-family: sans-serif">ゴ</button>
-        <button type="button" data-v="mincho" title="mincho" aria-label="mincho" style="font-family: serif">明</button></span>
+        <button type="button" data-v="mincho" title="mincho" aria-label="mincho" style="font-family: serif">明</button>
+        <button type="button" data-v="kiwi" class="ckiwi" hidden title="KiwiSoda (pixel font, yours alone)" aria-label="KiwiSoda pixel font" style="font-family: MbaaOv3, monospace">Px</button></span>
       <button type="button" class="ccol" aria-haspopup="true" aria-expanded="false" title="colour" aria-label="colour"><i class="dot"></i></button>
       <span class="cprev" aria-hidden="true" title="how it looks">Aa コメ</span>
       <button type="button" class="cmore" aria-expanded="false" title="type the commands yourself" aria-label="advanced commands">⋯</button>
@@ -1484,7 +1497,7 @@
     const n = $('.mynick'); if (!n) return;
     const st = irc.account ? styleOf(irc.account) : null;
     n.classList.toggle('own', !!st);
-    if (st) styleApply(n.parentElement, st); else n.parentElement.classList.remove('og-glow', 'og-grad', 'og-sh');
+    if (st) styleApply(n.parentElement, st); else n.parentElement.classList.remove('og-glow', 'og-grad', 'og-sh', 'og-kiwi');
   }
   // ---- name styles (the site owner and the mods) ----
   // A styler styles their name (a glow; an animated 2-3 colour gradient) and may write ~text~ (each character on a sine
@@ -1560,6 +1573,8 @@
   function styleApply(el, st) {
     const S = el.style, w = waveOf(st), dur = w.dur;
     el.classList.toggle('og-glow', !!st.glow); el.classList.toggle('og-grad', !!st.grad); el.classList.toggle('og-sh', !!st.shadow);
+    el.classList.toggle('og-kiwi', st.font === 'kiwi');
+    if (st.font === 'kiwi') glovFaceLoad(3);  // (the font as a page font, MbaaOv3: fetched once; the names redraw when it is in)
     if (st.shadow) { const x = shadowCss(st.shadow); S.setProperty('--os-ts', x.ts); S.setProperty('--os-f', x.f); }
     if (st.glow) { S.setProperty('--og-c', st.glow.c); S.setProperty('--og-r', `${st.glow.r}px`); S.setProperty('--og-r2', `${st.glow.r * 2}px`); }
     if (st.grad) { S.setProperty('--og-g', NFX.gradCss(st)); S.setProperty('--og-p', `${NFX.gradPeriod(st).toFixed(3)}s`); }
@@ -2308,6 +2323,20 @@ onmessage = ({ data: m }) => {
   // empty channel); remembered across reloads ('match' by default: a new viewer sees the match they came to watch)
   let tabPref = store.get('mbaa-chat-tab', 'match') === 'general' ? 'general' : 'match';
   const key = n => n.toLowerCase();
+  // Other matches' chats (user 2026-11-07: talk with friends in their match while watching another): a live list row's
+  // chat button opens that match's channel as a tab, the picture stays; the "this match" tab's pin keeps its channel as
+  // a tab after a switch. No limit; kept on this device, back after a reload while the match is live (or ended within
+  // the hour); a tab stays, marked ended, until closed. Each tab's comments on the picture: its own toggle, off.
+  const XKEY = 'mbaa-chat-xtabs', XKEEP = 3600e3, XRE = /^#m-[A-Za-z0-9_-]{1,60}$/;
+  let xtabs = [];
+  try {
+    xtabs = (store.get(XKEY, []) || []).filter(t => t && XRE.test(t.name) && Date.now() - (+t.seen || 0) < XKEEP)
+      .map(t => ({ name: t.name, names: (Array.isArray(t.names) ? t.names : []).slice(0, 2).map(n => String(n || '').slice(0, 40)), ov: !!t.ov, seen: +t.seen || 0, ended: false }));
+  } catch (e) { xtabs = []; }
+  const xOf = name => (name && xtabs.find(t => key(t.name) === key(name))) || null;
+  const xSave = () => store.set(XKEY, xtabs.map(({ name, names, ov, seen }) => ({ name, names, ov, seen })));
+  const xLabel = t => { const n = t.names.map(x => (x || '').trim()).filter(Boolean).join(' vs ') || 'a match';
+    return (n.length > 30 ? n.slice(0, 29) + '…' : n) + (t.ended ? ' · ended' : ''); };
   // the read point of each channel (ms, server time of the newest line read): signed in, the server's read marker
   // (draft/read-marker, MARKREAD: every device of the account); kept here too (a guest's only copy)
   const READ_KEY = 'mbaa-chat-read';
@@ -2326,15 +2355,29 @@ onmessage = ({ data: m }) => {
   function tabs() {
     spreadAdmin();
     tabsEl.replaceChildren();
-    for (const name of [GENERAL, matchChan].filter(Boolean)) {
-      const c = chan(name), b = document.createElement('button');
-      b.type = 'button'; b.className = 'ctab' + (key(name) === key(shown) ? ' on' : '');
-      b.textContent = name === GENERAL ? '#melty' : 'this match';
-      b.title = name;
+    const isMC = n => !!matchChan && key(n) === key(matchChan);  // (isMatch is declared further down: tabs() runs before it)
+    const names = [GENERAL, matchChan, ...xtabs.map(t => t.name).filter(n => !isMC(n))].filter(Boolean);
+    for (const name of names) {
+      const c = chan(name), b = document.createElement('button'), x = xOf(name), isM = isMC(name), off = key(name) !== key(shown);
+      b.type = 'button'; b.className = 'ctab' + (off ? '' : ' on');
+      b.textContent = name === GENERAL ? '#melty' : isM ? 'this match' : xLabel(x);
+      b.title = name === GENERAL || isM ? name : `${x.names.filter(Boolean).join(' vs ') || 'a match'}${x.ended ? ' (ended)' : ''}: its chat (the picture stays on yours)`;
       const n = document.createElement('span'); n.className = 'n'; n.textContent = c.names.size || ''; b.append(n);
-      if (c.unread && key(name) !== key(shown)) { const u = document.createElement('span'); u.className = 'cunread'; u.textContent = c.unread > 99 ? '99+' : c.unread; u.title = 'new lines'; b.append(u); }
+      if (x && !isM) {  // (another match's: new lines bold, a mention lit; no count)
+        if (off && c.unread) b.classList.add('act');
+        if (off && c.ment) b.classList.add('ment');
+      } else if (c.unread && off) { const u = document.createElement('span'); u.className = 'cunread'; u.textContent = c.unread > 99 ? '99+' : c.unread; u.title = 'new lines'; b.append(u); }
+      const btn = (svg, title, on, fn) => { const i = document.createElement('span'); i.className = 'cxb' + (on ? ' on' : ''); i.setAttribute('role', 'button');
+        i.title = title; i.innerHTML = svg; i.onclick = e => { e.stopPropagation(); fn(); }; b.append(i); };
+      if (isM && matchChan) btn(PIN_SVG, x ? 'pinned: stays as a tab after you switch matches (click to unpin)' : 'pin: keep this chat as a tab after you switch matches',
+        !!x, () => { if (x) { xtabs = xtabs.filter(t => t !== x); xSave(); } else xAdd(name, (api.live() && api.live().info && api.live().info.names) || []); tabs(); });
+      if (x && !isM) {
+        btn(PIC_SVG, x.ov ? "its comments show on your picture (click: off)" : "show its comments on your picture", x.ov, () => { x.ov = !x.ov; xSave(); tabs(); });
+        btn(X_SVG, 'close this tab', false, () => xClose(name));
+      }
       b.onclick = () => {
-        shown = name; tabPref = name === GENERAL ? 'general' : 'match'; store.set('mbaa-chat-tab', tabPref);
+        shown = name;
+        if (name === GENERAL || isM) { tabPref = name === GENERAL ? 'general' : 'match'; store.set('mbaa-chat-tab', tabPref); }
         cameBack(c);
         tabs(); render(); b.blur();
       };
@@ -2342,6 +2385,50 @@ onmessage = ({ data: m }) => {
     }
     membersShow();
   }
+  const SVG = d => `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${d}</svg>`;
+  const PIN_SVG = SVG('<path d="M9 4h6l-1 6 3 3H7l3-3z"/><path d="M12 13v7"/>'), PIC_SVG = SVG('<path d="M4 5h16v11H9l-5 4z"/><path d="M8 9h8M8 12h5"/>'),
+        X_SVG = SVG('<path d="M6 6l12 12M18 6L6 18"/>');
+  function xAdd(name, names) {
+    if (!XRE.test(name)) return null;
+    let t = xOf(name);
+    if (!t) { t = { name, names: [], ov: false, seen: Date.now(), ended: false }; xtabs.push(t); }
+    const nm = (names || []).slice(0, 2).map(n => String(n || '').trim().slice(0, 40));
+    if (nm.some(Boolean)) t.names = nm;
+    xSave(); join(name);
+    return t;
+  }
+  // a live list row's chat button (viewer.js): that match's channel as a tab, shown (the watched match's: its own tab)
+  function xOpen(m) {
+    if (!m || !m.match) return;
+    const name = `#m-${safe(m.match)}`;
+    if (!isMatch(name)) xAdd(name, m.names);
+    shown = name; cameBack(chan(name));
+    tabs(); render();
+  }
+  function xClose(name) {
+    xtabs = xtabs.filter(t => key(t.name) !== key(name)); xSave();
+    if (!isMatch(name)) { if (irc.registered) irc.send(`PART ${name}`); chans.delete(key(name)); }
+    if (key(shown) === key(name)) shown = matchChan && tabPref === 'match' ? matchChan : GENERAL;
+    tabs(); render();
+  }
+  // (live or ended: from the live list every few seconds; seen kept for the reload rule)
+  setInterval(() => {
+    const l = api.liveList ? api.liveList() : null;
+    if (!l || !xtabs.length) return;
+    let save = false, redraw = false;
+    for (const t of xtabs) {
+      const m = l.find(e => e.match && key(`#m-${safe(e.match)}`) === key(t.name));
+      const ended = !m;
+      if (ended !== t.ended) { t.ended = ended; redraw = true; }
+      if (m) {
+        if (Date.now() - t.seen > 60000) { t.seen = Date.now(); save = true; }
+        const nm = (m.names || []).map(n => String(n || '').trim().slice(0, 40));
+        if (nm.some(Boolean) && nm.join('\n') !== t.names.join('\n')) { t.names = nm; save = redraw = true; }
+      }
+    }
+    if (save) xSave();
+    if (redraw) tabs();
+  }, 5000);
   const clean = t => String(t).replace(/\x03\d{0,2}(,\d{1,2})?/g, '').replace(/[\x00-\x1f\x7f]/g, '');
   // 4chan-style word filter (user 2026-11-03): "cuck" reads "neco" for everyone, the sender too ("hello fellow necos",
   // "neco melty"); only the display: the server keeps what was typed and nothing goes to the mod log. The root only (cucks -> necos, cucked ->
@@ -2718,10 +2805,10 @@ onmessage = ({ data: m }) => {
     tm.classList.add('cts'); tm.setAttribute('role', 'button'); tm.tabIndex = 0;
     const state = () => { const f = atFrame(at);
       tm.classList.toggle('off', f == null);
-      tm.title = f == null ? 'said at a moment this page does not have (before it joined, or not received yet)' : 'go to the moment this was said';
+      tm.title = f == null ? 'said at a moment this page does not have (before it joined, or not received yet)' : 'go to 5 s before this was said';
       return f; };
     tm.addEventListener('pointerenter', state);
-    const go = e => { e.stopPropagation(); const f = state(); if (f != null) api.seek(f); };
+    const go = e => { e.stopPropagation(); const f = state(); if (f != null) api.seek(Math.max(1, f - LEAD)); };
     tm.onclick = go; tm.onkeydown = e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); go(e); } };
   }
   // where a link opens: this page (the chat page keeps its chat), with the link's own parameters
@@ -2868,7 +2955,7 @@ onmessage = ({ data: m }) => {
   }
   function render() {
     const c = chan(shown);
-    c.unread = 0;
+    c.unread = 0; c.ment = false;
     if (ownIO) ownIO.disconnect();  // (the log's lines replaced: ownCap observes the new ones)
     // (the unread divider: before the first line from someone else said after the read point, while the viewer was away)
     const els = [];
@@ -2915,11 +3002,12 @@ onmessage = ({ data: m }) => {
     if (!l.sys) picSet(l);
     const onPic = !l.sys && !!dmText(l);
     if (onPic && isMatch(name)) { try { tlAdd(l); } catch (e) { ovWarn('timeline', e); } }
+    else if (onPic && !l.hist && (xOf(name) || {}).ov) { try { tlAdd({ ...l, at: null }); } catch (e) { ovWarn('timeline', e); } }  // (another match's, its toggle on: now, its stream position is not ours)
     // (history arrives oldest first, before any live line of that channel: kept in time order)
     if (l.hist) { let i = c.lines.length; while (i > 0 && c.lines[i - 1].time > l.time) i--; c.lines.splice(i, 0, l); }
     else c.lines.push(l);
     if (c.lines.length > MAXLINES) { c.lines.splice(0, c.lines.length - MAXLINES); chanTrim(c); }
-    if (key(name) !== key(shown)) { if (!l.hist && !l.sys && !l.self) { c.unread++; tabs(); } badge(); return; }
+    if (key(name) !== key(shown)) { if (!l.hist && !l.sys && !l.self) { c.unread++; if (isMention(c, l)) c.ment = true; tabs(); } badge(); return; }
     // (at the bottom: the scroll handler's own answer, not a layout read per line; the scroll to the new bottom once a frame,
     // stickSoon: a line no longer forces a layout of the log as it comes, perf plan RT2)
     const stick = logStick;
@@ -3451,7 +3539,7 @@ onmessage = ({ data: m }) => {
   const NICO_COLORS = ['white', 'red', 'pink', 'orange', 'yellow', 'green', 'cyan', 'blue', 'purple', 'black', 'white2',
     'niconicowhite', 'red2', 'truered', 'pink2', 'orange2', 'passionorange', 'yellow2', 'madyellow', 'green2', 'elementalgreen',
     'cyan2', 'blue2', 'marinblue', 'purple2', 'nobleviolet', 'black2'];
-  const NICO_CMDS = new Set(['ue', 'shita', 'naka', 'big', 'medium', 'small', 'defont', 'mincho', 'gothic', 'ender', 'full', ...NICO_COLORS]);
+  const NICO_CMDS = new Set(['ue', 'shita', 'naka', 'big', 'medium', 'small', 'defont', 'mincho', 'gothic', 'kiwi', 'ender', 'full', ...NICO_COLORS]);
   // a sender's commands (the commands box, or a received +mbaa/cmd tag): known Niconico commands and #rrggbb only
   const nicoCmds = t => String(t || '').toLowerCase().split(/[\s　]+/).filter(c => NICO_CMDS.has(c) || COLOR_RE.test(c)).slice(0, 8);
 
@@ -3469,7 +3557,7 @@ onmessage = ({ data: m }) => {
     cyan2: '#00CCCC', blue2: '#3399FF', purple2: '#6633CC', black2: '#666666' };
   const NICO_ALIAS = { niconicowhite: '#CCCC99', truered: '#CC0033', passionorange: '#FF6600', madyellow: '#999900',
     elementalgreen: '#00CC66', marinblue: '#3399FF', nobleviolet: '#6633CC' };
-  const GROUP = { pos: ['ue', 'shita', 'naka'], size: ['small', 'medium', 'big'], font: ['defont', 'gothic', 'mincho'] };
+  const GROUP = { pos: ['ue', 'shita', 'naka'], size: ['small', 'medium', 'big'], font: ['defont', 'gothic', 'mincho', 'kiwi'] };
   const isColor = c => COLOR_RE.test(c) || NICO_COLORS.includes(c);
   // commands -> {pos, size, font, color, rest} (the first of each kind wins, as Nico takes it)
   function cmdParse(t) {
@@ -3493,6 +3581,9 @@ onmessage = ({ data: m }) => {
     const st = cmdParse(cmdIn.value);
     // (top / bottom (ue / shita) work for mods only (dmStyle: lineOp): the buttons only for them, user 2026-11-01)
     { const c = chans.get(key(shown)), g = tool.querySelector('.cseg[data-k="pos"]'); if (g) g.hidden = !(c && c.ops.has(key(irc.nick))); }
+    // (KiwiSoda: the site owner's alone, user 2026-11-08; its button loads the font for its own look)
+    // (toolShow also runs while the page starts, before irc / GLOV_FACE exist: then the button stays hidden)
+    try { const k = tool.querySelector('.ckiwi'); if (k) { k.hidden = !ownerMe(); if (!k.hidden) glovFaceLoad(3); } } catch (e) {}
     tool.querySelectorAll('.cseg').forEach(g => g.querySelectorAll('button').forEach(b => b.setAttribute('aria-pressed', String(b.dataset.v === st[g.dataset.k]))));
     const hex = colorHex(st.color);
     colBtn.querySelector('.dot').style.background = hex;
@@ -3503,7 +3594,7 @@ onmessage = ({ data: m }) => {
     custom.classList.toggle('on', COLOR_RE.test(st.color));
     inkSet(prev, hex);
     prev.style.fontSize = { small: '10px', big: '17px' }[st.size] || '13px';
-    prev.style.fontFamily = { gothic: 'sans-serif', mincho: 'serif' }[st.font] || '';
+    prev.style.fontFamily = { gothic: 'sans-serif', mincho: 'serif', kiwi: 'MbaaOv3, monospace' }[st.font] || '';
     prev.title = `how it looks: ${cmdJoin(st) || 'scroll, medium, my colour'}`;
   }
   tool.querySelectorAll('.cseg').forEach(g => g.querySelectorAll('button').forEach(b => b.onclick = () => {
@@ -3594,6 +3685,8 @@ onmessage = ({ data: m }) => {
       <div class="orow"><span class="olbl">colour</span><button type="button" class="bare" data-k="shc" aria-label="outline / shadow colour"></button></div>
       <div class="orow"><span class="olbl">strength</span><input type="range" data-k="shs" min="1" max="4" step="1" aria-label="outline / shadow strength"><output data-o="shs"></output></div>
       <div class="orow"><span class="olbl">kind</span><label><input type="radio" name="oshk" data-k="sho" value="o"> outline</label><label><input type="radio" name="oshk" data-k="shd" value="d"> drop shadow</label></div></fieldset>
+    <fieldset class="osec osty" data-s="kiwi"><legend><label><input type="checkbox" data-k="kiwi"> Pixel name (KiwiSoda) <span class="oon"></span></label></legend>
+      <p class="ohint">Your name in the chat in the KiwiSoda pixel font. Yours alone. (Your comments on the picture: the Px button in the comment style.)</p></fieldset>
     <div class="orow ofoot"><button type="button" class="osave osty">save for everyone</button><button type="button" class="oclose">close</button><span class="ostat osty" role="status"></span></div>`;
   $('.cform').append(oPan);
   const oIn = k => oPan.querySelector(`[data-k="${k}"]`);
@@ -3616,6 +3709,7 @@ onmessage = ({ data: m }) => {
     oIn('grad').checked = !!st.grad; oIn('c1').value = gr.cs[0]; oIn('c2').value = gr.cs[1]; oIn('c3on').checked = gr.cs.length > 2; oIn('c3').value = gr.cs[2] || '#40e0ff';
     oIn('gs').value = String(gr.s); oIn('wa').value = String(w.a); oIn('ws').value = String(w.s);
     const sh = st.shadow || { c: '#000000', s: 2, k: 'o' };  // (default off)
+    oIn('kiwi').checked = st.font === 'kiwi';
     oIn('sh').checked = !!st.shadow; oIn('shc').value = sh.c; oIn('shs').value = String(sh.s); oIn('sho').checked = sh.k !== 'd'; oIn('shd').checked = sh.k === 'd';
   }
   function oRead() {
@@ -3625,6 +3719,7 @@ onmessage = ({ data: m }) => {
     if (oIn('grad').checked) st.grad = { cs: [col('c1'), col('c2'), ...(oIn('c3on').checked ? [col('c3')] : [])], s: clampI(oIn('gs').value, 1, 10) };
     st.wave = { a: clampI(oIn('wa').value, 1, 10), s: clampI(oIn('ws').value, 1, 10) };
     if (oIn('sh').checked) st.shadow = { c: col('shc'), s: clampI(oIn('shs').value, 1, 4), k: oIn('shd').checked ? 'd' : 'o' };
+    if (ownerMe() && oIn('kiwi').checked) st.font = 'kiwi';
     return styleParse(styleSpec(st)) || {};
   }
   // (the saved state: the style every page shows now, the bot's last word; the panel compares its form with it)
@@ -3641,6 +3736,7 @@ onmessage = ({ data: m }) => {
     const may = mayStyle();
     oPan.querySelectorAll('.osty').forEach(e => { e.hidden = !may; });
     oPan.querySelector('[data-s="glow"]').hidden = !(may && glowMe());
+    oPan.querySelector('[data-s="kiwi"]').hidden = !(may && ownerMe());
   };
   function oPreview() {
     const pv = oPan.querySelector('.oprev'), st = oRead();
@@ -3651,6 +3747,7 @@ onmessage = ({ data: m }) => {
     oPan.querySelector('[data-s="glow"]').classList.toggle('off', !st.glow);
     oPan.querySelector('[data-s="grad"]').classList.toggle('off', !st.grad);
     oPan.querySelector('[data-s="shadow"]').classList.toggle('off', !st.shadow);
+    oPan.querySelector('[data-s="kiwi"]').classList.toggle('off', st.font !== 'kiwi');
     oPan.querySelectorAll('.oon').forEach(o => { o.textContent = o.closest('.osec').classList.contains('off') ? 'off' : 'on'; });
     const cs = [oIn('c1').value, oIn('c2').value, ...(oIn('c3on').checked ? [oIn('c3').value] : [])], strip = oPan.querySelector('.ostrip');
     strip.style.backgroundImage = `linear-gradient(90deg, ${[...cs, cs[0]].join(', ')})`;
@@ -3715,7 +3812,10 @@ onmessage = ({ data: m }) => {
   const DM_SIZE = { small: [51, 51], medium: [76, 82], big: [110, 129] };  // [font px, row height], stage units
   const DM_FONT = { defont: [600, 'Arial, "MS PGothic", "Hiragino Kaku Gothic ProN", "Noto Sans CJK JP", sans-serif'],
     gothic: [400, '"MS PGothic", "Hiragino Kaku Gothic ProN", "Noto Sans CJK JP", sans-serif'],
-    mincho: [400, '"MS PMincho", "Hiragino Mincho ProN", "Noto Serif CJK JP", serif'] };
+    mincho: [400, '"MS PMincho", "Hiragino Mincho ProN", "Noto Serif CJK JP", serif'],
+    kiwi: [400, 'MbaaOv3, Arial, "Noto Sans CJK JP", sans-serif'] };
+  // (KiwiSoda, a pixel font: the site owner's comments only, user 2026-11-08; anyone else's "kiwi" is ignored)
+  const kiwiOk = l => !!(l && l.acct && ownAcct && key(l.acct) === key(ownAcct));
   const DM_COLOR = { white: '#FFFFFF', red: '#FF0000', pink: '#FF8080', orange: '#FFC000', yellow: '#FFFF00', green: '#00FF00',
     cyan: '#00FFFF', blue: '#0000FF', purple: '#C000FF', black: '#000000', white2: '#CCCC99', niconicowhite: '#CCCC99',
     red2: '#CC0033', truered: '#CC0033', pink2: '#FF33CC', orange2: '#FF6600', passionorange: '#FF6600', yellow2: '#999900',
@@ -3769,7 +3869,7 @@ onmessage = ({ data: m }) => {
     // (top / bottom: a channel operator's comment only; anyone else's scrolls)
     const lc0 = l.chan && chans.get(l.chan), lineOp = !!l.op || !!(lc0 && l.irc && lc0.ops.has(key(l.irc)));  // (l.op: a clip's line, as saved)
     const loc = (lineOp && cmds.find(c => c === 'ue' || c === 'shita')) || 'naka';
-    const size = cmds.find(c => DM_SIZE[c]) || 'medium', font = cmds.find(c => DM_FONT[c]) || 'defont';
+    const size = cmds.find(c => DM_SIZE[c]) || 'medium', font = cmds.find(c => DM_FONT[c] && (c !== 'kiwi' || kiwiOk(l))) || 'defont';
     // (Niconico takes the first colour given; none: the sender's profile colour)
     const cmdCol = cmds.map(c => DM_COLOR[c] || (COLOR_RE.test(c) ? c : null)).find(Boolean);
     const col = cmdCol || (l.color ? exactHex(l.color) : '#FFFFFF');
@@ -3856,9 +3956,9 @@ onmessage = ({ data: m }) => {
   //                  right to left, ligatures; our font first, then the system's), its coverage outlined and coloured by
   //                  the renderer like any glyph
   const glov = { M: null, font: null, fontP: null, emo: new Map(), emoList: [null], runs: new Map(), runList: [null], has: new Map(),
-    faces: [null, null, null], faceP: [null, null, null], cv: '', next: 1 };
-  const GLOV_FACE = { defont: 0, gothic: 1, mincho: 2 };
-  const GLOV_FILE = ['fonts/chatfont.ttf?v=1', 'fonts/chatfont_gothic.ttf?v=1', 'fonts/chatfont_mincho.ttf?v=1'];  /* (bump v with a new font) */
+    faces: [null, null, null, null], faceP: [null, null, null, null], cv: '', next: 1 };
+  const GLOV_FACE = { defont: 0, gothic: 1, mincho: 2, kiwi: 3 };
+  const GLOV_FILE = ['fonts/chatfont.ttf?v=1', 'fonts/chatfont_gothic.ttf?v=1', 'fonts/chatfont_mincho.ttf?v=1', 'fonts/kiwisoda.ttf?v=1'];  /* (bump v with a new font) */
   // a font's bytes, also as a page font (MbaaOv0..2) so text runs drawn by the canvas use it for what it covers
   function glovFaceLoad(f) {
     if (!glov.faceP[f]) glov.faceP[f] = fetch(GLOV_FILE[f]).then(r => r.ok ? r.arrayBuffer() : null).then(async b => {
@@ -3894,7 +3994,7 @@ onmessage = ({ data: m }) => {
     // (a new instance, or the same one after a memory restore (viewer.js ovRestored): set up again)
     if (glov.M !== M || glov.gen !== (M.mbaaMemGen || 0)) {
       glov.M = M; glov.gen = M.mbaaMemGen || 0;
-      for (let f = 0; f < 3; f++) glovFaceSend(M, f);
+      for (let f = 0; f < GLOV_FILE.length; f++) glovFaceSend(M, f);
       M.mbaaOvEmoji = glovEmoji; M.mbaaOvRunW = glovRunW; M.mbaaOvRun = glovRun;
       M.mbaaOvEmoFrames = glovEmoFrames; M.mbaaOvEmoDur = glovEmoDur; M.mbaaOvEmoAr = glovEmoAr;
       glov.has.clear();
@@ -4850,7 +4950,7 @@ onmessage = ({ data: m }) => {
         if (irc.nick !== prof.nick && irc.nick !== irc.saidAs) sys(`connected as ${irc.nick}`);
         irc.saidAs = irc.nick;
         state(''); authShow();
-        join(GENERAL); if (matchChan) join(matchChan);
+        join(GENERAL); if (matchChan) join(matchChan); for (const t of xtabs) join(t.name);
         return;
       case '432': case '433': {  // nick taken / not allowed
         if (irc.registered) { sys(`nick ${p[1]} ${m.cmd === '433' ? 'is taken' : 'is not allowed'}`); return; }
@@ -4944,7 +5044,7 @@ onmessage = ({ data: m }) => {
       case 'REDACT': unsay(p[0], p[1]); return;
       case '403': {  // (only the bot creates channels: ask it to open ours)
         const c = chans.get(key(p[1] || ''));
-        if (c && !c.joined && (key(c.name) === key(GENERAL) || isMatch(c.name))) askOpen(c);
+        if (c && !c.joined && (key(c.name) === key(GENERAL) || isMatch(c.name) || xOf(c.name))) askOpen(c);
         else sys(clean(p[p.length - 1] || 'no such channel'));
         return;
       }
@@ -5710,13 +5810,14 @@ onmessage = ({ data: m }) => {
     if (!want && matchChan) { if (!noneSince) noneSince = Date.now(); if (Date.now() - noneSince < LEAVE_MS) return; }
     noneSince = 0;
     if (want === matchChan) return;
-    const onMatch = !!matchChan && key(shown) === key(matchChan);
-    if (matchChan && irc.registered) { irc.send(`PART ${matchChan}`); chan(matchChan).joined = false; }
-    if (matchChan) chans.delete(key(matchChan));
+    // (a pinned / opened match's channel stays joined as its own tab, and a viewer on it stays there)
+    const keep = xOf(matchChan), onMatch = !!matchChan && key(shown) === key(matchChan) && !keep;
+    if (matchChan && !keep && irc.registered) { irc.send(`PART ${matchChan}`); chan(matchChan).joined = false; }
+    if (matchChan && !keep) chans.delete(key(matchChan));
     matchChan = want; matchPer = !!want;
     tlReset(want);
     // (#melty is never touched: its lines stay, and a viewer on it stays on it; the match tab follows the match)
-    if (want) { join(want); if (onMatch || tabPref === 'match') shown = want; } else shown = GENERAL;
+    if (want) { join(want); if (onMatch || (tabPref === 'match' && !xOf(shown))) shown = want; } else if (!xOf(shown)) shown = GENERAL;
     tabs(); render();
   }, 1000);
 
@@ -5746,7 +5847,7 @@ onmessage = ({ data: m }) => {
     const li = lineEl(l), tm = li.querySelector('.ctime');
     if (tm) {  // (the time into the clip; a click goes there)
       tm.textContent = clipFmt(l.o); tm.classList.add('cts'); tm.setAttribute('role', 'button'); tm.tabIndex = 0; tm.title = 'go to the moment this was said';
-      const go = e => { e.stopPropagation(); if (clip.a != null) api.seek(clip.a + l.o); };
+      const go = e => { e.stopPropagation(); if (clip.a != null) api.seek(Math.max(clip.a, clip.a + l.o - LEAD)); };
       tm.onclick = go; tm.onkeydown = e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); go(e); } };
     }
     li.dataset.clipI = String(l.i);
@@ -5863,7 +5964,7 @@ onmessage = ({ data: m }) => {
 
   if (CLIPM) clipMode(CLIPM);
   else { tabs(); render(); start(); }
-  window.mbaaChat = { clipLine, fx: { on: FX.on, n: FX.n, clock: t => FX.clock(t) }, clipState: () => ({ n: clip.n, a: clip.a, all: clip.all.length, ids: clip.all.map(l => tl.entries.find(e => e.l === l)).map(e => e && e.c ? e.c.gid : 0),
+  window.mbaaChat = { openMatch: m => { try { xOpen(m); } catch (e) { console.warn('chat tab:', e); } }, clipLine, fx: { on: FX.on, n: FX.n, clock: t => FX.clock(t) }, clipState: () => ({ n: clip.n, a: clip.a, all: clip.all.length, ids: clip.all.map(l => tl.entries.find(e => e.l === l)).map(e => e && e.c ? e.c.gid : 0),
     lines: [...logEl.querySelectorAll('li[data-clip-i]')].map(li => +li.dataset.clipI) }), nicoMax: n => { NICO_ON_SCREEN = n; }, dmText: t => dmTextOf({}, t), dmLine: l => dmMake(l, 0).text, emotes: () => [...EMOTES.keys()], emoteReady: n => !!(EMOTES.get(n) && emoteReady(EMOTES.get(n))), swellMap: swells, ovReset: () => { dmClear(nico); swellClear(); }, ovRecover: () => ovRecover('test'), ovRecoveries: () => ovRecoveries, ovRestored: () => { swellClear(); glovReady(); }, irc, auth, nameOk, chans, prof, danmaku, say, nico, tl, clockPos, localOf, posOf, nowOf, feed: raw => on(parse(raw)), spread: () => spread, owner: () => ({ acct: ownAcct, spec: styleSpec(ownStyle) }), styles: () => Object.fromEntries([...styles.values()].map(x => [x.acct, styleSpec(x.st)])), mayStyle: () => mayStyle(), picSet, md: mdPlain, mirc: t => mircNodes(t).map(n => n.outerHTML || n.textContent).join(''),
     idle: ms => { idleMs = ms; }, swells: () => [...swells.values()].filter(x => x.el).map(x => ({ e: x.e, n: x.count, size: parseFloat(x.em.style.fontSize), op: x.el.style.opacity })), typingTimes: { TYPE_EVERY, TYPE_TTL }, show: name => { chan(name); shown = name; tabs(); render(); }, status: () => ({ connected: irc.registered, nick: irc.nick, caps: [...irc.caps], shown, matchChan }) };  // (tests)
 })();

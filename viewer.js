@@ -68,12 +68,13 @@ window.mbaaNameFx = (() => {
       else if ((mm = /^grad=([0-9a-f]{6})-([0-9a-f]{6})(?:-([0-9a-f]{6}))?\.(\d{1,2})$/.exec(part))) out.grad = { cs: [mm[1], mm[2], mm[3]].filter(Boolean).map(c => `#${c}`), s: clampI(mm[4], 1, 10) };
       else if ((mm = /^wave=(\d{1,2})\.(\d{1,2})$/.exec(part))) out.wave = { a: clampI(mm[1], 1, 10), s: clampI(mm[2], 1, 10) };
       else if ((mm = /^shadow=([0-9a-f]{6})\.(\d{1,2})\.([od])$/.exec(part))) out.shadow = { c: `#${mm[1]}`, s: clampI(mm[2], 1, 4), k: mm[3] };
+      else if (part === 'font=kiwi') out.font = 'kiwi';  // (the name in KiwiSoda: the site owner's alone, the bot decides; user 2026-11-08)
       else return null;
     }
     return out;
   }
   const spec = st => [st.glow && `glow=${st.glow.c.slice(1)}.${st.glow.r}`, st.grad && `grad=${st.grad.cs.map(c => c.slice(1)).join('-')}.${st.grad.s}`,
-    st.wave && `wave=${st.wave.a}.${st.wave.s}`, st.shadow && `shadow=${st.shadow.c.slice(1)}.${st.shadow.s}.${st.shadow.k}`].filter(Boolean).join(',');
+    st.wave && `wave=${st.wave.a}.${st.wave.s}`, st.shadow && `shadow=${st.shadow.c.slice(1)}.${st.shadow.s}.${st.shadow.k}`, st.font === 'kiwi' && 'font=kiwi'].filter(Boolean).join(',');
   // the motion's numbers: the gradient's period (s); the wave's amplitude (px at the chat's font size), half period (s)
   // and phase a letter (rad); a style without a wave part waves at the default
   const gradPeriod = st => 16 / st.grad.s;
@@ -804,12 +805,12 @@ function audioHooks(Module, s) {
   // through the game's track changes, stops and seeks, at a steady volume (radioLevel: the music's own level, without its fades)
   // (a live extension's music, liveExt.music, is not radio: it takes the match's own music's place and follows the game's
   // starts, stops and seeks (round to round, the results screen, a seek), at the game's volume; extSub below)
-  const radioOn = () => !liveExt.music && !!musicNow() && !HASH;  // (the radio's music: the pick's, or the music chosen on its own)
+  const radioOn = () => !!musicLocal() && !HASH;  // (the radio's music: the pick's, or the music chosen on its own)
   const play = (path, loop, loopPos, offset) => {
     // (the "...and nothing heart" stage's music: off unless the viewer turned it on; songSub)
     // (only the fight's own track: bgm.txt's stage tracks, bgmme01-59; character select (99), the win jingle (98), VS (84)
     // and the rest keep the game's music, user 2026-11-03)
-    const ext = !HASH && liveExt.music && /bgmme(0[1-9]|[1-5]\d)\.(ogg|opus)$/i.test(path || '') && liveExt.music;
+    const ext = !HASH && !radioOn() && liveExt.music && /bgmme(0[1-9]|[1-5]\d)\.(ogg|opus)$/i.test(path || '') && liveExt.music;
     if (ext && path) {   // (the extension's track where the game's would play: same start, same position, looped at its own point)
       if (!cache.has(ext.key)) { halt(); return; }
       path = ext.path; loop = true; loopPos = ext.loopPos;
@@ -2078,7 +2079,7 @@ const LIVE = LIVE_URL || location.origin + location.pathname.replace(/\/[^/]*$/,
 // public page has none to ask for
 const LIVE_FEED = !!(LIVE_URL || document.querySelector('base'));
 // the spectate page: named for what it shows from the first paint on (the replay page's heading until a match loads)
-if (document.querySelector('base')) { document.getElementById('title').textContent = 'MBAACC live'; document.title = 'MBAACC Live'; }
+if (document.querySelector('base')) { document.getElementById('title').textContent = 'necoTV'; document.title = 'necoTV · Melty Blood TV'; }
 const LIVE_BEHIND = 240;  // frames kept buffered (4 s)
 const LIVE_WIN = 8;  // polls (~8 s) the catch-up decisions look back over (a round end's burst and pause: ~5 s)
 let liveSrc = null;  // {id, info, since}
@@ -3059,7 +3060,137 @@ async function playersArt() {
   await fetchAll(man, art, '', true);  // (a replay's plan has no select screen)
   const img = async p => { const d = cache.get(p); return d ? createImageBitmap(new Blob([d], { type: 'image/png' })) : null; };
   const [icons, cursor] = await Promise.all([img('grp/c_sel_aa/csel_icon00.png'), img('grp/c_sel_aa/csel_cursor00.png')]);
-  return icons && cursor ? (plArt = { icons, cursor }) : null;
+  if (!icons || !cursor) return null;
+  plArt = { icons, cursor };
+  cselArt().catch(() => {});  // (the name art and the ring: after, never holding the card)
+  return plArt;
+}
+// ---- the select screen's own art on the card (user 2026-11-08) ----
+// Each side's character line is the select screen's name art, Japanese over romaji (CharacterSelectScene_Render
+// 0x48A720: csel_name00_<side> 168x32 cells, 16 a column; csel_name01_<side> 168x24, 21 a column; side 0's sheets left
+// aligned, side 1's right aligned), the moon its icon alone. Under the VS, behind the splashes, the select screen's centre
+// ring and its rising particles, the game's code (CharaSelectAura_Update 0x487E60 / _Draw 0x4881C0) with our own random
+// numbers, stepped once per game frame. RE notes: harness-design/card_css_art/RE.md
+const CSEL_NAME_CELL = { 16: 29, 17: 16, 18: 17, 19: 18, 20: 19, 22: 20, 23: 21, 25: 22, 28: 23, 29: 24, 30: 25, 31: 26, 32: 27, 33: 28, 34: 29, 35: 30, 51: 31 };
+const cselCell = c => (c >= 0 && c <= 15 ? c : CSEL_NAME_CELL[c] ?? -1);
+const CSEL_FILES = ['csel_name00_0', 'csel_name00_1', 'csel_name01_0', 'csel_name01_1', 'csel_ef00', 'csel_part00'].map(f => `grp/c_sel_aa/${f}.png`);
+let cselA = null;
+async function cselArt() {
+  if (cselA) return cselA;
+  if (!man || !CSEL_FILES.every(p => man.files[p])) return null;
+  await fetchAll(man, CSEL_FILES, '', true);
+  const bm = await Promise.all(CSEL_FILES.map(p => { const d = cache.get(p); return d ? createImageBitmap(new Blob([d], { type: 'image/png' })) : null; }));
+  if (bm.some(b => !b)) return null;
+  cselA = { jp: [bm[0], bm[1]], ro: [bm[2], bm[3]], ring: bm[4], parts: bm[5] };
+  plKey = ''; playersShow(session);  // (the names drawn again, as art)
+  auraStart();
+  return cselA;
+}
+// a side's name art (168 x 56: Japanese over romaji) into its canvas; false: none for this character
+function cselName(cv, p, c) {
+  const k = cselCell(c);
+  if (!cselA || k < 0) return false;
+  cv.width = 168; cv.height = 56;
+  const x = cv.getContext('2d');
+  x.clearRect(0, 0, 168, 56);
+  x.drawImage(cselA.jp[p], 168 * (k >> 4), 32 * (k & 15), 168, 32, 0, 0, 168, 32);
+  x.drawImage(cselA.ro[p], 168 * Math.floor(k / 21), 24 * (k % 21), 168, 24, 0, 32, 168, 24);
+  return true;
+}
+// the ring and particles: CharaSelectAura_Update, f32 where the game keeps f32; the random numbers a subtractive
+// generator of our own (the game draws its battle stream; ours is the card's alone)
+const F32 = Math.fround;
+function subRng(seed) {
+  const M = 0x80000000, ma = new Array(56).fill(0);
+  let mj = (161803398 - Math.abs(seed)) % M, mk = 1;
+  ma[55] = mj;
+  for (let i = 1; i <= 54; i++) { const ii = (21 * i) % 55; ma[ii] = mk; mk = mj - mk; if (mk < 0) mk += M; mj = ma[ii]; }
+  for (let k = 0; k < 4; k++) for (let i = 1; i <= 55; i++) { ma[i] -= ma[1 + ((i + 30) % 55)]; if (ma[i] < 0) ma[i] += M; }
+  let a = 0, b = 31;
+  return () => { if (++a === 56) a = 1; if (++b === 56) b = 1; let j = ma[a] - ma[b]; if (j < 0) j += M; ma[a] = j; return j; };
+}
+const aura = { cv: null, n: 0, timer: 0, rng: subRng(20261108), lastF: null, raf: 0,
+  rings: Array.from({ length: 4 }, () => ({ state: 0, t: 0, scale: 0, ds: 0, fade: 0 })),
+  parts: Array.from({ length: 20 }, () => ({ on: 0, kind: 0, dir: 0, t: 0, rise: 0, phase: 0, speed: 0 })) };
+function auraStep(A) {
+  const f = A.n++;
+  if (f % 60 === 0) { const r = A.rings.find(r => !r.state); if (r) Object.assign(r, { state: 1, t: 0, scale: F32(0.1), ds: F32(0.05), fade: 0 }); }
+  for (const r of A.rings) {
+    if (!r.state) continue;
+    if (r.state === 1) { r.fade = F32(r.fade + F32(1 / 30)); if (r.fade > 1) { r.state = 10; r.fade = 1; r.t = 0; } }
+    else if (r.state === 10) { if (r.t > 60) { r.state = 100; r.t = 0; } }
+    else if (r.state === 100) { r.fade = F32(r.fade - F32(1 / 30)); if (r.fade <= 0) { r.state = 0; r.fade = 0; r.t = 0; continue; } }
+    r.t++; r.scale = F32(r.scale + r.ds); r.ds = F32(r.ds * F32(0.98));
+  }
+  if (A.timer <= 0) {
+    const p = A.parts.find(p => !p.on);
+    if (p) { const R = A.rng; Object.assign(p, { on: 1, kind: R() % 2, dir: R() % 2, speed: F32(R() * 4.656612875e-10 + 0.8), t: 0, rise: 0, phase: 0 }); A.timer = R() % 90 + 20; }
+  }
+  A.timer--;
+  for (const p of A.parts) {
+    if (!p.on) continue;
+    p.rise = F32(p.rise + p.speed);
+    if (p.rise > 480) { p.on = 0; continue; }
+    if (p.dir) { p.phase = F32(p.phase - F32(0.005)); if (p.phase < 0) p.phase = F32(p.phase + 1); }
+    else { p.phase = F32(p.phase + F32(0.005)); if (p.phase >= 1) p.phase = F32(p.phase - 1); }
+    p.t++;
+  }
+}
+// CharaSelectAura_Draw in the card's own 640 x 480 (its height the card's; x centred under the VS), additive
+function auraDraw(A) {
+  const cv = A.cv, dpr = window.devicePixelRatio || 1, w = Math.max(1, Math.round(cv.clientWidth * dpr)), h = Math.max(1, Math.round(cv.clientHeight * dpr));
+  if (cv.width !== w || cv.height !== h) { cv.width = w; cv.height = h; }
+  // (at the splashes' scale: a splash is 512 px on the select screen's 480, so the ring keeps its size against the
+  // figures as there; its centre, the screen's (320, 420), on the VS)
+  const card = cv.parentNode, cr = card.getBoundingClientRect(), por = card.querySelector('.por:not([hidden])'), vs = card.querySelector('#players .vs');
+  // (capped by the card's width: on a narrow card the splash scale made the ring the card's whole width)
+  const k = Math.min(por && por.offsetHeight ? por.offsetHeight / 512 : cr.height / 480, cr.width / 640 * 1.2) * dpr;
+  const vr = vs ? vs.getBoundingClientRect() : null, cy = (vr && vr.height ? vr.top + vr.height / 2 - cr.top : cr.height * 0.85) * dpr;
+  const x = cv.getContext('2d');
+  x.setTransform(1, 0, 0, 1, 0, 0); x.clearRect(0, 0, w, h);
+  // (the names' dark band, drawn here under the ring: as the band's CSS background it covered the ring; .aura-on drops it)
+  const pl = card.querySelector('#players');
+  if (pl) {
+    const r = pl.getBoundingClientRect(), y0 = (r.top - cr.top) * dpr, y1 = (r.bottom - cr.top) * dpr, g = x.createLinearGradient(0, y0, 0, y1);
+    g.addColorStop(0, 'rgba(0,0,0,0)'); g.addColorStop(0.58, 'rgba(0,0,0,0)'); g.addColorStop(1, 'rgba(0,0,0,0.733)');
+    x.globalCompositeOperation = 'source-over'; x.globalAlpha = 1; x.fillStyle = g; x.fillRect((r.left - cr.left) * dpr, y0, r.width * dpr, y1 - y0);
+  }
+  x.setTransform(k, 0, 0, k, w / 2 - 320 * k, cy - 420 * k);
+  x.globalCompositeOperation = 'lighter'; x.imageSmoothingEnabled = true;
+  for (const r of A.rings) {
+    if (!r.state) continue;
+    const rw = Math.trunc(r.scale * 128), rh = Math.trunc(r.scale * 24);
+    x.globalAlpha = Math.trunc(r.fade * 255) / 255;
+    x.drawImage(cselA.ring, 0, 0, 128, 128, Math.trunc((640 - rw) / 2), 420 - Math.trunc(rh / 2), rw, rh);
+  }
+  x.globalAlpha = 1;
+  for (const p of A.parts) if (p.on)
+    x.drawImage(cselA.parts, 16 * (p.kind + 19), 80, 16, 16, Math.trunc(Math.sin(p.phase * 360 * Math.PI / 180) * 24 + 320 - 8), Math.trunc(420 - p.rise - 8), 16, 16);
+}
+// one step per game frame (paused: still; a seek: the frames between, at most 2 s of them; no match: the card's own 60 Hz)
+function auraStart() {
+  const card = document.getElementById('matchcard');
+  if (!card || aura.cv) return;
+  const cv = document.createElement('canvas'); cv.className = 'aura'; cv.setAttribute('aria-hidden', 'true');
+  card.insertBefore(cv, card.firstChild);
+  aura.cv = cv; card.classList.add('aura-on');
+  for (let i = 0; i < 150; i++) auraStep(aura);  // (already going when the card first shows, as on the select screen)
+  let t0 = performance.now();
+  const tick = now => {
+    aura.raf = requestAnimationFrame(tick);
+    if (document.hidden || !card.classList.contains('pors') || !cv.clientHeight) { aura.lastF = null; t0 = now; return; }
+    let n;
+    if (session && session.M) {
+      const f = curFrame();
+      n = aura.lastF === null ? 1 : f - aura.lastF;
+      aura.lastF = f;
+      if (n < 0) n = 1;  // (a seek back: on from here)
+    } else { n = Math.floor((now - t0) / (1000 / 60)); t0 += n * (1000 / 60); aura.lastF = null; }
+    if (n <= 0) return;
+    for (let i = Math.min(n, 120); i > 0; i--) auraStep(aura);
+    auraDraw(aura);
+  };
+  aura.raf = requestAnimationFrame(tick);
 }
 function playersShow(s) {
   const box = document.getElementById('players'), C = cardMetaFor(s);
@@ -3080,6 +3211,13 @@ function playersShow(s) {
       // (the moon is its icon: the line beside it is the character, or with no player name the moon's name)
       row.querySelector('.ch .t').textContent = names[p] ? CHARA[c] || '' : moon;
       row.querySelector('.ch').title = `${moon} ${CHARA[c] || ''}`.trim();
+      // (the select screen's name art in the line's place, the moon its icon alone, static: user 2026-11-08)
+      const ch = row.querySelector('.ch');
+      let art = ch.querySelector('canvas.cnm');
+      if (!art) { art = document.createElement('canvas'); art.className = 'cnm'; art.setAttribute('aria-label', CHARA[c] || ''); ch.append(art); }
+      const on = cselName(art, p, c);
+      art.hidden = !on; ch.querySelector('.mqx').hidden = on; ch.classList.toggle('art', on);
+      if (on) art.setAttribute('aria-label', CHARA[c] || '');
       porShow(p, c);
     });
     box.hidden = false;
@@ -3499,8 +3637,12 @@ let xfYieldPending = false;  // (a pick's or a clear's swap with a live extensio
 // match's own), 'match' the match's own whatever the pick, or a track (as radioTrack). Kept like the pick: a replay's
 // for that replay, a live match's for its whole live match (musicLiveId; start).
 let musicPick = '', musicLiveId = null, musicSel = null;
-// (a live match's extension may bring its own music: liveExt below; it comes first while it is on)
-const musicNow = () => liveExt.music || (musicPick === 'match' ? null : musicPick ? musicSel : radio);
+// the viewer's own music: the music chosen on its own, else the radio pick's track ('match': none)
+const musicLocal = () => musicPick === 'match' ? null : musicPick ? musicSel : radio;
+// (a live match's extension may bring its own music, liveExt below: it takes the match's music's place; the viewer's own
+// pick still wins, as a radio pick's stage wins over the extension's stage (user 2026-11-08: a ♪ chip tapped on an AH3
+// stage kept the AH3 music))
+const musicNow = () => musicLocal() || liveExt.music;
 async function musicSet(f) {
   musicPick = f;
   musicLiveId = f && session && session.liveSrc ? session.liveSrc.id : null;
@@ -4077,6 +4219,14 @@ async function liveListDraw(given) {
     const side = p => liveSide(m, p);
     const v = el('span', 'lview'); badge(v, m.viewers);
     a.append(side(0), el('span', 'lvs', 'vs'), side(1), v);
+    // (the chat page: this match's chat as a tab, the picture stays; user 2026-11-07, chat.js xOpen)
+    if (CHAT_PAGE && m.match) {
+      const ch = el('span', 'lchat'); ch.setAttribute('role', 'button'); ch.title = "open this match's chat (your picture stays)";
+      ch.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 5h16v11H9l-5 4z"/><path d="M8 9h8M8 12h5"/></svg>';
+      ch.addEventListener('pointerdown', e => e.stopPropagation());
+      ch.onclick = e => { e.preventDefault(); e.stopPropagation(); if (window.mbaaChat && window.mbaaChat.openMatch) window.mbaaChat.openMatch(m); };
+      a.append(ch);
+    }
     if (liveSrc && liveSrc.id === m.id) { li.className = 'cur'; liveWatching(m.viewers); }
     if (liveIdle(m)) li.classList.add('idle');
     // (in place: the chat, the radio and the loaded game stay; a new tab / window with a modifier or the middle button)
@@ -5444,7 +5594,7 @@ window.__mbaaSeek = T => requestSeek(T);  // tests
 window.__mbaaMisses = () => [...misses];  // tests (freed files the game opened again; bundle files not fetched)
 // live chat (web/shell/chat.js), only on the chat page: the Worker adds <meta name="mbaa-chat"> to it (a local test page:
 // ?chat=1 on 127.0.0.1 / localhost); chat.js draws its icons with the player block's art and follows the watched match
-window.mbaaChatApi = { art: playersArt, iconCell, chara: CHARA, liveId: () => session && session.liveSrc ? session.liveSrc.id : null,
+window.mbaaChatApi = { art: playersArt, iconCell, chara: CHARA, liveList: () => (liveListLast ? liveListLast.l : null), liveId: () => session && session.liveSrc ? session.liveSrc.id : null,
   // a chat link to a live match: switch in place (chat, radio and the engine stay), a history entry for Back
   liveGo: id => { if (!/^[A-Za-z0-9_]{4,64}$/.test(id || '')) return false; if (session && session.liveSrc && session.liveSrc.id === id) return true; liveGo(id, true); return true; },
   // the watched live match for chat.js's per-match channel and comment timeline: the list entry (id, match key), the feed's

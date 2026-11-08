@@ -1,7 +1,7 @@
 {
-  "name": "MBAACC Replay Viewer",
-  "short_name": "MBAACC",
-  "description": "Watch Melty Blood Actress Again Current Code replays and live CCCaster matches in your browser, frame-exact. Game files are kept on this device so matches load instantly next time.",
+  "name": "necoTV · Melty Blood TV",
+  "short_name": "necoTV",
+  "description": "Live Melty Blood: Actress Again Current Code matches, chat and replays in your browser. Game files are kept on this device so matches load instantly next time.",
   "start_url": "/",
   "scope": "/",
   "display": "standalone",
