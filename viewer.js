@@ -4008,6 +4008,15 @@ setInterval(() => {
 // (the player block's room changes with the layout, the card's banner and its fonts: measured again on every resize)
 if (window.ResizeObserver && document.getElementById('players'))  // (viewer.js loads at the end of the page: it exists)
   new ResizeObserver(() => marquee(document.getElementById('players'))).observe(document.getElementById('players'));
+// (the live list's names too: fullscreen moves the list beside the picture at another width, and the 15 s refresh measured
+// only names not yet scrolling: a name that then fit kept scrolling with its copy, one that no longer fit was cut; user
+// 2026-11-08 "in fullscreen the names are popping and not marquee properly". Width changes only: a row added changes the height)
+for (const [id, sel] of [['liveitems', '.lnm'], ['nextcard', '.lnm']]) {
+  const box = document.getElementById(id);
+  if (!window.ResizeObserver || !box) continue;
+  let w0 = -1;
+  new ResizeObserver(() => { const w = box.clientWidth; if (w === w0) return; w0 = w; marquee(box, sel); }).observe(box);
+}
 // (while a match plays (body.mplay) the shell's own CSS animations hold still: the banner's scroll, the clip link's
 // pulse and the 2x badge; each ran compositor frames between the game's, goal 3a. The name marquees go on, stepped
 // from this frame bus: paused, they froze a long name cut off at both ends (user 2026-11-07); free-running, each ticked
@@ -4053,9 +4062,12 @@ function marquee(root, sel = '.mqx') {
     // (a Web Animation with concrete numbers runs on the compositor; the CSS keyframes with var() re-styled the text
     // every frame on the main thread)
     if (q && q.w === w && over > 2 && q.anim.playState !== 'idle') { t.appendChild(q.clone); continue; }
+    // (a name measured again at another width (its font loaded, the box resized) goes on from where it was: it started
+    // over at its first letter, a jump back mid-scroll, user 2026-11-08 "the names are popping")
+    const was = q ? q.anim.currentTime || 0 : 0;
     if (q) { q.anim.cancel(); mqAnims.delete(q.anim); t.__mq = null; }
     if (over <= 2 || (window.matchMedia && matchMedia('(prefers-reduced-motion: reduce)').matches) || !t.animate) continue;
-    const key = t.textContent, t0 = mqTakeOver(key);
+    const key = t.textContent, t0 = mqTakeOver(key) || was;
     const clone = document.createElement('span');
     clone.className = 'mqc'; clone.setAttribute('aria-hidden', 'true'); clone.style.paddingLeft = `${MQ_GAP}px`;
     for (const c of [...t.childNodes]) clone.appendChild(c.cloneNode(true));
@@ -4063,7 +4075,7 @@ function marquee(root, sel = '.mqx') {
     const lap = w + MQ_GAP;
     const anim = t.animate([{ transform: 'translateX(0)' }, { transform: `translateX(${-lap}px)` }],
                            { duration: lap / MQ_SPEED * 1000, iterations: Infinity, easing: 'linear' });
-    anim.__key = key; if (t0) anim.currentTime = t0;
+    anim.__key = key; if (t0) anim.currentTime = t0 % (lap / MQ_SPEED * 1000);
     t.__mq = { w, over, anim, clone }; mqAnims.add(anim);
     if (mPlay) anim.pause();
   }
