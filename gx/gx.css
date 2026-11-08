@@ -72,7 +72,7 @@
 :root.gx #liveitems > li :not(.lview, .i) { background-color: transparent; }
 /* (tight rows, user 2026-11-07 "so much padding": the slanted ends take the side room; the count column as wide as its
    pill, not a fixed 40 px) */
-:root.gx #liveitems a { grid-template-columns: 7px minmax(0, 1fr) 14px minmax(0, 1fr) auto; gap: 4px; padding: 2px 11px; border-radius: 0; }
+:root.gx #liveitems a { grid-template-columns: 7px minmax(0, 1fr) 14px minmax(0, 1fr) 40px;  /* (the watchers column a fixed width: auto made a row with a count narrower than one without, so the vs column moved row to row, user 2026-11-07) */ gap: 4px; padding: 2px 11px; border-radius: 0; }
 :root.gx body.mob #chatcol > #livesec #liveitems a { padding: 5px 11px; }
 /* (a name that fits sits centred in the room beside its icon (user 2026-11-07); a longer one starts at the left and
    scrolls, viewer.js marquee: .mq) */

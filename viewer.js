@@ -267,7 +267,8 @@ function fileJob(h, parts, z = null) {
           if (!j) return;
           filePool.jobs.delete(m.id);
           if (m.net) { net.bytes += m.net.bytes; net.cached += m.net.cached; if (m.net.bytes) net.objects++; }
-          m.err ? j.rej(new Error(`object ${j.h}: ${m.err}`)) : j.res(m.bufs.map(b => new Uint8Array(b)));
+          if (m.err) j.rej(new Error(`object ${j.h}: ${m.err}`));
+          else { const out = m.bufs.map(b => new Uint8Array(b)); out.ms = m.ms; out.bytes = m.bytes; j.res(out); }  // (ms / bytes: ?filesprof=1)
         };
         w.onerror = e => { e.preventDefault(); fileOff('worker failed: ' + (e.message || 'no script')); };
         w.postMessage({ key: cryptoKey });
@@ -506,18 +507,20 @@ async function fetchAll(man, paths, label, quiet = false) {
   // (file workers: a pack once for all of its files in this call -> their plain bytes, by path; null: this thread's path)
   const packParts = new Map(), packOut = new Map();
   if (!filePoolOff) for (const p of queue) { const f = man.files[p]; if (f && f.pk && !f.plain) { const l = packParts.get(f.pk[0]) || []; l.push(p); packParts.set(f.pk[0], l); } }
+  // (?filesprof=1: [path, codec ('xz' | 'd' deflate, 'pk:' a pack's part), bytes in, bytes out, queued, fetched, done] per object)
+  const prof = (p, z, nin, out, t0, t1, t2) => (window.__mbaaFiles || (window.__mbaaFiles = [])).push([p, z, nin, out.length, Math.round(t0), Math.round(t1), Math.round(t2)]);
   const viaPack = (h, p) => {
     if (!packOut.has(h)) {
-      const ps = packParts.get(h) || [p];
+      const ps = packParts.get(h) || [p], t0 = performance.now();
       packOut.set(h, fileJob(h, ps.map(q => [man.files[q].pk[1], man.files[q].pk[2], man.files[q].z || null]))
-        .then(bufs => new Map(ps.map((q, i) => [q, bufs[i]]))).catch(() => null));
+        .then(bufs => { const t2 = performance.now(); if (FILES_PROF) ps.forEach((q, i) => prof(q, 'pk:' + (man.files[q].z || 'd'), man.files[q].pk[2], bufs[i], t0, t2 - (bufs.ms ? bufs.ms.parts[i] : 0), t2)); return new Map(ps.map((q, i) => [q, bufs[i]])); }).catch(() => null));
     }
     return packOut.get(h).then(m => m && m.get(p));
   };
   const one = async p => {
-    const f = man.files[p];
+    const f = man.files[p], t0 = performance.now();
     let data;
-    if (!f.plain && !filePoolOff && (data = await (f.pk ? viaPack(f.pk[0], p) : fileJob(f.o, [null], f.z).then(b => b[0]).catch(() => null)))) {
+    if (!f.plain && !filePoolOff && (data = await (f.pk ? viaPack(f.pk[0], p) : fileJob(f.o, [null], f.z).then(b => { if (FILES_PROF) prof(p, f.z || 'd', b.bytes || 0, b[0], t0, t0 + (b.ms ? b.ms.fetch : 0), performance.now()); return b[0]; }).catch(() => null)))) {
       cache.set(p, data); return;
     }
     if (f.plain) {
@@ -5792,9 +5795,12 @@ function uiLoop() {
     if (+seek.min !== lo || +seek.max !== hi) { seek.min = lo; seek.max = hi; uiLast.vpx = uiLast.px = -1; seek.value = t.want !== null ? t.want : f; }
     // (the slider's value only when its thumb moves a whole pixel: a new value every frame re-laid the thumb every frame)
     if (!uiLast.measured) { uiLast.measured = true; uiMeasure(); }
+    // (the thumb moves in 4-px steps while playing (~4 times a second over a match), every pixel while seeking or at the
+    // end: each move repaints the slider and lays out the transport block, ~12/s per pixel on the Moto G)
+    const STEP = 4, end = max - f <= 2;
     if (!seekDragging) {
       const v = t.want !== null ? t.want : f, vpx = Math.round((uiLast.sw || 1000) * (v - lo) / span);
-      if (vpx !== uiLast.vpx || t.want !== null) { uiLast.vpx = vpx; if (+seek.value !== v) seek.value = v; }
+      if (Math.abs(vpx - uiLast.vpx) >= STEP || t.want !== null || end || uiLast.vpx < 0) { uiLast.vpx = vpx; if (+seek.value !== v) seek.value = v; }
     }
     setText('time', 'time', fmtTime(f));
     setText('dur', 'dur', `/ ${fmtTime(max)}${t.end === null ? '+' : ''}`);
@@ -5803,7 +5809,7 @@ function uiLoop() {
       uiLast.fcF = f; setText('fc', 'fc', `frame ${f}`);
     }
     const px = Math.round((uiLast.sw || 1000) * (seek.value - lo) / span);
-    if (px !== uiLast.px) { uiLast.px = px; seek.style.setProperty('--p', `${(100 * (seek.value - lo) / span).toFixed(2)}%`); }
+    if (Math.abs(px - uiLast.px) >= STEP || t.want !== null || end || uiLast.px < 0) { uiLast.px = px; seek.style.setProperty('--p', `${(100 * (seek.value - lo) / span).toFixed(2)}%`); }
     drawMarks(t, max);
     if (f !== lastDrawnFrame || overlayDirty) { lastDrawnFrame = f; overlayDirty = false; drawOverlay(); }
   }
@@ -7137,11 +7143,18 @@ async function liveClipChat(s, c, p) {
       if (l.sys || l.gone) continue;
       const pic = String((l.pic != null ? l.pic : l.text) || ''), x = l.action ? pic : pic.replace(/^(@\S+[:,]?\s*)+/, '').trim();
       if (!x) continue;
-      const pos = l.at || C.clockPos(clock, +l.time);
-      const loc = pos ? C.localOf(idx, pos) : null;
-      if (loc == null) continue;
-      const f = loc - c.loc0;
-      if (f < c.a || f > c.b) continue;
+      // (the frame the picture showed it at here, when it was put on the picture (chat.js danmaku_: l.dmAt): the clip
+      // shows it at the same frame and row; a comment still crossing at the in point keeps its earlier start (o < 0).
+      // A line never put on the picture here (the overlay off, a full picture): its stream position)
+      let f;
+      if (l.dmAt && l.dmAt.f != null) { f = l.dmAt.f; if (f < c.a - 900 || f > c.b) continue; }
+      else {
+        const pos = l.at || C.clockPos(clock, +l.time);
+        const loc = pos ? C.localOf(idx, pos) : null;
+        if (loc == null) continue;
+        f = loc - c.loc0;
+        if (f < c.a || f > c.b) continue;
+      }
       out.push({ o: f - c.a, n: String(l.nick || '').slice(0, 40), x: x.slice(0, 300), m: String(l.cmd || '').slice(0, 80),
                  c: /^#[0-9a-f]{6}$/i.test(l.color || '') ? l.color : '', a: l.action ? 1 : 0,
                  // (the chat's text, the sender's name style, the ~wave~ text, icon, an operator's line: chat.js clipLine)

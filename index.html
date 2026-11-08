@@ -21,7 +21,7 @@
 <meta name="twitter:description" content="Watch Melty Blood Actress Again Current Code replays in your browser, frame-exact.">
 <meta name="twitter:image" content="https://watch.meltyblood.org/preview.png">
 <meta name="mbaa-manifest" content="2a2e2bac19a8">
-<meta name="mbaa-chatjs" content="chat.js?v=9203486199c9">
+<meta name="mbaa-chatjs" content="chat.js?v=d2b74692189f">
 <meta name="mbaa-announcer" content="announcer/neco.bin?v=932b15248e89">
 <link rel="manifest" href="site.webmanifest">
 <link rel="icon" href="favicon-48.png" sizes="48x48">
@@ -29,7 +29,7 @@
 <link rel="apple-touch-icon" href="icon-192.png">
 <meta name="theme-color" content="#0d0620">  <!-- (the phone browser's bar: the theme's background; set with it, viewer.js GX.apply / the head script) -->
 <link rel="stylesheet" href="icons.css?v=4db5e6fecf18">
-<link rel="stylesheet" href="gx/gx.css?v=9ffaa9f70273">
+<link rel="stylesheet" href="gx/gx.css?v=5df4c146d800">
 <style>
   :root { --bg: #0d0d14; --panel: #15151f; --raise: #1d1d2a; --fg: #ececf4; --muted: #8a8aa2; --faint: #5c5c74;
           --accent: #e04a5a; --accent2: #ffb84a; --line: #262636; --w: min(100%, 960px); }
@@ -157,7 +157,10 @@
      the four groups in one row under it. Narrow: the timeline; the clock and the right group; seek; view and clip.
      Phones keep frame step and rounds in the bar (the rest in the menu sheet). viewer.js fitStage measures the
      transport's height at each picture width it tries. */
-  #transportsec { display: flex; flex-direction: row; flex-wrap: wrap; align-items: center; gap: 4px 0; position: relative; container: tp / inline-size; }
+  #transportsec { display: flex; flex-direction: row; flex-wrap: wrap; align-items: center; gap: 4px 0; position: relative; container: tp / inline-size;
+    will-change: transform; }  /* (its own compositing layer: the clock's digits and the seek thumb repaint it, not the page (a root repaint ~30/s cost
+    the Moto G 0.13 ms of main thread and a cc tile raster on the GPU process per frame: phone e_trace_1107)) */
+  .tbar .clock { contain: layout; }  .tbar .clock :is(#time, #dur, #fc) { font-variant-numeric: tabular-nums; }  /* (a digit change lays out the clock only) */
   #transportsec .timeline { flex: 1 1 100%; min-width: 0; }
   body.mob #transportsec { width: 100%; padding: 2px 8px; gap: 2px 0; }
   body.mob.land #transportsec { border-left: 1px solid var(--line); background: var(--panel); }
@@ -991,8 +994,8 @@
   </div>
 </div>
 </div>
-<script src="mbaa.js?v=0ab30dcacef1"></script>
+<script src="mbaa.js?v=21fd62bd6dc2"></script>
 <script src="bgm_stream.js?v=cad5cabd6328"></script>
-<script src="viewer.js?v=e10516fcef55"></script>
+<script src="viewer.js?v=624b786b54c2"></script>
 </body>
 </html>

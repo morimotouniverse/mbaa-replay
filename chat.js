@@ -846,6 +846,14 @@
   #chatlog a.xcard .xplay { position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%); width: 46px; height: 32px; border-radius: 9px;
     background: #e02020e6; color: #fff; font-style: normal; display: grid; place-items: center; font-size: 15px; }
   #chatlog a.xcard.noimg img, #chatlog a.xcard.noimg .xthumb { display: none; }
+  /* an X post: author, text, its picture */
+  #chatlog a.xcard.xtw .xtwh { display: flex; align-items: center; gap: 6px; min-width: 0; font-size: 12px; color: var(--muted); }
+  #chatlog a.xcard.xtw .xtwh b { color: var(--fg); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  #chatlog a.xcard.xtw .xtwh span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  #chatlog a.xcard.xtw img.xav { width: 20px; height: 20px; border-radius: 50%; flex: none; background: none; }
+  #chatlog a.xcard.xtw .xtwt { font-size: 12.5px; line-height: 1.35; white-space: pre-wrap; overflow-wrap: anywhere; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 6; overflow: hidden; }
+  #chatlog a.xcard.xtw .xtwm { position: relative; display: block; }
+  #chatlog a.xcard.xtw .xtwm img { width: 100%; }
   #chatlog .cts { cursor: pointer; color: var(--accent2, #8ab4ff); border-bottom: 1px dotted currentColor; }
   #chatlog .ctime.cts { color: var(--faint); }
   #chatlog .ctime.cts:hover, #chatlog .cts:hover { color: var(--fg); }
@@ -1412,6 +1420,9 @@
   // (scrolled down to the newest line: read)
   logEl.addEventListener('scroll', () => { if (logStick) markRead(chans.get(key(shown))); }, { passive: true });
   if (window.ResizeObserver) new ResizeObserver(() => { if (logStick) logEl.scrollTop = logEl.scrollHeight; }).observe(logEl);
+  // (a line that grows after it went in (an emote's image loading) left the newest line a few px under the view:
+  // re-stuck once the image is in; load does not bubble, so caught on the way down)
+  logEl.addEventListener('load', () => { if (logStick) stickSoon(); }, true);
   cmdIn.value = String(store.get('mbaa-chat-cmd', '')).slice(0, 60);  // (kept, as Nico's command box is)
   cmdIn.onchange = () => store.set('mbaa-chat-cmd', cmdIn.value.trim());
   // Signed-in names are "Name#1234" (the community account's tag keeps them unique); shown without the #tag unless the
@@ -2571,6 +2582,24 @@ onmessage = ({ data: m }) => {
     const mm = /^\/(shorts|live|embed)\/([\w-]{6,20})/.exec(x.pathname);
     return mm ? mm[2] : null;
   }
+  // an X post's card data from fxtwitter's API (CORS open), one fetch per post: {name, handle, text, av, pic, video} or null
+  const tweets = new Map();
+  function tweetOf(user, id) {
+    if (!tweets.has(id)) {
+      if (tweets.size > 200) tweets.delete(tweets.keys().next().value);
+      tweets.set(id, fetch(`https://api.fxtwitter.com/${user}/status/${id}`, AbortSignal.timeout ? { signal: AbortSignal.timeout(8000) } : {})
+        .then(r => r.ok ? r.json() : null).then(j => {
+          const t = j && j.tweet;
+          if (!t) return null;
+          const https = v => typeof v === 'string' && /^https:\/\/[\w.-]+\.(twimg\.com|fxtwitter\.com)\//.test(v) ? v : '';
+          const m = (t.media && t.media.all) || [], m0 = m[0] || null;
+          const pic = m0 ? https(m0.type === 'photo' ? m0.url.replace(/\?name=orig$/, '?name=small') : m0.thumbnail_url) : '';
+          return { name: String((t.author && t.author.name) || user).slice(0, 60), handle: String((t.author && t.author.screen_name) || user).slice(0, 20),
+                   text: String(t.text || '').slice(0, 400), av: https(t.author && t.author.avatar_url), pic, video: !!(m0 && m0.type !== 'photo') };
+        }).catch(() => null));
+    }
+    return tweets.get(id);
+  }
   function extEmbed(u) {
     const x = extUrl(u);
     if (!x) return null;
@@ -2590,6 +2619,32 @@ onmessage = ({ data: m }) => {
     }
     if (/\.(png|jpe?g|gif|webp|avif)$/i.test(x.pathname)) { a.classList.add('ximg'); a.append(img(u)); return a; }
     const h = x.hostname.replace(/^www\./, '');
+    // an X post (x.com / twitter.com and the fixers' fixupx / fxtwitter / vxtwitter / fixvx links): the post itself
+    // (author, text, its first picture or video's thumbnail) from fxtwitter's API, as Discord embeds it; until it comes
+    // (or when it never does) the one-line card (user 2026-11-07 "twitter isnt embedding in chat")
+    const tw = /^(?:mobile\.)?(?:x|twitter|fixupx|fxtwitter|vxtwitter|fixvx)\.com$/.test(h) && /^\/(\w{1,15})\/status(?:es)?\/(\d{5,25})/.exec(x.pathname);
+    if (tw) {
+      const c0 = cap('X', cleanUrl(u));
+      a.classList.add('xtw'); a.href = `https://x.com/${tw[1]}/status/${tw[2]}`; a.append(c0);
+      tweetOf(tw[1], tw[2]).then(t => {
+        if (!t) return;
+        const hd = document.createElement('span'); hd.className = 'xtwh';
+        if (t.av) { const av = img(t.av); av.className = 'xav'; av.onerror = () => av.remove(); hd.append(av); }
+        const nm = document.createElement('b'); nm.textContent = t.name; const hn = document.createElement('span'); hn.textContent = '@' + t.handle;
+        hd.append(nm, hn);
+        const tx = document.createElement('span'); tx.className = 'xtwt'; tx.textContent = t.text;
+        const parts = [hd];
+        if (t.text) parts.push(tx);
+        if (t.pic) {
+          const f = document.createElement('span'); f.className = 'xtwm'; const pi = img(t.pic); pi.onerror = () => f.remove(); f.append(pi);
+          if (t.video) { const pl = document.createElement('i'); pl.className = 'xplay'; pl.textContent = '▶'; f.append(pl); }
+          parts.push(f);
+        }
+        c0.replaceWith(...parts);
+        a.dispatchEvent(new Event('load'));  // (the log re-sticks to the newest line: the card grew)
+      });
+      return a;
+    }
     const site = /(^|\.)twitch\.tv$/.test(h) ? 'Twitch' : /^(x|twitter)\.com$/.test(h) ? 'X' : /(^|\.)discord\.(gg|com)$/.test(h) ? 'Discord'
       : /(^|\.)start\.gg$/.test(h) ? 'start.gg' : /(^|\.)reddit\.com$/.test(h) ? 'Reddit' : h;
     a.append(cap(site, cleanUrl(u)));
@@ -4185,6 +4240,9 @@ onmessage = ({ data: m }) => {
     if (OVP) { ovp('dmMake', t0); t0 = performance.now(); }
     if (!c.text.trim()) return;  // (only emoji, and the emoji amount at 0)
     dmPlace(nico.list, c, spread);
+    // (a clip of this moment shows the comment as it was shown here: its row and the picture's frame when it went up,
+    // viewer.js liveClipChat; user 2026-11-07 "there should be NO DIFFERENTIATION")
+    { const f = api.frame(); l.dmAt = { y: c.y, f: f == null ? null : f }; }
     if (OVP) { ovp('dmPlace', t0); t0 = performance.now(); }
     nico.list.push(c);
     try { glovPut(c, 0); } catch (e) { ovWarn('put', e); c.gM = null; }
@@ -4447,7 +4505,7 @@ onmessage = ({ data: m }) => {
     // without going over the whole history again per comment; a match's spam ran into thousands of them, each new line
     // laying out all of them again: O(n^2) per line, a few seconds a line once it was long)
     let act = [];
-    for (const c of cs) { act = act.filter(a => a.t + a.life + spread > c.t); dmPlace(act, c, spread); act.push(c); }
+    for (const c of cs) { act = act.filter(a => a.t + a.life + spread > c.t); if (c.fixY != null) c.y = c.fixY; else dmPlace(act, c, spread); act.push(c); }
     const keep = new Set(cs);
     for (const c of tl.st.list) if (!keep.has(c)) { glovDel(c); if (c.el) { c.el.remove(); c.el = null; } }
     tl.st.list = cs; tl.T = -1;
@@ -5675,11 +5733,12 @@ onmessage = ({ data: m }) => {
   const clip = { all: [], a: null, n: -1, raf: 0, j: null, glov: false };
   // a clip JSON line -> a chat line (the fields lineEl / dmMake read)
   function clipLineOf(x, i) {
-    const o = Math.max(0, Math.round(+x.o || 0)), st = typeof x.s === 'string' && x.s ? styleParse(x.s) : null;
+    const o = Math.max(-900, Math.round(+x.o || 0)), st = typeof x.s === 'string' && x.s ? styleParse(x.s) : null;
     const pic = flagOff(String(x.x || '')), sty = st && Object.keys(st).length ? st : null;
     return { o, i, nick: String(x.n || ''), text: flagOff(String(x.t || x.x || '')), pic, picW: sty && typeof x.xw === 'string' && x.xw ? flagOff(x.xw) : null,
              color: COLOR_RE.test(x.c || '') ? x.c : '', chara: Number.isInteger(x.k) ? x.k : -1, moon: Number.isInteger(x.mo) ? x.mo : -1,
-             action: !!x.a, cmd: String(x.m || ''), op: x.op ? 1 : 0, st: sty, time: new Date(o * 1000 / 60), chan: CLIP_CH };
+             action: !!x.a, cmd: String(x.m || ''), op: x.op ? 1 : 0, st: sty, time: new Date(o * 1000 / 60), chan: CLIP_CH,
+             y: Number.isFinite(x.y) ? x.y : null };
   }
   function clipLi(l) {
     const li = lineEl(l), tm = li.querySelector('.ctime');
@@ -5707,7 +5766,13 @@ onmessage = ({ data: m }) => {
     if (!overOn.checked || clip.a == null) return;
     clip.glov = !!glovReady();
     const es = [];
-    for (const l of clip.all) { if (!dmText(l)) continue; emotesPending(l); es.push({ l, pos: null, T: 0, c: dmMake(l, (clip.a + l.o) / 60) }); }
+    for (const l of clip.all) {
+      if (!dmText(l)) continue;
+      emotesPending(l);
+      const c = dmMake(l, (clip.a + l.o) / 60);
+      if (l.y != null) c.fixY = l.y;  // (the row it had on the live picture: tlRelayout keeps it)
+      es.push({ l, pos: null, T: 0, c });
+    }
     tl.entries = es;
     tlRelayout();
     tl.T = -1;
@@ -5721,7 +5786,7 @@ onmessage = ({ data: m }) => {
     FX.clock(NFX.now());  // (and the name worker's)
     // the column: the lines said up to the picture's frame
     let n = 0;
-    while (n < clip.all.length && clip.a + clip.all[n].o <= f) n++;
+    while (n < clip.all.length && clip.a + clip.all[n].o <= f) n++;  // (o < 0: up before the in point, listed from the start)
     if (n !== clip.n) {
       const c = chan(CLIP_CH);
       if (clip.n > 0 && n > clip.n) {  // (played on: the new lines appended)
@@ -5786,7 +5851,10 @@ onmessage = ({ data: m }) => {
   // picture, character and moon, a channel operator's line
   function clipLine(l) {
     const st = lineStyle(l), lc = l.chan && chans.get(key(l.chan)), op = !!(lc && l.irc && lc.ops.has(key(l.irc)));
-    const out = { t: String(l.text || '').slice(0, 300), s: st ? styleSpec(st) : '', k: validChara(l.chara) ? l.chara : -1, mo: [0, 1, 2].includes(l.moon) ? l.moon : -1, op: op ? 1 : 0 };
+    const out = { t: String(l.text || '').slice(0, 300), s: st ? styleSpec(st) : '', k: validChara(l.chara) ? l.chara : -1, mo: [0, 1, 2].includes(l.moon) ? l.moon : -1, op: op ? 1 : 0,
+                  // (the sender's account: the Worker takes its style from the bot by it when it is the shown name's;
+                  // the row and frame the comment was shown at here: viewer.js uses the frame for o)
+                  u: l.acct ? String(l.acct).slice(0, 40) : '', ...(l.dmAt && l.dmAt.f != null ? { y: l.dmAt.y, df: l.dmAt.f } : {}) };
     if (st && l.picW) { const w = l.action ? String(l.picW) : String(l.picW).replace(/^(@\S+[:,]?\s*)+/, '').trim(); if (w) out.xw = w.slice(0, 300); }
     return out;
   }

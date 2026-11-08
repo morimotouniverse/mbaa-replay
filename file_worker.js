@@ -34,8 +34,11 @@ self.onmessage = async ({ data: m }) => {
   if (m.key) { key = m.key; return; }
   const net = { bytes: 0, cached: 0 };
   try {
+    const t0 = performance.now();
     const b = new Uint8Array(await raw(m.url, net));
-    const bufs = await Promise.all(m.parts.map(p => open(p ? b.subarray(p[0], p[0] + p[1]) : b, p ? p[2] : m.z)));
-    self.postMessage({ id: m.id, bufs, net }, bufs);
+    const t1 = performance.now(), ms = [];
+    // (ms: the fetch, then each part's decrypt + decode: viewer.js ?filesprof=1, window.__mbaaFiles)
+    const bufs = await Promise.all(m.parts.map(async (p, i) => { const ta = performance.now(); const out = await open(p ? b.subarray(p[0], p[0] + p[1]) : b, p ? p[2] : m.z); ms[i] = performance.now() - ta; return out; }));
+    self.postMessage({ id: m.id, bufs, net, ms: { fetch: t1 - t0, parts: ms }, bytes: b.byteLength }, bufs);
   } catch (e) { self.postMessage({ id: m.id, err: String(e && e.message || e), net }); }
 };
