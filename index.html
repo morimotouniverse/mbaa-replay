@@ -21,7 +21,7 @@
 <meta name="twitter:description" content="Live Melty Blood: Actress Again Current Code matches, chat and replays in your browser.">
 <meta name="twitter:image" content="https://watch.meltyblood.org/preview.png">
 <meta name="mbaa-manifest" content="2a2e2bac19a8">
-<meta name="mbaa-chatjs" content="chat.js?v=90cc6e63a8f5">
+<meta name="mbaa-chatjs" content="chat.js?v=ba7b6b136505">
 <meta name="mbaa-announcer" content="announcer/neco.bin?v=932b15248e89">
 <link rel="manifest" href="site.webmanifest">
 <link rel="icon" href="favicon-48.png" sizes="48x48">
@@ -793,6 +793,23 @@
   kbd { font: 11px ui-monospace, Consolas, monospace; background: var(--raise); border: 1px solid #34344a; border-bottom-width: 2px;
         border-radius: 4px; padding: 0 4px; color: var(--fg); }
   .credit { font-size: 10px; margin-top: 10px; color: var(--faint); }
+  /* the site's right-click / long-press menu (viewer.js ctxOpen) */
+  #ctxm { position: fixed; z-index: 200; min-width: 200px; max-width: min(320px, calc(100vw - 8px)); padding: 4px; box-sizing: border-box;
+          background: var(--panel); border: 1px solid var(--line); border-radius: 10px; box-shadow: 0 12px 36px #000b;
+          display: flex; flex-direction: column; font-size: 13px; -webkit-user-select: none; user-select: none; }
+  #ctxm button { all: unset; box-sizing: border-box; padding: 7px 10px; border-radius: 6px; color: var(--fg); cursor: pointer; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  #ctxm button:hover, #ctxm button:focus-visible { background: #ffffff14; }
+  #ctxm button.mod { color: var(--accent2); }
+  #ctxm .sep { height: 1px; margin: 3px 6px; background: var(--line); }
+  body.mob #ctxm button { padding: 11px 12px; font-size: 14px; }
+  #liveitems li, #chatsec .ctab { -webkit-touch-callout: none; }
+  /* a match a mod pinned to the top (viewer.js liveListShow) */
+  #liveitems li.pin a::before { content: '\2691'; color: var(--accent2); font-size: 10px; }
+  #liveitems li.pin a { box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent2) 45%, transparent); }
+  /* a chat popped out into its own window (?popchat=: viewer.js ctxPopChat): the chat column alone */
+  body.popchat .main > :not(#chatcol) { display: none !important; }
+  body.popchat #chatcol > :not(#chatsec) { display: none !important; }
+  body.popchat #chatcol { display: flex !important; position: fixed; inset: 0; width: auto; height: 100vh; height: 100dvh; border-radius: 0; border: 0; }
 </style>
 </head>
 <body>
@@ -1012,6 +1029,6 @@
 </div>
 <script src="mbaa.js?v=c2032eb59ac2"></script>
 <script src="bgm_stream.js?v=cad5cabd6328"></script>
-<script src="viewer.js?v=db0605c3671b"></script>
+<script src="viewer.js?v=c1b101094948"></script>
 </body>
 </html>

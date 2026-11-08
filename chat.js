@@ -2319,7 +2319,7 @@ onmessage = ({ data: m }) => {
 
   // ---- channels and the log ----
   const chans = new Map();  // name (lowercase) -> {name, lines: [], names: Set, joined, histDone}
-  let shown = GENERAL, matchChan = null;
+  let shown = GENERAL, matchChan = null, pins = new Set();
   // the tab is the viewer's: a match appearing or the watched match switching never takes a viewer off #melty (it looked
   // like #melty's chat being wiped: every reload, and a click on another live match is one, showed the new match's
   // empty channel); remembered across reloads ('match' by default: a new viewer sees the match they came to watch)
@@ -2336,7 +2336,9 @@ onmessage = ({ data: m }) => {
       .map(t => ({ name: t.name, names: (Array.isArray(t.names) ? t.names : []).slice(0, 2).map(n => String(n || '').slice(0, 40)), ov: !!t.ov, seen: +t.seen || 0, ended: false }));
   } catch (e) { xtabs = []; }
   const xOf = name => (name && xtabs.find(t => key(t.name) === key(name))) || null;
-  const xSave = () => store.set(XKEY, xtabs.map(({ name, names, ov, seen }) => ({ name, names, ov, seen })));
+  const POP = (() => { const v = new URLSearchParams(location.search).get('popchat') || ''; return /^#(melty|m-[A-Za-z0-9_-]{1,60})$/.test(v) ? v : null; })();
+  // (a popped-out chat window (viewer.js ctxPopChat) shows its channel; it writes no tabs: the main window's are its own)
+  const xSave = () => POP || store.set(XKEY, xtabs.map(({ name, names, ov, seen }) => ({ name, names, ov, seen })));
   const xLabel = t => { const n = t.names.map(x => (x || '').trim()).filter(Boolean).join(' vs ') || 'a match';
     return (n.length > 30 ? n.slice(0, 29) + '…' : n) + (t.ended ? ' · ended' : ''); };
   // the read point of each channel (ms, server time of the newest line read): signed in, the server's read marker
@@ -2361,7 +2363,7 @@ onmessage = ({ data: m }) => {
     const names = [GENERAL, matchChan, ...xtabs.map(t => t.name).filter(n => !isMC(n))].filter(Boolean);
     for (const name of names) {
       const c = chan(name), b = document.createElement('button'), x = xOf(name), isM = isMC(name), off = key(name) !== key(shown);
-      b.type = 'button'; b.className = 'ctab' + (off ? '' : ' on');
+      b.type = 'button'; b.className = 'ctab' + (off ? '' : ' on'); b.dataset.chan = name;
       b.textContent = name === GENERAL ? '#melty' : isM ? 'this match' : xLabel(x);
       b.title = name === GENERAL || isM ? name : `${x.names.filter(Boolean).join(' vs ') || 'a match'}${x.ended ? ' (ended)' : ''}: its chat (the picture stays on yours)`;
       const n = document.createElement('span'); n.className = 'n'; n.textContent = c.names.size || ''; b.append(n);
@@ -5139,6 +5141,12 @@ onmessage = ({ data: m }) => {
           glowAccts = new Set(String(gl).split(',').filter(a => ACCT_RE.test(a)).map(key));
           stylesChanged(); spreadAdmin();
         }
+        // (the matches mods pinned to the top of the live list: viewer.js liveListShow / the right-click menu)
+        const pn = m.tags['+mbaa/pins'];
+        if (pn != null && fromBot) {
+          const nx = new Set(String(pn).split(',').filter(k => /^[A-Za-z0-9_-]{1,60}$/.test(k)));
+          if ([...nx].join() !== [...pins].join()) { pins = nx; try { api.pinsChanged && api.pinsChanged(); } catch (e) {} }
+        }
         // (every styler's account and spec, in parts when long)
         const ss = m.tags['+mbaa/styles'];
         if (ss != null && fromBot) stylesSet(ss, m.tags['+mbaa/stylesn']);
@@ -5969,7 +5977,13 @@ onmessage = ({ data: m }) => {
 
   if (CLIPM) clipMode(CLIPM);
   else { tabs(); render(); start(); }
-  window.mbaaChat = { openMatch: m => { try { xOpen(m); } catch (e) { console.warn('chat tab:', e); } }, clipLine, fx: { on: FX.on, n: FX.n, clock: t => FX.clock(t) }, clipState: () => ({ n: clip.n, a: clip.a, all: clip.all.length, ids: clip.all.map(l => tl.entries.find(e => e.l === l)).map(e => e && e.c ? e.c.gid : 0),
+  if (POP) {  // (the popped-out window: its channel, as a tab when a match's)
+    if (POP !== GENERAL) { if (!xOf(POP)) xAdd(POP, []); }
+    shown = POP; tabs(); render();
+  }
+  window.mbaaChat = { pins: () => pins, isMod: () => !!irc.nick && modNick(irc.nick),
+    pin: (k, on) => { if (!/^[A-Za-z0-9_-]{1,60}$/.test(k)) return; toBot(`${on ? 'pin' : 'unpin'} ${k}`); },
+    openMatch: m => { try { xOpen(m); } catch (e) { console.warn('chat tab:', e); } }, clipLine, fx: { on: FX.on, n: FX.n, clock: t => FX.clock(t) }, clipState: () => ({ n: clip.n, a: clip.a, all: clip.all.length, ids: clip.all.map(l => tl.entries.find(e => e.l === l)).map(e => e && e.c ? e.c.gid : 0),
     lines: [...logEl.querySelectorAll('li[data-clip-i]')].map(li => +li.dataset.clipI) }), nicoMax: n => { NICO_ON_SCREEN = n; }, dmText: t => dmTextOf({}, t), dmLine: l => dmMake(l, 0).text, emotes: () => [...EMOTES.keys()], emoteReady: n => !!(EMOTES.get(n) && emoteReady(EMOTES.get(n))), swellMap: swells, ovReset: () => { dmClear(nico); swellClear(); }, ovRecover: () => ovRecover('test'), ovRecoveries: () => ovRecoveries, ovRestored: () => { swellClear(); glovReady(); }, irc, auth, nameOk, chans, prof, danmaku, say, nico, tl, clockPos, localOf, posOf, nowOf, feed: raw => on(parse(raw)), spread: () => spread, owner: () => ({ acct: ownAcct, spec: styleSpec(ownStyle) }), styles: () => Object.fromEntries([...styles.values()].map(x => [x.acct, styleSpec(x.st)])), mayStyle: () => mayStyle(), picSet, md: mdPlain, mirc: t => mircNodes(t).map(n => n.outerHTML || n.textContent).join(''),
     idle: ms => { idleMs = ms; }, swells: () => [...swells.values()].filter(x => x.el).map(x => ({ e: x.e, n: x.count, size: parseFloat(x.em.style.fontSize), op: x.el.style.opacity })), typingTimes: { TYPE_EVERY, TYPE_TTL }, show: name => { chan(name); shown = name; tabs(); render(); }, status: () => ({ connected: irc.registered, nick: irc.nick, caps: [...irc.caps], shown, matchChan }) };  // (tests)
 })();

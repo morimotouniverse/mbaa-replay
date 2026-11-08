@@ -955,8 +955,139 @@ let session = null;
 const pl = { items: [], i: -1 };  // playlist: {name, file, url?} (see startItem)
 let man = null;
 const misses = new Set();  // bundle files the game looked up that the page had not fetched
-// no context menu on the game picture (every canvas freshCanvas makes; was an inline oncontextmenu, which the page's CSP forbids)
-document.addEventListener('contextmenu', e => { if (e.target && e.target.id === 'canvas') e.preventDefault(); });
+// ---- the site's own right-click / long-press menu (user 2026-11-08): on a live list row, the picture, the match card and a
+// chat tab. Everyone: copy the match's link, a link at this moment, its chat as a tab, open it in a new tab, pop a chat
+// out into its own window; mods and admins (operators in the chat): pin a match to the top of everyone's live list
+// (the chat bot keeps the pins: pin / unpin, sent to all as +mbaa/pins). Links always name the public site.
+// (the game picture's own browser menu stays off: every canvas freshCanvas makes; the CSP forbids an inline handler)
+const ctxPublic = () => /^(127\.0\.0\.1|localhost)$/.test(location.hostname) ? location.origin + location.pathname : 'https://watch.meltyblood.org/';
+const ctxMatchUrl = m => `${ctxPublic()}?live=${m.id}`;
+const ctxPinKey = m => (m && (m.match || m.id)) || '';
+const ctxChat = () => window.mbaaChat || null;
+async function ctxCopy(text, what) {
+  try { await navigator.clipboard.writeText(text); status(`copied ${what}: ${text}`); } catch (e) { prompt('copy:', text); }
+}
+// a live chat in its own window (?popchat=<channel>: the chat column alone, no game loaded)
+function ctxPopChat(chanName) {
+  const u = new URL(location.origin + location.pathname);
+  u.searchParams.set('popchat', chanName);
+  const w = window.open(u.toString(), `mbaachat${chanName.replace(/[^A-Za-z0-9]/g, '')}`, 'popup,width=440,height=760');
+  if (!w) status('pop-out: the browser blocked the window (allow pop-ups for this site)');
+}
+// "Copy link at this moment" on the match being watched: a replay at the frame on screen (live: the game so far, saved
+// as a replay now: liveClipLink's moment; a live link needs a chat sign-in, as clips do)
+function ctxMoment() {
+  const s = session;
+  if (!s) return;
+  if (!s.liveSrc) return copyTimestamp(true);
+  if (!liveClipCan()) { status(`live moment link: ${LIVE_SIGNIN}`); return; }
+  const lo = clipFirst(s), b = Math.max(lo + 1, s.M._viewer_frame());
+  const c = Object.assign({ a: Math.max(lo, b - 600), b }, liveClipWhere(s));
+  return liveClipLink(s, c, true);
+}
+// the menu's items for a live match (m: a live list entry; the watched one is the session's)
+function ctxMatchItems(m) {
+  const C = ctxChat(), watching = !!(m && session && session.liveSrc && liveOurs(m, session.liveSrc)), it = [];
+  if (!m) return it;
+  it.push({ t: 'Copy link to the match', fn: () => ctxCopy(ctxMatchUrl(m), 'the match link') });
+  if (watching) it.push({ t: 'Copy link at this moment', fn: ctxMoment });
+  it.push({ t: 'Open in a new tab', fn: () => window.open(`${location.pathname}?live=${m.id}`, '_blank', 'noopener') });
+  if (C && m.match && !watching) it.push({ t: 'Open its chat as a tab', fn: () => C.openMatch(m) });
+  if (C && m.match) it.push({ t: 'Pop out its chat', fn: () => ctxPopChat(`#m-${String(m.match).replace(/[^A-Za-z0-9_-]/g, '').slice(0, 60)}`) });
+  if (C && C.isMod && C.isMod()) {
+    const k = ctxPinKey(m), on = !!(C.pins && C.pins().has(k));
+    it.push(null, { t: on ? 'Unpin from the top' : 'Pin to the top for everyone', fn: () => C.pin(k, !on), mod: true });
+  }
+  return it;
+}
+// the watched match as a live list entry (the list's own, else one made from the session)
+function ctxWatched() {
+  const L = session && session.liveSrc;
+  if (!L) return null;
+  const l = liveListLast ? liveListLast.l : [];
+  return (l || []).find(m => liveOurs(m, L)) || { id: L.id, match: L.info && L.info.match, names: L.info && L.info.names };
+}
+function ctxItemsFor(target) {
+  if (!target || !target.closest) return null;
+  if (target.closest('#ctxm, input, textarea, select, [contenteditable]')) return null;
+  const row = target.closest('#liveitems li');
+  if (row && row.__m) return ctxMatchItems(row.__m);
+  const tab = target.closest('#chatsec .ctab[data-chan]');
+  if (tab) {
+    const C = ctxChat(), name = tab.dataset.chan, it = [], m = (liveListLast && liveListLast.l || []).find(x => x.match && `#m-${x.match}`.toLowerCase() === name.toLowerCase());
+    it.push({ t: name === '#melty' ? 'Pop out #melty' : 'Pop out this chat', fn: () => ctxPopChat(name) });
+    if (m) it.push(null, ...ctxMatchItems(m).filter(x => !x || x.t !== 'Pop out its chat' && x.t !== 'Open its chat as a tab'));
+    else if (C && /^#m-/.test(name)) it.push({ t: 'Copy link to its chat', fn: () => ctxCopy(`${ctxPublic()}?popchat=${encodeURIComponent(name)}`, 'the chat link') });
+    return it;
+  }
+  if (target.closest('#matchcard, #players')) return session && session.liveSrc ? ctxMatchItems(ctxWatched()) : null;
+  const st = target.closest('.stage');
+  if (st && !target.closest('.fsbar, #chatcol, button, a') && session) {
+    if (session.liveSrc) return ctxMatchItems(ctxWatched());
+    return [{ t: 'Copy link at this moment', fn: () => copyTimestamp(true) }, { t: 'Copy link to the replay', fn: () => copyTimestamp(false) }];
+  }
+  return null;
+}
+let ctxEl = null;
+function ctxClose() { if (ctxEl) { ctxEl.remove(); ctxEl = null; } }
+function ctxOpen(x, y, items) {
+  ctxClose();
+  items = items.filter((v, i, a) => v || (i > 0 && i < a.length - 1 && a[i - 1]));
+  if (!items.some(Boolean)) return;
+  const m = ctxEl = document.createElement('div');
+  m.id = 'ctxm'; m.setAttribute('role', 'menu');
+  for (const v of items) {
+    if (!v) { m.append(Object.assign(document.createElement('div'), { className: 'sep' })); continue; }
+    const b = document.createElement('button');
+    b.type = 'button'; b.setAttribute('role', 'menuitem'); b.textContent = v.t;
+    if (v.mod) b.className = 'mod';
+    // (the action in the click itself: the clipboard and window.open want the user's gesture)
+    b.onclick = e => { e.stopPropagation(); ctxClose(); try { const r = v.fn(); if (r && r.catch) r.catch(err => status(String(err.message || err))); } catch (err) { status(String(err.message || err)); } };
+    m.append(b);
+  }
+  (document.fullscreenElement || document.body).append(m);
+  const r = m.getBoundingClientRect(), W = innerWidth, H = innerHeight;
+  m.style.left = `${Math.max(4, Math.min(x, W - r.width - 4))}px`;
+  m.style.top = `${Math.max(4, y + r.height > H - 4 ? y - r.height : y)}px`;
+  const first = m.querySelector('button');
+  if (first) first.focus({ preventScroll: true });
+}
+document.addEventListener('contextmenu', e => {
+  if (e.target && e.target.id === 'canvas') e.preventDefault();
+  if (e.shiftKey) return;  // (Shift + right-click: the browser's own menu)
+  const items = ctxItemsFor(e.target);
+  if (!items) return;
+  e.preventDefault(); ctxPress = null;
+  ctxOpen(e.clientX, e.clientY, items);
+});
+// a touch held ~0.5 s: the menu (iPhones fire no contextmenu; Android does, which opens it first and ends this press)
+let ctxPress = null, ctxSwallow = 0;
+document.addEventListener('pointerdown', e => {
+  if (ctxEl && !e.target.closest('#ctxm')) ctxClose();
+  if (e.pointerType !== 'touch') return;
+  const p = ctxPress = { x: e.clientX, y: e.clientY, t: e.target };
+  setTimeout(() => {
+    if (ctxPress !== p) return;
+    ctxPress = null;
+    const items = ctxItemsFor(p.t);
+    if (items) { ctxSwallow = performance.now(); ctxOpen(p.x, p.y, items); }
+  }, 520);
+}, true);
+for (const ev of ['pointerup', 'pointercancel']) document.addEventListener(ev, () => { ctxPress = null; }, true);
+document.addEventListener('pointermove', e => { if (ctxPress && Math.hypot(e.clientX - ctxPress.x, e.clientY - ctxPress.y) > 10) ctxPress = null; }, true);
+// (the tap that ends a long press does not also follow the row's link)
+document.addEventListener('click', e => { if (performance.now() - ctxSwallow < 700 && !e.target.closest('#ctxm')) { e.preventDefault(); e.stopPropagation(); ctxSwallow = 0; } }, true);
+document.addEventListener('keydown', e => {
+  if (!ctxEl) return;
+  if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); ctxClose(); return; }
+  if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+    const bs = [...ctxEl.querySelectorAll('button')], i = bs.indexOf(document.activeElement);
+    e.preventDefault(); e.stopPropagation();
+    bs[(i + (e.key === 'ArrowDown' ? 1 : bs.length - 1)) % bs.length].focus();
+  }
+}, true);
+for (const ev of ['blur', 'resize']) addEventListener(ev, ctxClose);
+document.addEventListener('scroll', ctxClose, true);
 function freshCanvas() {
   const old = document.getElementById('canvas');
   const c = old.cloneNode(false);
@@ -4205,8 +4336,10 @@ async function liveListDraw(given) {
   // (most watched on top, user 2026-11-01; idle hosts last; a tie keeps the order it had, so equal counts never swap)
   const was = new Map([...ol.children].map((li, i) => { try { return [JSON.parse(li.dataset.key)[0], i]; } catch (e) { return [null, i]; } }));
   const at = m => was.has(m.id) ? was.get(m.id) : 1e6 + l.indexOf(m);
+  // (pinned by a mod or admin: on top, for everyone, in the order pinned; user 2026-11-08)
+  const pinned = (window.mbaaChat && window.mbaaChat.pins && window.mbaaChat.pins()) || new Set(), pinAt = m => [...pinned].indexOf(ctxPinKey(m));
   l = [...l.filter(m => !liveIdle(m)), ...l.filter(liveIdle)]
-    .map(m => [m, liveIdle(m) ? 1 : 0]).sort((a, b) => a[1] - b[1] || (b[0].viewers || 0) - (a[0].viewers || 0) || at(a[0]) - at(b[0])).map(x => x[0]);
+    .map(m => [m, pinAt(m) >= 0 ? pinAt(m) - 1000 : liveIdle(m) ? 1 : 0]).sort((a, b) => a[1] - b[1] || (b[0].viewers || 0) - (a[0].viewers || 0) || at(a[0]) - at(b[0])).map(x => x[0]);
   // FLIP: each kept row's place before the reorder, to slide it from there to its new place
   const before = new Map([...ol.children].map(li => [li, li.getBoundingClientRect().top]));
   const idleTip = m => liveIdle(m) ? `idle: nothing played for ${Math.round(m.age / 60)} min (the host is still open)` : m.css ? 'on character select' : '';
@@ -4214,13 +4347,15 @@ async function liveListDraw(given) {
     const key = JSON.stringify([m.id, m.names, m.chara, m.moon, !!plArt, !!m.css]);
     let li = old.get(key);
     if (li) {
+      li.__m = m; li.classList.toggle('pin', pinned.has(ctxPinKey(m)));
       badge(li.querySelector('.lview'), m.viewers);
-      li.className = [liveSrc && liveSrc.id === m.id ? 'cur' : '', liveIdle(m) ? 'idle' : ''].join(' ').trim();
+      li.className = [liveSrc && liveSrc.id === m.id ? 'cur' : '', liveIdle(m) ? 'idle' : '', pinned.has(ctxPinKey(m)) ? 'pin' : ''].join(' ').trim();
       li.querySelector('a').title = idleTip(m) || m.matchup || (m.names || []).map(n => (n || '').trim()).join(' vs ');
       if (liveSrc && liveSrc.id === m.id) liveWatching(m.viewers);
       return li;
     }
-    li = document.createElement('li'); li.dataset.key = key;
+    li = document.createElement('li'); li.dataset.key = key; li.__m = m;
+    if (pinned.has(ctxPinKey(m))) li.classList.add('pin');
     const a = document.createElement('a');
     // (the page's <base> is the site root on the live path: a bare ?live= would leave it)
     a.href = `${location.pathname}?live=${m.id}` + (LIVE_URL ? `&liveUrl=${encodeURIComponent(Q.get('liveUrl'))}` : '')
@@ -4239,7 +4374,7 @@ async function liveListDraw(given) {
       ch.onclick = e => { e.preventDefault(); e.stopPropagation(); if (window.mbaaChat && window.mbaaChat.openMatch) window.mbaaChat.openMatch(m); };
       a.append(ch);
     }
-    if (liveSrc && liveSrc.id === m.id) { li.className = 'cur'; liveWatching(m.viewers); }
+    if (liveSrc && liveSrc.id === m.id) { li.classList.add('cur'); liveWatching(m.viewers); }
     if (liveIdle(m)) li.classList.add('idle');
     // (in place: the chat, the radio and the loaded game stay; a new tab / window with a modifier or the middle button)
     // (a hover warms the card's files only; its snapshot (a runner wake on the bridge) waits for a press or focus: plan 0b)
@@ -5534,7 +5669,7 @@ function grabCard() {
   })();
   return { jpeg };
 }
-async function copyTimestamp() {
+async function copyTimestamp(at = true) {
   const s = session;
   if (!s) return;
   if (s.liveSrc) return liveClipLink(s);
@@ -5549,10 +5684,12 @@ async function copyTimestamp() {
     else { status('uploading replay for the link…'); u.searchParams.set('r', await shareId(s)); }
     // a clip: from its in point to its out point; else from this frame
     const t = s.clip ? s.clip.a : f;
-    u.searchParams.set('t', t);
-    if (s.clip) u.searchParams.set('e', s.clip.b);
-    if (s.clip && loopOn) u.searchParams.set('loop', '1');
-    if (u.searchParams.get('r')) await shareThumb(u.searchParams.get('r'), t, shots);
+    if (at) {
+      u.searchParams.set('t', t);
+      if (s.clip) u.searchParams.set('e', s.clip.b);
+      if (s.clip && loopOn) u.searchParams.set('loop', '1');
+    }
+    if (u.searchParams.get('r')) await shareThumb(u.searchParams.get('r'), at ? t : 0, shots);
     text = u.toString();
   } catch (e) {
     console.warn('share upload failed:', e);
@@ -5606,7 +5743,7 @@ window.__mbaaSeek = T => requestSeek(T);  // tests
 window.__mbaaMisses = () => [...misses];  // tests (freed files the game opened again; bundle files not fetched)
 // live chat (web/shell/chat.js), only on the chat page: the Worker adds <meta name="mbaa-chat"> to it (a local test page:
 // ?chat=1 on 127.0.0.1 / localhost); chat.js draws its icons with the player block's art and follows the watched match
-window.mbaaChatApi = { art: playersArt, iconCell, chara: CHARA, liveList: () => (liveListLast ? liveListLast.l : null), liveId: () => session && session.liveSrc ? session.liveSrc.id : null,
+window.mbaaChatApi = { pinsChanged: () => { if (liveListLast && liveListLast.l) liveListShow(liveListLast.l).catch(() => {}); }, art: playersArt, iconCell, chara: CHARA, liveList: () => (liveListLast ? liveListLast.l : null), liveId: () => session && session.liveSrc ? session.liveSrc.id : null,
   // a chat link to a live match: switch in place (chat, radio and the engine stay), a history entry for Back
   liveGo: id => { if (!/^[A-Za-z0-9_]{4,64}$/.test(id || '')) return false; if (session && session.liveSrc && session.liveSrc.id === id) return true; liveGo(id, true); return true; },
   // the watched live match for chat.js's per-match channel and comment timeline: the list entry (id, match key), the feed's
@@ -5633,6 +5770,9 @@ const CLIP_ID = /^[A-Za-z0-9_-]{8,43}$/.test(Q.get('c') || '') && (Q.get('r') ||
 let clipJP = null, clipNative = false;
 const clipJson = () => clipJP || (clipJP = fetch(`${REPLAY_STORE}/c/${CLIP_ID}`).then(r => { if (!r.ok) throw new Error(`HTTP ${r.status}`); return r.json(); }));
 const CHAT_PAGE = !!document.querySelector('meta[name="mbaa-chat"]') || (/^(127\.0\.0\.1|localhost)$/.test(location.hostname) && Q.has('chat'));
+// a chat popped out into its own window (the right-click menu's "Pop out"): the chat column alone, no game loaded
+const POPCHAT = CHAT_PAGE && /^#(melty|m-[A-Za-z0-9_-]{1,60})$/.test(Q.get('popchat') || '') ? Q.get('popchat') : null;
+if (POPCHAT) { document.body.classList.add('popchat'); document.title = `${POPCHAT} · chat`; }
 // a clip link on the public site: the chat column with the clip's chat (read only), as the live page's (?clipchat=0: none)
 if (CLIP_ID && !CHAT_PAGE && Q.get('clipchat') !== '0') {
   const jp = clipJson();
@@ -7362,8 +7502,10 @@ async function liveClipChat(s, c, p) {
   }
   return out.sort((p, q) => p.o - q.o).slice(0, 500);
 }
-async function liveClipLink(s) {
-  const L = s.liveSrc, c = s.clip;
+// (moment: the right-click menu's "Copy link at this moment" on a live match: a few seconds up to the frame on screen,
+// the link plays on from there (no out point, no loop))
+async function liveClipLink(s, c = s.clip, moment = false) {
+  const L = s.liveSrc;
   if (!c) { status('live: take a clip (X) to share a moment of a live match'); return; }
   if (!liveClipCan()) { status(`live clip: ${LIVE_SIGNIN}`); return; }
   if (L.clipPend && clipSame(L.clipPend, c)) {  // (its link is there: copy it now, a click being a user gesture)
@@ -7380,7 +7522,7 @@ async function liveClipLink(s) {
     try { wrote = navigator.clipboard.write([new ClipboardItem({ 'text/plain': lp.then(t => new Blob([t], { type: 'text/plain' })) })]); wrote.catch(() => {}); }
     catch (e) { wrote = null; give = null; }
   }
-  const p = { clip: c, game: c.game, a: c.a, b: c.b, chat: [], link: null, busy: true, give, wrote };
+  const p = { clip: c, game: c.game, a: c.a, b: c.b, chat: [], link: null, busy: true, give, wrote, moment };
   L.clipPend = p; clipPanelKey = ''; marksKey = '';
   status('live clip: saving the game so far as a replay…');
   p.chat = await liveClipChat(s, c, p);
@@ -7465,9 +7607,10 @@ async function liveClipUpload(s, p, snap) {
     if (!r.ok) throw new Error(j.error || `HTTP ${r.status}`);
     if (!snap) T.id = j.r;
     const u = new URL(LIVE_CLIP_SITE + '/');
-    u.searchParams.set('r', j.r); u.searchParams.set('t', t); u.searchParams.set('e', e);
+    u.searchParams.set('r', j.r); u.searchParams.set('t', p.moment ? e : t);
+    if (!p.moment) u.searchParams.set('e', e);
     if (j.c) u.searchParams.set('c', j.c);
-    u.searchParams.set('loop', '1');
+    if (!p.moment) u.searchParams.set('loop', '1');
     p.link = u.toString(); p.t = t; p.e = e; p.id = j.r; p.cid = j.c;
     window.__mbaaLastLink = p.link;
     clipPanelKey = ''; marksKey = '';
@@ -8541,6 +8684,7 @@ async function main() {
     if (el) { el.checked = songOn; el.onchange = () => { songOn = el.checked; try { localStorage.setItem('mbaa-song55', songOn ? '1' : '0'); } catch (e) {}
       el.blur(); if (session && session.bgmSync && session.M) session.bgmSync(session.M._viewer_frame()); }; } }
   liveListShow();
+  if (POPCHAT) return;  // (the chat alone: the live list still read, for its tabs' names and the pins)
   if (Q.get('live')) {  // spectating: the live controls and the player block; the replay-only controls go (.replayonly)
     document.body.classList.add('live'); syncChips();
   }
