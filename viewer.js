@@ -1193,8 +1193,8 @@ function engineWarm() {
     // (the live matches' files after the engine: a list drawn before the manifest preloaded none)
     if (liveListLast) livePreloadAll(liveListLast.l);
     // (the shader programs built at idle while the list shows, one pass a callback: the tick's own idle step does it
-    // once a match runs, so a tap's first frame waited on their links; ?glwarm=0: off)
-    if (M._viewer_gl_prewarm_step && Q.get('glwarm') !== '0') (async () => {
+    // once a match runs, so a tap's first frame waited on their links)
+    if (M._viewer_gl_prewarm_step) (async () => {
       for (let more = 1; more && (!session || session.M === M);) {
         await new Promise(r => window.requestIdleCallback ? requestIdleCallback(() => r(), { timeout: 1000 }) : setTimeout(r, 30));
         more = M._viewer_gl_prewarm_step();
@@ -4520,6 +4520,7 @@ const SW_KEEP = !LOWMEM && !HASH && !CAPTURE && Q.get('swkeep') !== '0' && Q.get
   !(navigator.deviceMemory && navigator.deviceMemory < 4);
 const KEEP_MS = +(Q.get('keepms') || 300000);
 let liveKept = null, liveResumeK = null, liveClickAt = null;
+const SNAP_BACK_S = 4;  // (a switch back after this many seconds away joins from the bridge's snapshot: liveResumeStart)
 // (a switch back's steps, ms since the click: __mbaaSwitchBack.steps)
 const texKey = (a, i) => a[i] + ':' + a[i + 1] + ':' + a[i + 2];
 // the store entries a kept keyframe names: counted in M.mbaaTexHold, and in the timeline's reference map (store eviction
@@ -4637,7 +4638,10 @@ async function liveResumeStart(K, prev) {
   if (prev && prev.liveSrc && prev.liveSrc.id !== K.id) liveKeepTake(prev);
   console.log(`live: back to the kept match (${B.awayS.toFixed(1)} s away)`);
   liveResumeK = K;
-  liveSrc = { id: K.id, info: K.info, since: K.info.game };
+  // (away long: the bridge's snapshot, asked for now, joins the live point (liveCatchUp's snapshot path) instead of
+  // stepping the whole time away from the kept keyframe muted (~260 frames/s: 18 s away was ~5 s without sound or
+  // music, run_music3's third return, user 2026-11-07). A short absence steps from the keyframe, faster than a fetch)
+  liveSrc = { id: K.id, info: K.info, since: K.info.game, snapP: B.awayS > SNAP_BACK_S ? liveSnapFetch(K.id, K.info) : null };
   window.__mbaaRepUrl = null;
   await start(new File([K.rep], K.name), true, K.id);
 }
