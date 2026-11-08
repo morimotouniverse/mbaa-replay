@@ -158,8 +158,11 @@
      Phones keep frame step and rounds in the bar (the rest in the menu sheet). viewer.js fitStage measures the
      transport's height at each picture width it tries. */
   #transportsec { display: flex; flex-direction: row; flex-wrap: wrap; align-items: center; gap: 4px 0; position: relative; container: tp / inline-size; }
-  #transportsec .timeline, .tbar .clock { will-change: transform; }  /* (its own compositing layer: the clock's digits and the seek thumb repaint it, not the page (a root repaint ~30/s cost
-    the Moto G 0.13 ms of main thread and a cc tile raster on the GPU process per frame: phone e_trace_1107)) */
+  /* (the seek bar and the clock on layers of their own: their per-frame repaints stay off the page's (a root repaint ~30/s
+     cost the Moto G 0.13 ms of main thread and a cc tile raster per frame: phone e_trace_1107). Never the whole transport
+     block: a transform layer there is the containing block of its position: fixed pop-ups (#mixpop, #viewpop, #setpop),
+     which then opened clipped inside the bar (site_1130, user 2026-11-07 "you broke the music only/mixer video controls")) */
+  #transportsec .timeline, .tbar .clock { will-change: transform; }
   .tbar .clock { contain: layout; }  .tbar .clock :is(#time, #dur, #fc) { font-variant-numeric: tabular-nums; }  /* (a digit change lays out the clock only) */
   #transportsec .timeline { flex: 1 1 100%; min-width: 0; }
   body.mob #transportsec { width: 100%; padding: 2px 8px; gap: 2px 0; }
@@ -227,17 +230,17 @@
   #viewpop[hidden] { display: none; }
   /* (their checkboxes stay the state, shown in the phones' menu sheet; on desktop the View menu has them, not settings) */
   #setpop .chip:has(#boxes, #inputs, #hitstun, #framebar, #hud, #names, #music) { display: none; }
-  #viewpop .vrow { all: unset; box-sizing: border-box; display: flex; align-items: center; gap: 10px; padding: 6px 8px; border-radius: 6px;
+  :is(#viewpop, #mixpop) .vrow { all: unset; box-sizing: border-box; display: flex; align-items: center; gap: 10px; padding: 6px 8px; border-radius: 6px;
     cursor: pointer; color: var(--muted); font-size: 13px; }
-  #viewpop .vrow::before { content: ''; flex: none; width: 15px; height: 15px; box-sizing: border-box; border-radius: 4px; border: 1.5px solid var(--faint, #8a8aa0); }
-  #viewpop .vrow.on { color: var(--fg); }
-  #viewpop .vrow.on::before { border-color: var(--accent, #e8435a); background: var(--accent, #e8435a) url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath d='M3.5 8.5l3 3 6-7' fill='none' stroke='%23fff' stroke-width='2.2' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E") center / 12px no-repeat; }
-  #viewpop .vrow:is(:hover, :focus-visible) { background: #ffffff10; }
-  #viewpop .vt { flex: 1; display: flex; flex-direction: column; line-height: 1.25; }
-  #viewpop .vt small { font-size: 11px; color: var(--faint, #8a8aa0); }
-  #viewpop kbd { font: 600 10.5px ui-monospace, monospace; color: var(--faint, #8a8aa0); border: 1px solid var(--line); border-radius: 4px; padding: 1px 5px; }
+  :is(#viewpop, #mixpop) .vrow::before { content: ''; flex: none; width: 15px; height: 15px; box-sizing: border-box; border-radius: 4px; border: 1.5px solid var(--faint, #8a8aa0); }
+  :is(#viewpop, #mixpop) .vrow.on { color: var(--fg); }
+  :is(#viewpop, #mixpop) .vrow.on::before { border-color: var(--accent, #e8435a); background: var(--accent, #e8435a) url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath d='M3.5 8.5l3 3 6-7' fill='none' stroke='%23fff' stroke-width='2.2' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E") center / 12px no-repeat; }
+  :is(#viewpop, #mixpop) .vrow:is(:hover, :focus-visible) { background: #ffffff10; }
+  :is(#viewpop, #mixpop) .vt { flex: 1; display: flex; flex-direction: column; line-height: 1.25; }
+  :is(#viewpop, #mixpop) .vt small { font-size: 11px; color: var(--faint, #8a8aa0); }
+  :is(#viewpop, #mixpop) kbd { font: 600 10.5px ui-monospace, monospace; color: var(--faint, #8a8aa0); border: 1px solid var(--line); border-radius: 4px; padding: 1px 5px; }
   #viewpop .vleg { display: flex; flex-wrap: wrap; gap: 3px 9px; padding: 0 8px 6px 33px; font-size: 11px; color: var(--muted); }
-  #viewpop .vrow:not(.on) + .vleg { display: none; }
+  :is(#viewpop, #mixpop) .vrow:not(.on) + .vleg { display: none; }
   .hbkey { display: inline-flex; align-items: center; gap: 5px; }
   .hbkey::before { content: ''; width: 10px; height: 10px; border-radius: 2px; background: var(--c); box-shadow: 0 0 0 1px #0008; }
   .tbar #clipgrp { gap: 2px; }
@@ -886,7 +889,6 @@
           <button class="vrow" data-flip="framebar" aria-pressed="false" title="ETM's: green startup / recovery, red active, grey hit / blockstun, dark = frame advantage; startup, total and advantage in frames"><span class="vt">Frame bar<small>startup, total, advantage</small></span><kbd>G</kbd></button>
           <button class="vrow" data-flip="hud" aria-pressed="true"><span class="vt">HUD<small>health, meter, timer, combos</small></span><kbd>U</kbd></button>
           <button class="vrow liveonly" data-flip="names" aria-pressed="true"><span class="vt">Names<small>on the game's banners</small></span><kbd>T</kbd></button>
-          <button class="vrow" data-flip="music" aria-pressed="true"><span class="vt">Music<small>sound effects stay</small></span><kbd>B</kbd></button>
         </div>
       </span>
       <span class="tg sep" id="tclip"></span>
@@ -900,6 +902,7 @@
     </div>
     <div id="setpop" hidden></div>
     <div id="mixpop" role="dialog" aria-label="sound levels" hidden>
+      <button class="vrow" data-flip="music" aria-pressed="true"><span class="vt">Music on<small>sound effects stay</small></span><kbd>B</kbd></button>
       <label><span>music</span><input id="mixmusic" type="range" min="0" max="100" value="100" aria-label="music level"><b id="mixmusicv">100</b></label>
       <label><span>effects</span><input id="mixsfx" type="range" min="0" max="100" value="100" aria-label="sound effects level (voices, hits, announcer)"><b id="mixsfxv">100</b></label>
       <div class="mixrow"><button type="button" id="mixradio" title="music only: the game's sounds off, the music (or the radio) on">music only</button><button type="button" id="mixreset" title="both back to 100">reset</button></div>
