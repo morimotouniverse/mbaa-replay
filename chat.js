@@ -520,7 +520,7 @@
       const x = cv.getContext('2d'), W = cv.width, H = cv.height, cell = validChara(chara) ? api.iconCell(chara) : -1;
       x.clearRect(0, 0, W, H);
       if (cell >= 0) x.drawImage(art.icons, 48 * (cell % 10), (Math.floor(cell / 10) + 4) * 64, 48, 64, 0, 0, W, H);
-      if (moon >= 0 && moon <= 2) { const m = W * 0.5; moonDraw(x, moon, W - m, H - m, m, m); }
+      if (moon >= 0 && moon <= 2) { const m = W * 0.61; moonDraw(x, moon, W - m, H - m, m, m); }  // (11 px on the 18 px line icon, was 9: user 2026-11-07)
     };
     if (art) draw(); else artWait.push(draw);
     whenMoons(() => { if (art) draw(); });

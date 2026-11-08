@@ -18,11 +18,12 @@
   --gx-blue: #6c54fc; --gx-glow: #846cfc; --gx-rim: #240cfc; --gx-plum: #3c0c6c; --gx-red: #e8102a; --gx-mag: #9c2458; }
 :root.gx[data-theme="dark"] {
   --bg: #0d0620; --panel: #170c33; --raise: #26124f; --fg: #f0ebff; --muted: #ab9fd8; --faint: #6a58a8;
-  --accent: #ff2440; --accent2: #ffb84a; --line: #3a2475; --gx-ink: #ffffff; --gx-plate: #120828e6; --gx-glass: #170c33cc; }
+  --accent: #ff2440; --accent2: #ffb84a; --line: #3a2475; --gx-ink: #ffffff; --gx-plate: #120828e6; --gx-glass: #170c33cc;
+  --sb: #846cfc66; --sb-hi: #846cfcaa; color-scheme: dark; }
 :root.gx[data-theme="light"] {
   --bg: #f6f2ff; --panel: #ffffff; --raise: #ece3ff; --fg: #1f0f48; --muted: #5e4a9a; --faint: #9a8cc8;
   --accent: #c8102e; --accent2: #a8480c; --line: #d6c8ff; --gx-ink: #ffffff; --gx-plate: #ffffffeb; --gx-glass: #ffffffd9;
-  color-scheme: light; }
+  --sb: #5e4a9a66; --sb-hi: #5e4a9aaa; color-scheme: light; }
 
 :root.gx body { background: radial-gradient(1200px 700px at 50% -10%, #3c0c3c, var(--bg) 70%) fixed; background-color: var(--bg); }  /* (the select backdrop's plum at the top) */
 :root.gx[data-theme="light"] body { background: linear-gradient(180deg, #e9dcff, var(--bg) 380px) fixed; background-color: var(--bg); }

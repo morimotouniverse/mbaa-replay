@@ -21,7 +21,7 @@
 <meta name="twitter:description" content="Watch Melty Blood Actress Again Current Code replays in your browser, frame-exact.">
 <meta name="twitter:image" content="https://watch.meltyblood.org/preview.png">
 <meta name="mbaa-manifest" content="2a2e2bac19a8">
-<meta name="mbaa-chatjs" content="chat.js?v=d2b74692189f">
+<meta name="mbaa-chatjs" content="chat.js?v=3fa5ffa33f5a">
 <meta name="mbaa-announcer" content="announcer/neco.bin?v=932b15248e89">
 <link rel="manifest" href="site.webmanifest">
 <link rel="icon" href="favicon-48.png" sizes="48x48">
@@ -29,10 +29,11 @@
 <link rel="apple-touch-icon" href="icon-192.png">
 <meta name="theme-color" content="#0d0620">  <!-- (the phone browser's bar: the theme's background; set with it, viewer.js GX.apply / the head script) -->
 <link rel="stylesheet" href="icons.css?v=4db5e6fecf18">
-<link rel="stylesheet" href="gx/gx.css?v=5df4c146d800">
+<link rel="stylesheet" href="gx/gx.css?v=63bc2f76ac83">
 <style>
   :root { --bg: #0d0d14; --panel: #15151f; --raise: #1d1d2a; --fg: #ececf4; --muted: #8a8aa2; --faint: #5c5c74;
-          --accent: #e04a5a; --accent2: #ffb84a; --line: #262636; --w: min(100%, 960px); }
+          --accent: #e04a5a; --accent2: #ffb84a; --line: #262636; --w: min(100%, 960px);
+          --sb: #ffffff2a; --sb-hi: #ffffff44; color-scheme: dark; }
   /* flag emoji: Windows' emoji font has none (they showed as letters, user 2026-11-03); flags only (unicode-range) */
   @font-face { font-family: MbaaFlags; font-display: swap; src: url('vendor/TwemojiCountryFlags.woff2') format('woff2'); unicode-range: U+1F1E6-1F1FF, U+1F3F4, U+E0062-E0063, U+E0065, U+E0067, U+E006C, U+E006E, U+E0073-E0074, U+E0077, U+E007F; }
   body { margin: 0; background: radial-gradient(1200px 600px at 50% -10%, #1a1426, var(--bg)); background-color: var(--bg);
@@ -619,11 +620,11 @@
   #tunepanel label:has(input[type=text]) { grid-template-columns: 1fr 140px; }
   #tunepanel input[type=text] { background: #0006; color: inherit; border: 1px solid #ffffff2a; border-radius: 4px; padding: 2px 4px; }  /* (P2 to the right: away from VERSUS, as the game-drawn ones) */
   /* scrollbars in the panel's colours (Firefox: scrollbar-*; Chromium / Safari: ::-webkit-scrollbar) */
-  * { scrollbar-width: thin; scrollbar-color: #ffffff2a transparent; }
+  * { scrollbar-width: thin; scrollbar-color: var(--sb) transparent; }
   ::-webkit-scrollbar { width: 8px; height: 8px; }
   ::-webkit-scrollbar-track, ::-webkit-scrollbar-corner { background: transparent; }
-  ::-webkit-scrollbar-thumb { background: #ffffff22; border-radius: 999px; border: 2px solid transparent; background-clip: padding-box; }
-  ::-webkit-scrollbar-thumb:hover { background-color: #ffffff44; }
+  ::-webkit-scrollbar-thumb { background: var(--sb); border-radius: 999px; border: 2px solid transparent; background-clip: padding-box; }
+  ::-webkit-scrollbar-thumb:hover { background-color: var(--sb-hi); }
   ::-webkit-scrollbar-button { display: none; }
   #players[hidden], #stageblk[hidden], #radiosec[hidden], #radiogrid[hidden], #radiogames[hidden] { display: none; }
   #stageblk { display: flex; flex-direction: column; gap: 3px; margin-top: 6px; }
@@ -725,7 +726,7 @@
   #liveitems a::before { content: '\25CF'; color: var(--accent); font-size: 9px; flex: none; }
   #liveitems .side { display: flex; align-items: center; gap: 3px; min-width: 0; flex: 1 1 0; }  /* (equal halves: a long name scrolls in its own) */
   #liveitems .lico { width: 28px; height: 28px; flex: none; margin: -2px 0; }
-  #liveitems .lmoon { width: 12px; height: 12px; flex: none; }
+  #liveitems .lmoon { width: 20px; height: 20px; flex: none; margin: -4px -3px -4px -6px; }  /* (20 px, user 2026-11-07: "increase the moon icons by like 8px.. its ok if they overlay a bit"; the margins keep the row height and the name's room) */
   :is(#liveitems, #nextcard) .lchar { display: flex; align-items: center; gap: 3px; flex: none; cursor: help; }  /* (the watch-next rows are liveSide too: without it the pair wrapped, the moon under the icon, user 2026-11-07) */
   /* the character card (viewer.js charPopShow): portrait, moon + name, Mizuumi link */
   #charpop { position: fixed; z-index: 120; width: 168px; padding: 8px; box-sizing: border-box; background: var(--raise);
@@ -997,8 +998,8 @@
   </div>
 </div>
 </div>
-<script src="mbaa.js?v=21fd62bd6dc2"></script>
+<script src="mbaa.js?v=4b41dfd31d9d"></script>
 <script src="bgm_stream.js?v=cad5cabd6328"></script>
-<script src="viewer.js?v=a93159da4fab"></script>
+<script src="viewer.js?v=64643d52e910"></script>
 </body>
 </html>

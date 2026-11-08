@@ -2940,7 +2940,10 @@ function drawMoon(cv, m) {
   cv.dataset.moon = m;
   const k = m >= 0 && m <= 2 ? m : m === 9 ? 3 : -1;
   // (until the SVG is in: nothing; its onload draws every moon canvas)
-  if (GX.moons.complete && GX.moons.naturalWidth && k >= 0) { const w = GX.moons.naturalWidth / 4; x.drawImage(GX.moons, k * w, 0, w, GX.moons.naturalHeight, 0, 0, cv.width, cv.height); }
+  // (the cell's 48 units minus 3 of empty glow margin each side: the disc fills the canvas; the live list's moons
+  // showed ~4 px of blank to their left, user 2026-11-07)
+  if (GX.moons.complete && GX.moons.naturalWidth && k >= 0) { const w = GX.moons.naturalWidth / 4, h = GX.moons.naturalHeight, in_ = w * 3 / 48;
+    x.drawImage(GX.moons, k * w + in_, in_, w - 2 * in_, h - 2 * in_, 0, 0, cv.width, cv.height); }
 }
 // this tab's random id, sent with live record requests: the feed counts the tabs watching each match (nothing else)
 const VIEWER = Array.from(crypto.getRandomValues(new Uint8Array(12)), b => 'abcdefghijklmnopqrstuvwxyz0123456789'[b % 36]).join('');
@@ -3971,7 +3974,7 @@ function liveSide(m, p) {
   const c = m.chara && m.chara[p], mo = m.moon && m.moon[p], sp = el('span', 'side');
   const ico = el('span', 'lico');  // (the icon's cursor-frame strip goes inside: selStrip)
   ico.dataset.cell = iconCell(c); ico.dataset.side = p;
-  const moon = el('canvas', 'lmoon'); moon.width = 14; moon.height = 14;
+  const moon = el('canvas', 'lmoon'); moon.width = 60; moon.height = 60;  // (shown at 20 px: sharp at 3x)
   if (plArt && iconCell(c) >= 0) {
     selStrip(ico, iconCell(c), p); drawMoon(moon, mo);
     const ch = el('span', 'lchar'); ch.append(ico, moon); charPopWire(ch, c, mo); sp.append(ch);
