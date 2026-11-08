@@ -1,0 +1,3 @@
+// The theme before the first paint (index.html loads this blocking in <head>: no flash of the other theme). Was an inline
+// script; external so the page's Content-Security-Policy allows no inline script (AUDIT_1107 S-09).
+try { var t = localStorage.getItem('mbaaTheme') || 'auto'; document.documentElement.dataset.theme = t === 'auto' ? (matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark') : t; } catch (e) { document.documentElement.dataset.theme = 'dark'; } document.addEventListener('DOMContentLoaded', function () { var m = document.querySelector('meta[name=theme-color]'); if (m) m.content = document.documentElement.dataset.theme === 'light' ? '#f6f2ff' : '#0d0620'; });

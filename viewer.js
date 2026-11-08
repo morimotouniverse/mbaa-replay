@@ -954,6 +954,8 @@ let session = null;
 const pl = { items: [], i: -1 };  // playlist: {name, file, url?} (see startItem)
 let man = null;
 const misses = new Set();  // bundle files the game looked up that the page had not fetched
+// no context menu on the game picture (every canvas freshCanvas makes; was an inline oncontextmenu, which the page's CSP forbids)
+document.addEventListener('contextmenu', e => { if (e.target && e.target.id === 'canvas') e.preventDefault(); });
 function freshCanvas() {
   const old = document.getElementById('canvas');
   const c = old.cloneNode(false);
