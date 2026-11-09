@@ -3143,6 +3143,20 @@ function stageArtGet(id) {
 }
 // a blob URL decoded once ahead (the card's <img> then paints it in the frame it is set)
 const imgReady = url => { const i = new Image(); i.src = url; return (i.decode ? i.decode() : Promise.resolve()).catch(() => {}); };
+// the splash with its shadow drawn in, once (it was the card's CSS filter: drop-shadow(0 0 8px #000c), redone in every
+// frame the aura canvas under it changed: Firefox under software WebRender 46 fps with it, 91 drawn in (live page, a replay
+// playing, tools/web/ff_por_live.mjs), a viewer's lag
+// report 2026-11-09). Canvas shadowBlur is CSS's blur (sigma = blur / 2), drawn in the
+// splash's own pixels (the card shows it at ~1x on desktop)
+async function porShadowed(blob) {
+  const bm = await createImageBitmap(blob);
+  const cv = document.createElement('canvas'); cv.width = bm.width; cv.height = bm.height;
+  const x = cv.getContext('2d');
+  x.shadowColor = 'rgba(0, 0, 0, 0.8)'; x.shadowBlur = 8;
+  x.drawImage(bm, 0, 0); bm.close();
+  const out = await new Promise((res, rej) => cv.toBlob(b => (b ? res(b) : rej(new Error('portrait shadow'))), 'image/png'));
+  return URL.createObjectURL(out);
+}
 // a splash's blob URL (porUrls), loaded and decoded once
 const porLoading = new Map();
 function porLoad(path) {
@@ -3152,7 +3166,7 @@ function porLoad(path) {
     await fetchAll(man, [path], '', true);
     const d = cache.get(path);
     if (!d) throw new Error('no data');
-    const u = URL.createObjectURL(new Blob([d], { type: 'image/png' }));
+    const u = await porShadowed(new Blob([d], { type: 'image/png' }));
     await imgReady(u);
     porUrls.set(path, u);
     return u;

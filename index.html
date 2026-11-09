@@ -482,7 +482,7 @@
   /* (each character's own fit, viewer.js POR_ADJ: --por-y / --por-x in % of the card, --por-s a scale; ?portune=1 dials them) */
   #matchcard.pors:has(#stageblk:not([hidden])) .por:not([hidden]) { display: block; position: absolute; z-index: 1;
     top: calc(-22% + var(--por-y, 0) * 1%); left: calc(25% + var(--por-x, 0) * 1%);
-    transform: translateX(-50%); height: calc(165% * var(--por-s, 1)); width: auto; max-width: none; pointer-events: none; filter: drop-shadow(0 0 8px #000c); }
+    transform: translateX(-50%); height: calc(165% * var(--por-s, 1)); width: auto; max-width: none; pointer-events: none; }  /* (its shadow drawn into the splash: viewer.js porShadowed) */
   /* (the song line under the picture covers the figures' lower part: they end at the picture's edge, uncut by a fade) */
   #matchcard.pors:has(#stageblk:not([hidden])) .trk { position: relative; z-index: 3; background: var(--panel); margin-top: 0; padding-top: 4px; }
   /* (each figure centred on its half; P2 mirrored, facing P1) */
@@ -1029,6 +1029,6 @@
 </div>
 <script src="mbaa.js?v=c2032eb59ac2"></script>
 <script src="bgm_stream.js?v=cad5cabd6328"></script>
-<script src="viewer.js?v=c1b101094948"></script>
+<script src="viewer.js?v=0a2dced4cea4"></script>
 </body>
 </html>
