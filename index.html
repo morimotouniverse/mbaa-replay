@@ -323,12 +323,20 @@
             box-shadow: 0 10px 30px #0008; display: flex; flex-direction: column; gap: 8px; }
   #setpop[hidden] { display: none; }
   /* music / effects levels (viewer.js mixInit; user 2026-11-03 "change sfx/music independently ... use it as melty radio") */
-  #mixpop { position: fixed; z-index: 40; width: 240px; box-sizing: border-box; background: var(--raise, #1c1c28);
+  #mixpop { position: fixed; z-index: 40; width: 260px; box-sizing: border-box; background: var(--raise, #1c1c28);
             border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; box-shadow: 0 10px 30px #0008;
             display: flex; flex-direction: column; gap: 8px; font-size: 13px; }
   #mixpop[hidden] { display: none; }
-  #mixpop label { display: flex; align-items: center; gap: 8px; }
-  #mixpop label span { width: 52px; color: var(--faint, #aaa); }
+  #mixpop .mixl { display: flex; align-items: center; gap: 6px; }
+  #mixpop .mixl span { width: 58px; flex: none; color: var(--faint, #aaa); }
+  #mixpop .mixm { flex: none; padding: 4px; line-height: 0; color: var(--fg); }
+  #mixpop .mixm .i { width: 16px; height: 16px; }
+  /* (a muted row: its own mute lit, the bar grey, the level dim: user issue necoTV#7) */
+  #mixpop .mixl.off .mixm { color: var(--accent, #e8435a); }
+  #mixpop .mixl.off input[type=range] { --accent: #5a5a6e; }
+  #mixpop .mixl.off input[type=range]::-webkit-slider-thumb { background: #9a9aac; box-shadow: none; }
+  #mixpop .mixl.off input[type=range]::-moz-range-thumb { background: #9a9aac; box-shadow: none; }
+  #mixpop .mixl.off b, #mixpop .mixl.off span { color: #6a6a80; }
   #mixpop input[type=range] { flex: 1; min-width: 0; }
   #mixpop b { width: 28px; text-align: right; font-weight: 600; font-variant-numeric: tabular-nums; }
   #mixpop .mixrow { display: flex; gap: 6px; }
@@ -447,7 +455,8 @@
   /* (the top-centre stack, user 2026-11-01: the watchers, VS under them, the stage's name plate, the song under it) */
   #matchcard:has(#stageblk:not([hidden])) .plate { grid-area: 1 / 1; align-self: start; justify-self: center; z-index: 2; position: relative;
     display: flex; flex-direction: column; align-items: center; width: 52%; margin-top: var(--stack-top, 40px); pointer-events: none; }
-  #matchcard:has(#stageblk:not([hidden])) #stageblk .plate .name { width: 100%; max-height: none; margin: 0; align-self: auto; }
+  #matchcard:has(#stageblk:not([hidden])) #stageblk .plate .name { width: auto; max-width: none; max-height: none; margin: 0; align-self: auto;
+    image-rendering: pixelated; filter: none; }  /* (whole device pixels per texel, no blur: viewer.js plateFit) */
   #matchcard:has(#stageblk:not([hidden])) #stageblk .plate .trk { position: static; background: none; margin: 1px 0 0; padding: 0; max-width: 100%;
     color: #fff; text-shadow: 0 1px 2px #000, 0 0 6px #000;
     white-space: normal; overflow: visible; text-align: center; text-wrap: balance; line-height: 1.25;
@@ -932,10 +941,9 @@
     </div>
     <div id="setpop" hidden></div>
     <div id="mixpop" role="dialog" aria-label="sound levels" hidden>
-      <button class="vrow" data-flip="music" aria-pressed="true"><span class="vt">Music on<small>sound effects stay</small></span><kbd>B</kbd></button>
-      <label><span>music</span><input id="mixmusic" type="range" min="0" max="100" value="100" aria-label="music level"><b id="mixmusicv">100</b></label>
-      <label><span>effects</span><input id="mixsfx" type="range" min="0" max="100" value="100" aria-label="sound effects level (voices, hits, announcer)"><b id="mixsfxv">100</b></label>
-      <div class="mixrow"><button type="button" id="mixradio" title="music only: the game's sounds off, the music (or the radio) on">music only</button><button type="button" id="mixreset" title="both back to 100">reset</button></div>
+      <div class="mixl" id="mixmusicl"><button type="button" class="mixm" id="mixmusicm" title="music on / off (B; sound effects stay)" aria-pressed="false"><i class="i i-sound"></i></button><span>music</span><input id="mixmusic" type="range" min="0" max="100" value="100" aria-label="music level"><b id="mixmusicv">100</b></div>
+      <div class="mixl" id="mixsfxl"><button type="button" class="mixm" id="mixsfxm" title="sound effects on / off (voices, hits, announcer; the music stays)" aria-pressed="false"><i class="i i-sound"></i></button><span>effects</span><input id="mixsfx" type="range" min="0" max="100" value="100" aria-label="sound effects level (voices, hits, announcer)"><b id="mixsfxv">100</b></div>
+      <div class="mixrow"><button type="button" id="mixreset" title="both on, both back to 100">reset</button></div>
     </div>
   </div>
 <div id="chatcol"></div>
@@ -995,7 +1003,7 @@
     <div class="row">
       <select id="scale" title="picture size: auto = largest whole multiple that fits"><option value="auto">size auto</option><option value="1">size 1x</option><option value="2">size 2x</option><option value="3">size 3x</option><option value="4">size 4x</option><option value="fit">size fit</option></select>
       <select id="speed" title="Speed"><option value="1">1x</option><option value="2">2x</option><option value="4">4x</option></select>
-      <button id="mute" title="mute (M)"><i class="i i-sound"></i></button><input id="vol" type="range" min="0" max="100" value="50" aria-label="volume"><button id="mixb" title="Music and sound effects levels (music only: Melty radio)" aria-expanded="false" aria-controls="mixpop"><i class="i i-mix"></i></button>
+      <button id="mute" title="mute (M)"><i class="i i-sound"></i></button><input id="vol" type="range" min="0" max="100" value="50" aria-label="volume"><button id="mixb" title="Music and sound effects: a level and a mute each" aria-expanded="false" aria-controls="mixpop"><i class="i i-mix"></i></button>
     </div>
     <button id="sound" hidden>click for sound</button>
   </div>
@@ -1029,6 +1037,6 @@
 </div>
 <script src="mbaa.js?v=c2032eb59ac2"></script>
 <script src="bgm_stream.js?v=cad5cabd6328"></script>
-<script src="viewer.js?v=0a2dced4cea4"></script>
+<script src="viewer.js?v=12515888d32b"></script>
 </body>
 </html>

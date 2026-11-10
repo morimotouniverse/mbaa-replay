@@ -3859,18 +3859,21 @@ async function radioSet(f, stageOnly = 0) {
   if (ui.paused && session && session.tl) requestSeek(curFrame());  // (paused: the frame drawn again, with its stage)
 }
 // Chat mentions (chat.js: "!song" and "^stage" chips, tap to apply on your own picture only): the music list (musicOpts)
-// and the radio's stages (MBAACC's, named from their plates; the older games' stage tracks), and the panel's own picks.
-const STAGE_NAMES = { 1: 'Artificial Eden', 2: 'Classic home.Evening party', 3: 'Classic home.Invade', 4: 'Shade Town Mad Parade',
-  5: 'Tohno’s mansion.Main gate', 6: 'Night of Walpurgis', 7: 'sabbath', 8: 'Midnight Park', 9: 'Magical Kohaku Prison', 10: 'Back alley',
-  12: 'School rush!', 13: 'Iron Maiden', 16: 'Hologram Summer', 17: 'Starlight crossing', 18: 'Witch on the Holy night',
+// and the radio's stages (MBAACC's; the older games' stage tracks), and the panel's own picks.
+// MBAACC's stage names: the stage plates' titles, written as names (title case, the plate's "Title,Subtitle Texture"
+// tail and its typos dropped: user 2026-11-09, "Emerald Table,Melty Blood Texture" is not a name). The chat slugs
+// come from these (their part before a comma), so a renamed stage keeps its slug where the words stay.
+const STAGE_NAMES = { 1: 'Artificial Eden', 2: 'Classic Home: Evening Party', 3: 'Classic Home: Invade', 4: 'Shade Town Mad Parade',
+  5: 'Tohno Mansion: Main Gate', 6: 'Night of Walpurgis', 7: 'Sabbath', 8: 'Midnight Park', 9: 'Magical Kohaku Prison', 10: 'Back Alley',
+  12: 'School Rush!', 13: 'Iron Maiden', 16: 'Hologram Summer', 17: 'Starlight Crossing', 18: 'Witch on the Holy Night',
   19: 'Through the Looking-Glass', 20: 'Classic', 21: 'Temple the Seventh Heaven', 22: 'Doctor Kohaku Garage', 23: 'Great Cats Village',
-  24: 'Tohno’s mansion.Central garden', 25: 'Huge library', 26: 'Forest of king Cruel', 27: 'Battle field', 28: 'narvous stray vanguard',
-  29: 'red moon scherzo', 30: 'lost world’s Biography', 31: 'NECO no you may.', 32: 'Loser Cats Company', 34: 'phantom of the opera',
-  35: 'carry back,old village', 36: 'Temple the Seventh Heaven', 37: 'stranger', 38: 'in the park', 39: 'on the park', 40: 'spiral uroboros',
-  41: 'cherry blossom', 42: 'desert town', 43: 'Coating earth,Black Land Texture', 44: 'Emerald Table,Melty Blood Texture',
-  45: 'Sleeping Forest', 46: 'Farewell town', 47: 'fateful show down', 48: 'the crossing crossing', 49: 'Magical Kohaku Prison',
-  50: 'No Control Red', 51: 'NECO Burst Camp', 52: 'stranger', 53: 'Arima’s Chinese kempo home', 54: 'sayonara Dear Friend',
-  55: '...and nothing heart', 56: 'ONE LIFE,ONE DEATE', 57: 'G TABLE', 58: 'G TABLE', 59: 'good morning,anima mundi' };
+  24: 'Tohno Mansion: Central Garden', 25: 'Huge Library', 26: 'Forest of King Cruel', 27: 'Battlefield', 28: 'Nervous Stray Vanguard',
+  29: 'Red Moon Scherzo', 30: 'Lost World’s Biography', 31: 'NECO No You May', 32: 'Loser Cats Company', 34: 'Phantom of the Opera',
+  35: 'Old Village', 36: 'Temple the Seventh Heaven', 37: 'Stranger', 38: 'In the Park', 39: 'On the Park', 40: 'Spiral Ouroboros',
+  41: 'Cherry Blossom', 42: 'Desert Town', 43: 'Coating Earth', 44: 'Emerald Table',
+  45: 'Sleeping Forest', 46: 'Farewell Town', 47: 'Fateful Showdown', 48: 'The Crossing Crossing', 49: 'Magical Kohaku Prison',
+  50: 'No Control Red', 51: 'NECO Burst Camp', 52: 'Stranger', 53: 'Arima’s Chinese Kempo Home', 54: 'Sayonara Dear Friend',
+  55: '...And Nothing Heart', 56: 'One Life, One Death', 57: 'G Table', 58: 'G Table', 59: 'Good Morning, Anima Mundi' };
 let mentCat = null;
 // (the chat's slugs come from the whole of both lists, so every viewer reads the same "!slug" / "^slug": empty until
 // MBAACC's panel and the older games' radio are both in (the radio list fetched for this even if the panel never opens;
@@ -4047,6 +4050,22 @@ async function trimAlpha(blob) {
 // A picture changing on the card (the stage, its name plate, a side's splash): the old one fades out over the new
 // (a copy of the old image laid on it, removed when faded; the old blob URL is let go after). Reduced motion: a cut.
 const XF_MS = 450;
+// the stage's name plate (the game's own graphic, ~235x20): drawn at a whole number of device pixels per texel, as the
+// game draws it, never resampled by a fraction (at 1.33x it smeared, user 2026-11-07 "the stage names looking really
+// bad"): the largest whole scale that fits the plate's box, at least 1
+function plateFit(img) {
+  const box = img.parentElement, n = img.naturalWidth, dpr = window.devicePixelRatio || 1;
+  if (!box || !n) return;
+  const k = Math.max(1, Math.floor(box.clientWidth * dpr / n));
+  img.style.width = `${n * k / dpr}px`; img.style.height = `${img.naturalHeight * k / dpr}px`;
+}
+{
+  const img = document.querySelector('#stageblk .name');
+  if (img) {
+    img.addEventListener('load', () => plateFit(img));
+    if (window.ResizeObserver) new ResizeObserver(() => plateFit(img)).observe(img.parentElement);
+  }
+}
 function xfadeSrc(img, src, revoke) {
   const prev = img.getAttribute('src');
   const can = !xfInstant && prev && src && prev !== src && !img.hidden && img.offsetWidth > 0 && img.complete && img.naturalWidth > 0
@@ -4388,7 +4407,9 @@ async function liveListDraw(given) {
       ch.onclick = e => { e.preventDefault(); e.stopPropagation(); if (window.mbaaChat && window.mbaaChat.openMatch) window.mbaaChat.openMatch(m); };
       a.append(ch);
     }
-    if (liveSrc && liveSrc.id === m.id) { li.classList.add('cur'); liveWatching(m.viewers); }
+    // (ours: the same id and the same set: a host's next set keeps its id with a new match (necoTV#8: its row showed as
+    // the one watched and a tap did nothing, the old set's end screen stayed))
+    if (liveSrc && liveOurs(m, liveSrc)) { li.classList.add('cur'); liveWatching(m.viewers); }
     if (liveIdle(m)) li.classList.add('idle');
     // (in place: the chat, the radio and the loaded game stay; a new tab / window with a modifier or the middle button)
     // (a hover warms the card's files only; its snapshot (a runner wake on the bridge) waits for a press or focus: plan 0b)
@@ -4399,7 +4420,7 @@ async function liveListDraw(given) {
     a.onclick = e => {
       if (e.button || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
       e.preventDefault();
-      if (session && session.liveSrc && session.liveSrc.id === m.id) return;
+      if (session && liveOurs(m, session.liveSrc)) return;
       liveGo(m.id, true, m);
     };
     li.append(a);
@@ -5173,6 +5194,8 @@ function liveBegin(s) {  // play(): after viewer_play
       // id is on another match now: no data, so the stream reads as quiet, not an outage. Was: every 404 restarted the
       // quiet clock, so a session whose match had left the bridge never read as dry and sat frozen)
       if (!r.ok && r.status !== 404) L.failAt = performance.now();
+      // (404 with the match still ours on the list: after a bridge restart: the list check below)
+      if (r.status === 404 && !L.moved && !f) L.noGameAt ??= performance.now(); else if (r.ok) L.noGameAt = null;
       if (r.ok) {
         const b = new Uint8Array(await r.arrayBuffer());
         // (every answer repeats the newest index whole: new data = a later index or a longer answer, else the stream is
@@ -5255,6 +5278,15 @@ function liveBegin(s) {  // play(): after viewer_play
           slogAdd('live', now && !mine ? `the host is on another match (${liveName(now)}): ours is over` : mine ? `the list has the match silent ${mine.silent} s / idle ${mine.age} s` : 'the match is not on the list');
         }
         if (!endSign) L.endSaid = false;
+        // The bridge restarted mid-set: its new capture of our match holds the games from its own join on, so our
+        // records (asked from the game this session started on, from=L.info.game) are a 404 'no such game' for good
+        // while the list still has our match. Index numbers are the host's, so the rule below (mine.index < L.since)
+        // never fires there, and a rematch (same setup) waited for that stream forever (user 2026-11-09: the page sat
+        // at the result screen after a restart). 3 s of 404s with our match listed: start again on its current game.
+        if (mine && L.noGameAt != null && t - L.noGameAt > 3000 && (s.liveFollow || over || ahead < 15) && liveNet.recent()) {
+          console.warn(`live: the feed has no game ${L.info.game} any more (the bridge re-joined the match): starting again on game ${mine.game}`);
+          return startLive(L.id, L.info.match);
+        }
         if (mine && (over || dry) && mine.index < L.since && liveNet.recent()) {
           return startLive(L.id, L.info.match);  // (after a restart: the bridge's new capture of the match, numbered from its own join)
         } else if (ended && !s.liveFollow && (ui.paused || !(call(s, 'viewer_ended') || ahead < 15))) {
@@ -6368,6 +6400,7 @@ function controls() {
     ui.music = musicEl.checked; musicEl.blur();
     try { localStorage.setItem('mbaaMusic', ui.music ? '1' : '0'); } catch (e) {}
     if (musicGain) musicGain.gain.value = musicLevel();
+    if (mixShow) mixShow();
   };
   const hsEl = document.getElementById('hitstun');
   hsEl.checked = ui.hitstun;
@@ -7186,36 +7219,40 @@ function toggleLoop() {
 let unmuted = 100;
 // Music and effects levels (user 2026-11-03: "change sfx/music independently ... really use it as melty radio"): two
 // sliders in a popover by the volume (#mixb), under the main volume; remembered. Music = the game's BGM and the radio,
-// effects = every game sound (hits, voices, the announcer). "music only" = effects 0, music 100.
-const mix = { music: 100, sfx: 100 };
-try { const m = JSON.parse(localStorage.getItem('mbaaMix') || 'null'); if (m) { mix.music = +m.music; mix.sfx = +m.sfx; } } catch (e) {}
+// effects = every game sound (hits, voices, the announcer). Each row has its own mute, the same button (necoTV#7: was a
+// "Music on" checkbox for one and a "music only" button setting the other to 0): music's is ui.music (B, the music chip),
+// effects' is mix.sfxOff; a muted row's bar is grey and keeps its level; moving a muted row's slider unmutes it.
+const mix = { music: 100, sfx: 100, sfxOff: false };
+try { const m = JSON.parse(localStorage.getItem('mbaaMix') || 'null'); if (m) { mix.music = +m.music; mix.sfx = +m.sfx; mix.sfxOff = !!m.sfxOff; } } catch (e) {}
 for (const k of ['music', 'sfx']) if (!(mix[k] >= 0 && mix[k] <= 100)) mix[k] = 100;
 const lv = n => Math.pow(n / 100, 2);
 function musicLevel() { return ui.music ? lv(mix.music) : 0; }
-function sfxLevel() { return lv(mix.sfx); }
+function sfxLevel() { return mix.sfxOff ? 0 : lv(mix.sfx); }
+let mixShow = null;  // (the popover redrawn: after the music chip / B changes ui.music)
 function mixInit() {
   const b = document.getElementById('mixb'), pop = document.getElementById('mixpop');
   if (!b || !pop) return;
-  const mu = document.getElementById('mixmusic'), sx = document.getElementById('mixsfx'), radio = document.getElementById('mixradio');
-  const show = () => {
+  const mu = document.getElementById('mixmusic'), sx = document.getElementById('mixsfx');
+  const musicSet = on => { const me = document.getElementById('music'); if (me && me.checked !== on) { me.checked = on; me.dispatchEvent(new Event('change')); } };
+  const row = (id, off) => {
+    document.getElementById(`${id}l`).classList.toggle('off', off);
+    const m = document.getElementById(`${id}m`);
+    m.setAttribute('aria-pressed', String(off)); m.firstChild.className = `i ${off ? 'i-mute' : 'i-sound'}`;
+  };
+  const show = mixShow = () => {
     mu.value = mix.music; sx.value = mix.sfx;
     document.getElementById('mixmusicv').textContent = mix.music; document.getElementById('mixsfxv').textContent = mix.sfx;
     for (const r of [mu, sx]) r.style.setProperty('--p', `${r.value}%`);
-    radio.classList.toggle('on', mix.sfx === 0 && mix.music > 0);
+    row('mixmusic', !ui.music); row('mixsfx', mix.sfxOff);
     if (musicGain) musicGain.gain.value = musicLevel();
     if (sfxGain) sfxGain.gain.value = sfxLevel();
     try { localStorage.setItem('mbaaMix', JSON.stringify(mix)); } catch (e) {}
   };
-  mu.oninput = () => { mix.music = +mu.value; show(); };
-  sx.oninput = () => { mix.sfx = +sx.value; show(); };
-  radio.onclick = e => {
-    e.stopPropagation();
-    mix.sfx = 0; if (!mix.music) mix.music = 100;
-    // (the music chip off would leave nothing: on with it)
-    const me = document.getElementById('music'); if (me && !me.checked) { me.checked = true; me.dispatchEvent(new Event('change')); }
-    show();
-  };
-  document.getElementById('mixreset').onclick = e => { e.stopPropagation(); mix.music = 100; mix.sfx = 100; show(); };
+  mu.oninput = () => { mix.music = +mu.value; if (!ui.music) musicSet(true); show(); };
+  sx.oninput = () => { mix.sfx = +sx.value; mix.sfxOff = false; show(); };
+  document.getElementById('mixmusicm').onclick = e => { e.stopPropagation(); e.currentTarget.blur(); musicSet(!ui.music); show(); };
+  document.getElementById('mixsfxm').onclick = e => { e.stopPropagation(); e.currentTarget.blur(); mix.sfxOff = !mix.sfxOff; show(); };
+  document.getElementById('mixreset').onclick = e => { e.stopPropagation(); mix.music = 100; mix.sfx = 100; mix.sfxOff = false; musicSet(true); show(); };
   const place = () => {
     const r = b.getBoundingClientRect(), w = pop.offsetWidth || 240, h = pop.offsetHeight || 120;
     pop.style.left = `${Math.max(8, Math.min(innerWidth - w - 8, r.right - w))}px`;
