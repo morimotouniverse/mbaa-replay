@@ -990,7 +990,9 @@ document.addEventListener('scroll', ctxClose, true);
 // LATER AND LIKE FLICKERING BACK AND FORTH"; Chrome fine). There the worker draws into its own OffscreenCanvas, linked to
 // nothing, and hands each composed frame over as an ImageBitmap (ev blit, numbered); the page shows it on this canvas
 // (bitmaprenderer) and drops one older than the one shown, so an old frame can never come back.
-const FF_BLIT = /Firefox\//.test(navigator.userAgent);
+// (desktop only: on Firefox Android the bitmap hand-off cost half the refreshes, ~30/s on the Moto G, and the linked
+// canvas shows its frames in order there)
+const FF_BLIT = /Firefox\//.test(navigator.userAgent) && !/Android/.test(navigator.userAgent);
 let blitCtx = null, blitSeq = -1;
 function blitShow(d) {
   if (!blitCtx || d.seq <= blitSeq) { d.bmp.close(); return; }
