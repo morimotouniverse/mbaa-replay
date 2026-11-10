@@ -985,26 +985,11 @@ document.addEventListener('scroll', ctxClose, true);
 // capture of the new canvas: Firefox refuses to transfer a canvas already bound to captureStream, "Cannot transfer
 // OffscreenCanvas bound to element using captureStream", which stopped the page's start: no engine, no live list;
 // user 2026-11-10 on desktop Firefox. A capture of the transferred canvas works in both browsers)
-// Firefox (desktop and Android): blit mode. Firefox showed the frames of a canvas transferred to the worker late and out of
-// order: the picture flickering back to earlier frames, stuttering (user 2026-11-10, Firefox 159: "displaying OLD FRAMES
-// LATER AND LIKE FLICKERING BACK AND FORTH"; Chrome fine). There the worker draws into its own OffscreenCanvas, linked to
-// nothing, and hands each composed frame over as an ImageBitmap (ev blit, numbered); the page shows it on this canvas
-// (bitmaprenderer) and drops one older than the one shown, so an old frame can never come back.
-// (desktop only: on Firefox Android the bitmap hand-off cost half the refreshes, ~30/s on the Moto G, and the linked
-// canvas shows its frames in order there)
-const FF_BLIT = /Firefox\//.test(navigator.userAgent) && !/Android/.test(navigator.userAgent);
-let blitCtx = null, blitSeq = -1;
-function blitShow(d) {
-  if (!blitCtx || d.seq <= blitSeq) { d.bmp.close(); return; }
-  blitSeq = d.seq; blitCtx.transferFromImageBitmap(d.bmp);
-}
 function freshCanvas() {
   const old = document.getElementById('canvas');
   const c = old.cloneNode(false);
   old.replaceWith(c);
-  let off;
-  if (FF_BLIT) { off = new OffscreenCanvas(c.width || 640, c.height || 480); blitCtx = c.getContext('bitmaprenderer'); blitSeq = -1; }
-  else off = c.transferControlToOffscreen();
+  const off = c.transferControlToOffscreen();
   // a phone frees a background page's GPU context (switching to another app and back): kept restorable, and the session
   // started again on a fresh instance (its textures, shaders and targets died with the context) where it was
   c.addEventListener('webglcontextlost', e => { e.preventDefault(); if (session) session.glLost = true; });
@@ -1112,8 +1097,9 @@ if (document.pictureInPictureEnabled) {
   document.getElementById('pip').hidden = false;
   // (Chrome: the page asks to pop out when it is left while playing)
   try { navigator.mediaSession.setActionHandler('enterpictureinpicture', () => togglePip()); } catch (e) {}
-  // (Chrome's window: play / pause buttons)
-  try { navigator.mediaSession.setActionHandler('play', () => { if (ui.paused) playOn(); }); navigator.mediaSession.setActionHandler('pause', () => setPaused(true)); } catch (e) {}
+  // (Chrome's window: play / pause buttons. Not on Android: with them Chrome Android turns the window square, the 4:3
+  // picture squeezed into it; user 2026-11-10 "PIP is showing squished", phone_1110/pip_aspect_probe.py pp=1)
+  if (!/Android/.test(navigator.userAgent)) try { navigator.mediaSession.setActionHandler('play', () => { if (ui.paused) playOn(); }); navigator.mediaSession.setActionHandler('pause', () => setPaused(true)); } catch (e) {}
   // (the stream plays from the start, silent, so a tap or an automatic pop-out finds it ready)
   pipSource().play().catch(() => addEventListener('pointerdown', () => pipSource().play().catch(() => {}), { once: true }));
 }
@@ -6852,7 +6838,7 @@ window.__mbaaLab = { set: c => labApply(c), info: () => labInfo() };
     E.upGo();
     const ls = {};
     try { for (const k of ['s3dq', 'xlight']) { const v = localStorage.getItem(k); if (v !== null) ls[k] = v; } } catch (e) {}
-    E.w.postMessage({ cmd: 'init', off, search: location.search, wasmV: wasmV(), man, ui: { ...ui }, lowmem: LOWMEM, swKeep: SW_KEEP, fbOn: fb.on, ls, live: LIVE, page: pageNow(), blit: FF_BLIT }, [off]);
+    E.w.postMessage({ cmd: 'init', off, search: location.search, wasmV: wasmV(), man, ui: { ...ui }, lowmem: LOWMEM, swKeep: SW_KEEP, fbOn: fb.on, ls, live: LIVE, page: pageNow() }, [off]);
     if (document.visibilityState === 'hidden') visSend();  // (a page started hidden: its clock from the start)
     return E.ready;
   }
@@ -6870,7 +6856,6 @@ window.__mbaaLab = { set: c => labApply(c), info: () => labInfo() };
     E.w.postMessage({ cmd: 'files', id, list }, tr);
   }
   function engMsg(d) {
-    if (d.ev === 'blit') { blitShow(d); return; }
     if (d.ev === 'pipImg') { pipImg(d.bmp); return; }
     if (d.st) {
       // (the page's frame bus once per game frame the worker shows, as the page engine's Module.mbaaFrame runs it: the
