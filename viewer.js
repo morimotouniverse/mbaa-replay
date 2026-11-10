@@ -981,20 +981,25 @@ document.addEventListener('keydown', e => {
 }, true);
 for (const ev of ['blur', 'resize']) addEventListener(ev, ctxClose);
 document.addEventListener('scroll', ctxClose, true);
+// (returns the new canvas's OffscreenCanvas for the engine worker: the transfer comes BEFORE the picture-in-picture
+// capture of the new canvas: Firefox refuses to transfer a canvas already bound to captureStream, "Cannot transfer
+// OffscreenCanvas bound to element using captureStream", which stopped the page's start: no engine, no live list;
+// user 2026-11-10 on desktop Firefox. A capture of the transferred canvas works in both browsers)
 function freshCanvas() {
   const old = document.getElementById('canvas');
   const c = old.cloneNode(false);
   old.replaceWith(c);
-  if (pipVideo) {  // (picture in picture: the new canvas; the old capture track stopped, else it kept the old canvas and its GL context)
+  const off = c.transferControlToOffscreen();
+  if (pipVideo) try {  // (picture in picture: the new canvas; the old capture track stopped, else it kept the old canvas and its GL context)
     pipSelfAt = performance.now();
     if (pipVideo.srcObject) for (const tr of pipVideo.srcObject.getTracks()) tr.stop();
     pipVideo.srcObject = pipStream(c); pipVideo.play().catch(() => {});
-  }
+  } catch (e) { console.warn('picture in picture:', e.message); }
   // a phone frees a background page's GPU context (switching to another app and back): kept restorable, and the session
   // started again on a fresh instance (its textures, shaders and targets died with the context) where it was
   c.addEventListener('webglcontextlost', e => { e.preventDefault(); if (session) session.glLost = true; });
   c.addEventListener('webglcontextrestored', () => glRecover());
-  return c;
+  return off;
 }
 let glRecover;  // (the engine worker's: set by the worker block below)
 // (background play: a hidden page gets no animation frames; the engine worker ticks the game on its own timer then,
@@ -6714,7 +6719,7 @@ async function main() {
     man = JSON.parse(new TextDecoder().decode(await openObject(await r.arrayBuffer())));
     bootMark('manifest');
     stagePanelLoad().catch(e => console.warn('stage panel:', e));
-    if (PREWARM) __mbaaEngine.start();  // (the engine worker boots its instance while the page shows its list / the match's files come in)
+    if (PREWARM) try { __mbaaEngine.start(); } catch (e) { console.error('engine start:', e); }  // (an engine failure never stops the page's start: the live list, chat)  // (the engine worker boots its instance while the page shows its list / the match's files come in)
     if (!PREWARM && liveListLast) livePreloadAll(liveListLast.l);   // (no prewarm: the live matches' files now)
     if (!man.plan) await fetchAll(man, Object.keys(man.files), 'assets');  // a bundle without a plan: everything
   }
@@ -6821,7 +6826,7 @@ window.__mbaaLab = { set: c => labApply(c), info: () => labInfo() };
   E.start = () => engStart();
   function engStart() {
     if (E.ready) return E.ready;
-    const c = freshCanvas(), off = c.transferControlToOffscreen();
+    const off = freshCanvas();
     // (the page's query on the worker's own address: the module reads its options (gpu=, capture=, nos3tc=...) from
     // location.search, which in a worker is the worker script's)
     E.w = new Worker('engine.js' + (location.search ? `${location.search}&` : '?') + `ev=${wasmV()}&to=${performance.timeOrigin}`);
@@ -6900,7 +6905,7 @@ window.__mbaaLab = { set: c => labApply(c), info: () => labInfo() };
       case 'planMisses': window.mbaaPlanMisses = d.l || undefined; break;
       case 'kept': keptGot(d.k); break;
       case 'needMovie': movieLoad(); break;
-      case 'needCanvas': { E.canvases = (E.canvases || 0) + 1; const off = freshCanvas().transferControlToOffscreen(); E.w.postMessage({ cmd: 'offscreen', id: d.id, off }, [off]); break; }
+      case 'needCanvas': { E.canvases = (E.canvases || 0) + 1; const off = freshCanvas(); E.w.postMessage({ cmd: 'offscreen', id: d.id, off }, [off]); break; }
       case 'annDefaultLoad': annDefaultLoad(); break;
       case 'ovColors': E.ov.col.set(d.gid, d.c); if (E.ov.col.size > 64) E.ov.col.delete(E.ov.col.keys().next().value); break;
       case 'xfGrab': { const id = d.id; xfGrab(() => E.xfDone.delete(id), d.max); break; }
