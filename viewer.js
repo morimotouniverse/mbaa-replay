@@ -6884,7 +6884,11 @@ window.__mbaaLab = { set: c => labApply(c), info: () => labInfo() };
     E.w.postMessage({ cmd: 'files', id, list }, tr);
   }
   function engMsg(d) {
-    if (d.ev === 'pipImg') { pipImg(d.bmp); return; }
+    if (d.ev === 'pipImg') {
+      if (d.bmp) pipImg(d.bmp);
+      else { try { pipCtx.putImageData(new ImageData(new Uint8ClampedArray(d.px), d.w, d.h), 0, 0); } catch (e) {} pipFrame(); }  // (frame mode: pixels)
+      return;
+    }
     // (the frame's worker is another site's: a POST that needs the viewer's session goes out from the page; this site's live paths only)
     if (d.ev === 'pagePost') { if (typeof d.url === 'string' && d.url.startsWith(`${LIVE}/live/`)) fetch(d.url, { method: 'POST', body: d.body }).catch(() => {}); return; }
     if (d.st) {

@@ -3436,7 +3436,7 @@ function engFrame() {
 // Picture in picture: the page's pop-out shows its own 2D canvas (viewer.js pipCanvas), drawn from an ImageBitmap of each
 // new frame sent while the pop-out is open (engPip), or of the frame now when asked (cmd pipShot); one in flight at a
 // time. Taken in the frame's own callback, while the canvas still holds what was drawn (WebGL and WebGPU both).
-let engPipShot = false, engPipBusy = false, engPipF = -1;
+let engPipShot = false, engPipBusy = false, engPipF = -1, engPipCv = null;
 function engPipSend(st) {
   if (!engOff || engPipBusy || !(engPip || engPipShot)) return;
   const f = st ? st.frame : engPipF;
@@ -3445,7 +3445,15 @@ function engPipSend(st) {
   // (the picture composed again in this task: Firefox has the canvas's drawing buffer cleared by the time this callback
   // runs, an all-black copy; Chrome kept it. One extra canvas composite per frame, only while the pop-out is open)
   try { if (session && session.M) session.M._viewer_present_now(); } catch (e) {}
-  createImageBitmap(engOff, { resizeWidth: 640, resizeHeight: 480 }).then(b => engPost({ ev: 'pipImg', bmp: b }, [b]), () => {}).finally(() => { engPipBusy = false; });
+  createImageBitmap(engOff, { resizeWidth: 640, resizeHeight: 480 }).then(b => {
+    if (!engPort) { engPost({ ev: 'pipImg', bmp: b }, [b]); return; }
+    // (frame mode: the page is another process, and an ImageBitmap sent there never arrived (Firefox 159: no message, no
+    // error; the link card's picture was black): its pixels go instead)
+    const c = engPipCv || (engPipCv = new OffscreenCanvas(640, 480)), g = c.getContext('2d', { willReadFrequently: true });
+    g.drawImage(b, 0, 0); b.close();
+    const px = g.getImageData(0, 0, 640, 480).data;
+    engPost({ ev: 'pipImg', px: px.buffer, w: 640, h: 480 }, [px.buffer]);
+  }).catch(e => engPost({ ev: 'error', cmd: 'pipShot', msg: String(e && e.stack || e) })).finally(() => { engPipBusy = false; });
 }
 let engRafAt = 0;
 (function engTick() {
