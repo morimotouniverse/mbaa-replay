@@ -32,6 +32,14 @@
 // read game memory (viewer_boxes / viewer_inputs).
 const KEY_HEX = '6d626161636377656272657061796b65792d6e6f742d612d7365637265742121';
 const Q = new URLSearchParams(location.search);
+// Desktop Firefox with WebGPU: the engine's canvas and worker live in a frame from another site (engine_frame.html), laid
+// exactly over the page's canvas, which stays as the layout box (never transferred). Firefox shows an older frame of a
+// worker's WebGPU canvas whenever the canvas's document repaints (firefox_webgpu/FINDINGS.md); another site's frame is
+// another process, out of reach of this page's repaints. XFRAME_BASE: where that frame is served (a different site than
+// this page's; a local test page uses the other loopback name); none set: Firefox draws WebGL2 on the page's canvas.
+const XFRAME_SITE = 'https://replay.2dfm.org';
+const XFRAME_BASE = location.hostname === '127.0.0.1' ? `http://localhost:${location.port}` : location.hostname === 'localhost' ? `http://127.0.0.1:${location.port}` : XFRAME_SITE;
+const XFRAME = !!XFRAME_BASE && /Firefox\//.test(navigator.userAgent) && !/Android/.test(navigator.userAgent) && !!navigator.gpu && Q.get('gpu') !== 'webgl2' && Q.get('xframe') !== '0';  // (xframe=0: a test switch, with gpu=webgpu the bug itself)
 // a page's first-load steps (performance.now(), the first time each is reached): window.__mbaaBoot (the join-time checks,
 // artifacts/xz_check/perf_plan/snapjoin goal D)
 const bootMarks = window.__mbaaBoot = {};
@@ -3671,6 +3679,9 @@ async function shareThumb(id, f, shots) {
 function canvasNow() {
   // (composed now, in the reader's task: the canvas is not preserved; viewer_present_now)
   if (session && session.M && session.M._viewer_present_now) try { session.M._viewer_present_now(); } catch (e) {}
+  // (the frame's canvas is another site's: the page reads the worker's last copy of the picture, 640x480, asked 4 times
+  // a second (engStart) and again now for the next reader)
+  if (XFRAME) { pipShot(); return pipCanvas; }
   return document.getElementById('canvas');
 }
 function cardDark() {
@@ -6828,17 +6839,34 @@ window.__mbaaLab = { set: c => labApply(c), info: () => labInfo() };
   E.start = () => engStart();
   function engStart() {
     if (E.ready) return E.ready;
-    const off = freshCanvas();
+    const off = XFRAME ? null : freshCanvas();
     // (the page's query on the worker's own address: the module reads its options (gpu=, capture=, nos3tc=...) from
     // location.search, which in a worker is the worker script's)
-    E.w = new Worker('engine.js' + (location.search ? `${location.search}&` : '?') + `ev=${wasmV()}&to=${performance.timeOrigin}`);
-    E.w.onerror = e => { E.errors.push(String(e.message || e)); console.error('engine:', e.message || e); };
-    E.w.onmessage = e => engMsg(e.data);
+    const wq = (location.search ? `${location.search}&` : '?') + `ev=${wasmV()}&to=${performance.timeOrigin}`;
+    if (XFRAME) {
+      // (the frame over the canvas's box, under the overlay; it starts the worker and hands it this port: E.w is the port)
+      const gc = document.getElementById('canvas'), fr = document.createElement('iframe'), ch = new MessageChannel();
+      fr.id = 'engframe'; fr.setAttribute('scrolling', 'no'); fr.setAttribute('aria-hidden', 'true'); fr.tabIndex = -1;
+      fr.style.cssText = 'position:absolute;border:0;pointer-events:none;background:#000';
+      const place = () => Object.assign(fr.style, { left: `${gc.offsetLeft}px`, top: `${gc.offsetTop}px`, width: `${gc.clientWidth}px`, height: `${gc.clientHeight}px` });
+      place(); new ResizeObserver(place).observe(gc); new ResizeObserver(place).observe(gc.parentElement);
+      fr.addEventListener('load', () => fr.contentWindow.postMessage({ cmd: 'engFrame', q: `${wq}&xframe=1` }, new URL(XFRAME_BASE).origin, [ch.port2]), { once: true });
+      fr.src = `${XFRAME_BASE}/engine_frame.html?v=${wasmV()}`;
+      gc.after(fr);
+      addEventListener('message', e => { if (e.source === fr.contentWindow && e.data && e.data.ev === 'engFrameError') { E.errors.push(e.data.msg); console.error('engine:', e.data.msg); } });
+      ch.port1.onmessage = e => engMsg(e.data);
+      E.w = { postMessage: (m, tr) => ch.port1.postMessage(m, tr || []), port: ch.port1, frame: fr };
+      setInterval(() => { if (session && document.visibilityState === 'visible') pipShot(); }, 250);  // (canvasNow's picture kept recent)
+    } else {
+      E.w = new Worker('engine.js' + wq);
+      E.w.onerror = e => { E.errors.push(String(e.message || e)); console.error('engine:', e.message || e); };
+      E.w.onmessage = e => engMsg(e.data);
+    }
     E.ready = new Promise(r => { E.readyGo = r; });
     E.upGo();
     const ls = {};
     try { for (const k of ['s3dq', 'xlight']) { const v = localStorage.getItem(k); if (v !== null) ls[k] = v; } } catch (e) {}
-    E.w.postMessage({ cmd: 'init', off, search: location.search, wasmV: wasmV(), man, ui: { ...ui }, lowmem: LOWMEM, swKeep: SW_KEEP, fbOn: fb.on, ls, live: LIVE, page: pageNow() }, [off]);
+    E.w.postMessage({ cmd: 'init', off, search: location.search, wasmV: wasmV(), man, ui: { ...ui }, lowmem: LOWMEM, swKeep: SW_KEEP, fbOn: fb.on, ls, live: LIVE, page: pageNow() }, off ? [off] : []);
     if (document.visibilityState === 'hidden') visSend();  // (a page started hidden: its clock from the start)
     return E.ready;
   }
@@ -6857,6 +6885,8 @@ window.__mbaaLab = { set: c => labApply(c), info: () => labInfo() };
   }
   function engMsg(d) {
     if (d.ev === 'pipImg') { pipImg(d.bmp); return; }
+    // (the frame's worker is another site's: a POST that needs the viewer's session goes out from the page; this site's live paths only)
+    if (d.ev === 'pagePost') { if (typeof d.url === 'string' && d.url.startsWith(`${LIVE}/live/`)) fetch(d.url, { method: 'POST', body: d.body }).catch(() => {}); return; }
     if (d.st) {
       // (the page's frame bus once per game frame the worker shows, as the page engine's Module.mbaaFrame runs it: the
       // pop-out's frames (pipTick), the chat's name effects, the bar; was the bus's 60-a-second timer alone, and the
