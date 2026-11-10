@@ -990,11 +990,6 @@ function freshCanvas() {
   const c = old.cloneNode(false);
   old.replaceWith(c);
   const off = c.transferControlToOffscreen();
-  if (pipVideo) try {  // (picture in picture: the new canvas; the old capture track stopped, else it kept the old canvas and its GL context)
-    pipSelfAt = performance.now();
-    if (pipVideo.srcObject) for (const tr of pipVideo.srcObject.getTracks()) tr.stop();
-    pipVideo.srcObject = pipStream(c); pipVideo.play().catch(() => {});
-  } catch (e) { console.warn('picture in picture:', e.message); }
   // a phone frees a background page's GPU context (switching to another app and back): kept restorable, and the session
   // started again on a fresh instance (its textures, shaders and targets died with the context) where it was
   c.addEventListener('webglcontextlost', e => { e.preventDefault(); if (session) session.glLost = true; });
@@ -1012,8 +1007,18 @@ let pipVideo = null, pipTrack = null;
 // when the stream starts and when a pop-out is asked for. Each frame is a YUV readback of the canvas on the GPU
 // process's main thread, 4-13 ms on the Moto G: the 2 a second kept warm made the game's own frames miss behind them,
 // phase4 akiha_trace_gpu)
-function pipStream(c) {
-  const st = c.captureStream(0);
+// The stream is of a page canvas (pipCanvas) the engine worker's frames are drawn into (ev pipImg: an ImageBitmap of each
+// drawn frame while the pop-out is open), never of the game canvas: Firefox cannot capture a canvas transferred to a
+// worker, and Chrome Android passes no frames from it to the capture while the app is minimized (user 2026-11-10:
+// "when i PIP and minimize the app the playback just stops"; phone_1110/pip_bg_check.py)
+const pipCanvas = document.createElement('canvas'); pipCanvas.width = 640; pipCanvas.height = 480;
+const pipCtx = pipCanvas.getContext('2d');
+function pipImg(bmp) {
+  try { pipCtx.drawImage(bmp, 0, 0, pipCanvas.width, pipCanvas.height); } catch (e) {}
+  bmp.close(); pipFrame();
+}
+function pipStream() {
+  const c = pipCanvas, st = c.captureStream(0);
   pipTrack = st.getVideoTracks()[0] || null;
   if (!pipTrack || typeof pipTrack.requestFrame !== 'function') { pipTrack = null; return c.captureStream(60); }
   return st;
@@ -1032,21 +1037,17 @@ function frameBusRun(now) {
 }
 setInterval(() => { const now = performance.now(); if (now - frameBusAt > 50) frameBusRun(now); }, 1000 / 60);
 window.mbaaFrameBus = frameBus;  // (chat.js: its name effects)
-let pipTickN = 0;
 const pipFrame = () => { try { if (pipTrack && pipTrack.readyState === 'live') pipTrack.requestFrame(); } catch (e) {} };
-frameBus.add(function pipTick() {
-  if (pipTrack && pipVideo && pipTrack.readyState === 'live') {
-    if (document.pictureInPictureElement === pipVideo || pipTickN++ === 0) pipFrame();
-  }
-});
+const pipShot = () => { if (window.__mbaaEngine && __mbaaEngine.w) __mbaaEngine.w.postMessage({ cmd: 'pipShot' }); };  // (one frame: the picture of now)
 function pipSource() {
   if (pipVideo) return pipVideo;
   pipVideo = document.createElement('video');
   pipVideo.id = 'pipv'; pipVideo.muted = true; pipVideo.playsInline = true; pipVideo.autoPictureInPicture = true;
-  pipVideo.srcObject = pipStream(document.getElementById('canvas'));
+  pipVideo.srcObject = pipStream();
+  pipCtx.fillStyle = '#000'; pipCtx.fillRect(0, 0, pipCanvas.width, pipCanvas.height); pipFrame(); pipShot();  // (a first frame at once: a video without one cannot pop out)
   pipSelfAt = performance.now();
   pipVideo.addEventListener('leavepictureinpicture', () => pipCover(false));
-  pipVideo.addEventListener('enterpictureinpicture', () => { pipFrame(); pipCover(true); });
+  pipVideo.addEventListener('enterpictureinpicture', () => { pipShot(); pipCover(true); });
   // the window's own controls (Firefox draws volume, mute and play / pause; the video has no sound of its own): the
   // page's volume slider and pause follow them, and they follow the page (pipFollow)
   pipVideo.addEventListener('volumechange', () => {
@@ -1087,7 +1088,7 @@ async function togglePip() {
     // (asked straight from the tap: after an await of play() the browser no longer counts it as the user's and ignores it)
     const v = pipSource();
     if (v.paused) v.play().catch(() => {});
-    pipFrame();  // (the picture of now, not the stream's first)
+    pipShot();  // (the picture of now, not the stream's first)
     await v.requestPictureInPicture();
     pipFollow();
   } catch (e) { status(`picture in picture: ${e.message}`); }
@@ -6854,6 +6855,7 @@ window.__mbaaLab = { set: c => labApply(c), info: () => labInfo() };
     E.w.postMessage({ cmd: 'files', id, list }, tr);
   }
   function engMsg(d) {
+    if (d.ev === 'pipImg') { pipImg(d.bmp); return; }
     if (d.st) {
       // (the page's frame bus once per game frame the worker shows, as the page engine's Module.mbaaFrame runs it: the
       // pop-out's frames (pipTick), the chat's name effects, the bar; was the bus's 60-a-second timer alone, and the
