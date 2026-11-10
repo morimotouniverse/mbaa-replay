@@ -353,7 +353,10 @@
       img.src = EMOTE_DIR + e.file;
       // (shown at once as its first frame; an animated one's frames decoded after (emoteFrames): then the picture's next
       // comments with it get a new tile id, drawn as the strip of its frames)
-      b.p = img.decode().then(() => {
+      b.p = img.decode().then(async () => {
+        // (the picture's emote tiles are drawn from the decoded picture as a bitmap, here and in the engine's worker (sent
+        // there as it is): one source, the same pixels both ways (an <img> scaled differently, edges up to 27 / 255 off))
+        b.bm = await createImageBitmap(img);
         b.ok = true; emoteLoaded(e.name);
         emoteFrames(e, b).then(() => { if (b.frames) { glov.emo.delete(`\0${e.name}`); emoteLoaded(e.name); } }, () => {});
       }, () => { b.failed = true; });
@@ -414,7 +417,7 @@
         }
       } finally { im.remove(); }
     }
-    if (frames.length > 1) { b.frames = frames; b.fdur = total / n; }  // (total / n even when a decode cap cut the list short: each frame keeps its own time)
+    if (frames.length > 1) { b.bms = await Promise.all(frames.map(f => createImageBitmap(f))); b.frames = frames; b.fdur = total / n; }  // (total / n even when a decode cap cut the list short: each frame keeps its own time)
   }
   // an animated WebP's frames: {durs: [ms]} from its ANMF chunks (null: not a WebP; one frame: still)
   function webpAnim(u) {
@@ -4064,6 +4067,7 @@ onmessage = ({ data: m }) => {
       for (let f = 0; f < GLOV_FILE.length; f++) glovFaceSend(M, f);
       M.mbaaOvEmoji = glovEmoji; M.mbaaOvRunW = glovRunW; M.mbaaOvRun = glovRun;
       M.mbaaOvEmoFrames = glovEmoFrames; M.mbaaOvEmoDur = glovEmoDur; M.mbaaOvEmoAr = glovEmoAr;
+      if (M.__remote) { glov.sentE = 1; glov.sentR = 1; M.__ovLists({ reset: true, sans: GLOV_SANS, serif: GLOV_SERIF }); }
       glov.has.clear();
       glov.cv = ''; tl.follow = undefined;
       M._viewer_ov_behind(behind ? 1 : 0); M._viewer_ov_on(overOn.checked && !over.hidden ? 1 : 0);
@@ -4080,9 +4084,11 @@ onmessage = ({ data: m }) => {
     const dpr = window.devicePixelRatio || 1, w = Math.max(1, Math.round(cv.clientWidth * dpr)), h = Math.max(1, Math.round(cv.clientHeight * dpr));
     if (api.exporting && api.exporting()) return;  // (an MP4 export draws the canvas at the video's size meanwhile)
     const k = `${w}x${h}`;
-    if (glov.cv === k && cv.width === w) return;
+    // (the engine in its worker: the canvas is its OffscreenCanvas, sized there)
+    if (glov.cv === k && (M.__remote || cv.width === w)) return;
     glov.cv = k;
-    if (cv.width !== w || cv.height !== h) { cv.width = w; cv.height = h; }
+    if (M.__remote) M.__resize(w, h);
+    else if (cv.width !== w || cv.height !== h) { cv.width = w; cv.height = h; }
     M._viewer_ov_canvas(w, h);
     if (M._viewer_represent) M._viewer_represent();
   }
@@ -4187,7 +4193,23 @@ onmessage = ({ data: m }) => {
     }
     return out;
   }
+  // (the engine in its worker: the emote / emoji and text run lists its renderer draws tiles from, sent as they grow,
+  // ahead of the code points that name them; an emote with its pixels, a strip's frames each)
+  function glovListsSync(M) {
+    if (!M.__remote) return;
+    const emo = [], run = [], tr = [];
+    for (; glov.sentE < glov.emoList.length; glov.sentE++) {
+      const g = glov.emoList[glov.sentE];
+      if (typeof g !== 'object') { emo.push({ id: glov.sentE, g }); continue; }
+      const b = emoteBmp.get(g.emote.name), an = glovEmoAnim(glov.sentE);
+      const pix = b && b.ok ? (an ? b.bms : [b.bm]) : [];
+      emo.push({ id: glov.sentE, ar: g.emote.ar || 1, pix, fdur: an ? an.fdur : 100 });
+    }
+    for (; glov.sentR < glov.runList.length; glov.sentR++) run.push({ id: glov.sentR, ...glov.runList[glov.sentR] });
+    if (emo.length || run.length) M.__ovLists({ emo, run });
+  }
   function glovSend(M, cps) {
+    glovListsSync(M);
     const p = M._viewer_ov_buf(cps.length);
     M.HEAPU32 ? M.HEAPU32.set(cps, p >> 2) : new Uint32Array(M.HEAPU8.buffer, p, cps.length).set(cps);
     return cps.length;
@@ -4266,8 +4288,8 @@ onmessage = ({ data: m }) => {
     const x = cv.getContext('2d', { willReadFrequently: true });
     x.clearRect(0, 0, box, box);
     if (typeof g === 'object') {  // a server emote: its image (an animated one's first frame), fitted to the tile
-      const b = emoteBmp.get(g.emote.name), fr = b && b.ok && b.frames && b.frames[frame | 0];
-      const im = fr || (b && b.ok ? b.img : null), iw = fr ? fr.width : im && im.naturalWidth, ih = fr ? fr.height : im && im.naturalHeight;
+      const b = emoteBmp.get(g.emote.name), fr = b && b.ok && b.bms && b.frames && b.bms[frame | 0];
+      const im = fr || (b && b.ok ? b.bm : null), iw = im && im.width, ih = im && im.height;
       if (!im || !iw) return 0;
       const k = Math.min(box / iw, box / ih), w = iw * k, h = ih * k;
       x.imageSmoothingQuality = 'high';

@@ -180,7 +180,6 @@ const SPECTOR_P = Q.get('spector') === '1' && /^(127\.0\.0\.1|localhost|\[::1\])
   document.head.append(sc);
 }) : null;
 const KF_EVERY = Math.max(10, +(Q.get('kf') || 300));  // playback keyframe interval (frames)
-const KF_NEAR = 30;  // a seek that re-simulates further than 3x this keyframes about KF_NEAR frames before its target
 const PAGE = Math.min(65536, Math.max(16384, +(Q.get('page') || 16384)));  // keyframe page size (bytes)
 // keyframe memory; above it, every second older keyframe is dropped. Phones get less (a tab there is killed, and the page
 // reloaded, around 1 GB)
@@ -188,14 +187,6 @@ const PHONE = matchMedia('(pointer: coarse)').matches && Math.min(screen.width, 
 // low-memory mode (phones; ?lowmem=1 / 0 forces it): no pre-scan, a small keyframe budget, a match's files freed once
 // it has loaded them (freeLoaded) and the next match prefetched to the disk cache only
 const LOWMEM = Q.get('lowmem') !== null ? Q.get('lowmem') === '1' : PHONE;
-const FREE_FILES = Q.get('free') !== '0';  // (low memory: a match's files freed once it has loaded; ?free=0: kept, tests)
-const KZ = Q.get('kz') !== '0';  // keyframe pages zlib-compressed (?kz=0: zero-word packing only)
-const KF_VERIFY = Q.get('kfverify') === '1';  // checks: a commit's reused pre-pass copies compared word for word with the page at the commit (window.__kfVerify)
-const KF_BUDGET = +(Q.get('kfmb') || (LOWMEM ? 40 : 450)) * 1e6;
-// the store textures the kept keyframes pin (kfTexBytes) have a budget of their own: over it, keyframes thin as over KF_BUDGET
-// (low memory: beyond the newest keyframe's own textures, kfTexBytes)
-const KF_TEX_BUDGET = +(Q.get('kftexmb') || (LOWMEM ? 32 : 256)) * 1e6;
-const STORE_GC = Q.get('storegc') !== '0';  // texture store eviction (storeGc; ?storegc=0: off, every sealed texture kept for the match)
 
 const hex = h => new Uint8Array(h.match(/../g).map(x => parseInt(x, 16)));
 let cryptoKey;
@@ -359,25 +350,6 @@ for (const k of ['warn', 'error']) {
 }
 addEventListener('error', e => slogAdd('error', `${e.message} @${(e.filename || '').split('/').pop()}:${e.lineno}`));
 addEventListener('unhandledrejection', e => slogAdd('error', `promise: ${e.reason && e.reason.message || e.reason}`));
-const SCENE_NAME = { 0: 'boot', 1: 'battle', 2: 'title', 5: 'result', 8: 'VS screen', 20: 'character select' };
-function slogWatch(s) {
-  const M = s.M; if (!M) return;
-  const w = s.slogW || (s.slogW = { scene: null, holds: '', ff: false, f: -1, fAt: performance.now(), sent: false });
-  const scene = M.HEAP32[0x54EEE8 >> 2], f = M._viewer_frame();
-  if (scene !== w.scene) { slogAdd('scene', `${SCENE_NAME[scene] || 'scene ' + scene} (frame ${f})`); w.scene = scene; }
-  const holds = [s.cssHeld && 'next game files (select)', s.loadHeld && 'next game setup', s.rematchHeld && 'rematch files',
-    s.cssBgHeld && 'select screen files', s.liveHeld && 'stream', s.seeking && 'seeking'].filter(Boolean).join(', ');
-  if (holds !== w.holds) { slogAdd('hold', holds ? `held: ${holds}` : 'running'); w.holds = holds; }
-  if (!!s.liveFF !== w.ff) { w.ff = !!s.liveFF; slogAdd('speed', w.ff ? '2x catching up' : '1x'); }
-  const now = performance.now(), tk = M._viewer_tick_count() >>> 0;
-  // (the engine's loop ran lately: a window covered by another (a game in front of it) is never 'hidden' but its
-  // browser stops the animation frames, so no frame is no stall of ours: 8 such reports from one Firefox on 2026-11-07)
-  if (tk !== w.tk) { w.tk = tk; w.tkAt = now; }
-  if (f !== w.f) { w.f = f; w.fAt = now; w.sent = false; }
-  else if (!w.sent && s.liveSrc && !ui.paused && !document.hidden && now - w.tkAt < 2000 && now - w.fAt > 20000) {
-    w.sent = true; slogAdd('stall', `no frame for ${Math.round((now - w.fAt) / 1000)} s at frame ${f}`); slogSend(s, 'stall');
-  }
-}
 function slogText() {
   const L = liveSrc, head = [`MBAACC viewer session log, ${new Date(Date.now() - (performance.now() - slogT0)).toISOString()} (UTC)`,
     L ? `live ${L.id}: ${(L.info.names || []).map(n => (n || '?').trim() || '?').join(' vs ')} (game ${L.info.game})` : `page ${location.search.slice(0, 80)}`,
@@ -432,31 +404,6 @@ function repKeys(rep) {
   const magic = new TextDecoder().decode(rep.slice(0, 14));
   if (magic !== 'MBAAReplayFile') throw new Error('not an MBAACC replay (.rep)');
   return { stage: i(0x28), p1: [i(0x40), i(0x44), i(0x48)], p2: [i(0x50), i(0x54), i(0x58)] };
-}
-// Match length estimate for the seek bar before the replay has been played to its end: the rounds' recorded input
-// (each round: 4 tracks of (input, frames) runs; a round lasts its longest track) plus the VS intro, round intros/outros
-// and the result screen, which take no input. Freeze frames take none either, so this is low by up to a few thousand
-// frames on some tapes; the bar switches to the exact end once the replay reaches it.
-function repEstimate(rep) {
-  try {
-    const v = new DataView(rep.buffer, rep.byteOffset, rep.byteLength), u = o => v.getUint32(o, true);
-    let o = 0x5C, sum = 0;
-    const n = u(o); o += 4;
-    if (n > 16) return 0;
-    for (let r = 0; r < n; r++) {
-      o += 0x80 + 12;
-      let longest = 0;
-      for (let t = 0; t < 4; t++) {
-        const c = u(o); o += 4;
-        let f = 0;
-        for (let i = 0; i < c; i++) f += rep[o + 6 * i];
-        o += 6 * c; longest = Math.max(longest, f);
-      }
-      o += 4 + 4 * u(o) + 0x90;
-      sum += longest;
-    }
-    return sum + 1200 + 450 * n;
-  } catch (e) { return 0; }
 }
 const fmt = (t, c, m) => t.replace(/\{(\w):02d\}/g, (_, k) => String(k === 'c' ? c : m).padStart(2, '0'))
                           .replace(/\{(\w)\}/g, (_, k) => String(k === 'c' ? c : m));
@@ -555,60 +502,6 @@ async function fetchAll(man, paths, label, quiet = false) {
   // (48 at once: the decoding is the pool's (decodeObject), off this thread; with 16 the small objects waited their turn
   // behind the big ones, ~0.5 s of a match's files)
   await Promise.all(Array.from({ length: objWorkers ? 48 : 16 }, worker));
-}
-function mkdirs(FS, path) {
-  let cur = '';
-  for (const p of path.split('/').slice(0, -1)) { if (!p) continue; cur += '/' + p; try { FS.mkdir(cur); } catch (e) {} }
-}
-// The game's reads of /game files (FS.open is what the libc open syscall calls): which files this match has opened, and
-// an open of a file freeLoaded dropped (the game asked again: it is refetched and the match replayed to this frame).
-function trackOpens(s) {
-  const M = s.M, FS = M.FS;
-  s.opened = new Set(); s.freed = new Set(); s.freedAt = -1;
-  M.mbaaOpened = p => { if (session === s) { s.opened.add(p); if (s.freed.has(p)) misses.add(p); } };
-  M.mbaaOpenFail = p => { if (session === s && s.freed.has(p)) misses.add(p); };
-  if (!FS.__tracked) wrapOpen(M);
-}
-// (its own function: a closure made in trackOpens would keep that first session, and its keyframes, alive)
-function wrapOpen(M) {
-  const FS = M.FS, open = FS.open;
-  FS.__tracked = true;
-  FS.open = function (path, flags, ...a) {
-    const game = typeof path === 'string' && path.startsWith('/game/') && (flags === 'r' || flags === 0 || (typeof flags === 'number' && (flags & 3) === 0));
-    try {
-      const st = open.call(this, path, flags, ...a);
-      if (game) M.mbaaOpened(path.slice(6));
-      return st;
-    } catch (e) { if (game) M.mbaaOpenFail(path.slice(6)); throw e; }
-  };
-}
-// Low-memory mode, once a match has loaded (round 1 on, no game file open): the files it has read are dropped from
-// MEMFS and the cache (the game keeps what it read in its own memory; only the BGM, played from the cache by the page,
-// stays). A stage probe the game has read (the replay's stage .dat, 4-12 MB) goes back to its 1-byte placeholder; an
-// open of it after that counts as a miss, as a failed open of any other freed file does. Files it has not opened yet
-// (the result screen's) stay. keep: files that stay as well (live: the select screen's, and the next game's).
-function freeLoaded(s, keep = null) {
-  const probe = new Set((man.plan && man.plan.probe) || []);
-  for (const p of new Set([...s.opened, ...(s.M.mbaaBootOpened || [])])) {
-    // (graphics stay: the game reads its pictures again on later screens of the same match, the victory screen's
-    // portraits and cut-ins, the result menu's art; a freed probe file is a 1-byte stand-in that opens fine and decodes
-    // to nothing, drawn white: user 2026-11-01, harness-design/web_parity/viewer_tools/live_victory_phone_check.py.
-    // They are a few MB; the characters' sprite data and the stage are what freeing saves)
-    if (s.freed.has(p) || /^(bgm|grp)\//.test(p) || !s.want.has(p) || (keep && keep.has(p))) continue;
-    try { if (probe.has(p)) s.M.FS.writeFile('/game/' + p, new Uint8Array(1)); else s.M.FS.unlink('/game/' + p); } catch (e) { continue; }
-    cache.delete(p); s.freed.add(p);
-  }
-  s.freedAt = s.M._viewer_frame();
-  // the newest round start reached: the load that read the freed files is before it, so a restore from a keyframe at or
-  // after it re-reads none of them (seekTo: kfSafe); one before it re-simulates that load
-  if (s.tl) { const m = s.tl.marks.filter(m => m[0] <= s.freedAt).pop(); s.tl.safeFrom = m ? m[0] : s.freedAt; }
-}
-// a game file into MEMFS sharing the fetched buffer (MEMFS write with canOwn keeps the array instead of copying it; the
-// game root is read-only and nothing writes the cache's arrays)
-function fsPut(FS, path, d) {
-  mkdirs(FS, path);
-  const st = FS.open(path, 'w');
-  try { FS.write(st, d, 0, d.length, 0, true); } finally { FS.close(st); }
 }
 
 // ---- audio (WebAudio, shared by sessions) ----
@@ -1103,41 +996,17 @@ function freshCanvas() {
   c.addEventListener('webglcontextrestored', () => glRecover());
   return c;
 }
-// the picture's GL context was lost: a new instance (no reuse: the old one's GL names are dead) at the same frame, or for
-// a live match the live game again
-async function glRecover() {
-  const s = session;
-  if (!s || !s.glLost || s.glRecovering || document.visibilityState === 'hidden') return;
-  s.glRecovering = true;
-  status('the browser freed the picture in the background: restoring…');
-  try { s.M.ccall('viewer_stop', null, [], []); } catch (e) {}
-  s.boot = null;
-  // (low-memory mode dropped the files the match had read, the exe among them: a new instance needs them all again)
-  const want = withSiblings(man, new Set([...(s.want || []), ...(s.freed || []), ...(s.M.mbaaBootOpened || [])]));
-  await fetchAll(man, want, 'restoring the picture');
-  if (s.liveSrc) return startLive(s.liveSrc.id, s.liveSrc.info.match);
-  return play(s.rep, s.name, curFrame(), s.want ? new Set([...s.want, ...want]) : null);
-}
-// Background play: a hidden page gets no animation frames, so a worker's timer (not slowed for hidden pages) ticks the
-// game instead, sound and all; nothing is drawn unless a picture-in-picture window shows it
-let bgTicker = null;
-function bgTick(on) {
-  if (on && !bgTicker) {
-    const u = URL.createObjectURL(new Blob(['setInterval(() => postMessage(0), 16)'], { type: 'text/javascript' }));
-    bgTicker = new Worker(u);
-    URL.revokeObjectURL(u);  // (the worker has its script: one URL a hidden spell was kept)
-    bgTicker.onmessage = () => {
-      const s = session;
-      if (s && s.M && document.visibilityState === 'hidden') try { s.M._viewer_tick(document.pictureInPictureElement ? 1 : 0); } catch (e) {}
-    };
-  } else if (!on && bgTicker) { bgTicker.terminate(); bgTicker = null; }
-}
+let glRecover;  // (the engine worker's: set by the worker block below)
+// (background play: a hidden page gets no animation frames; the engine worker ticks the game on its own timer then,
+// engine_tail.js engBgTick, from the page's visibility (visSend))
 // Picture in picture: the canvas as a (silent: the page plays the sound) video stream, popped out by the button or, where
 // the browser allows, by leaving the page while a match plays
 let pipVideo = null, pipTrack = null;
 // (a stream at 0 fps: frames only when asked. A 60 fps capture made the browser read the whole game canvas back every
-// frame for a video nobody watched; now 60 a second only while the picture-in-picture window is open, 2 a second
-// otherwise so a pop-out finds a frame ready)
+// frame for a video nobody watched; now 60 a second only while the picture-in-picture window is open, and one frame
+// when the stream starts and when a pop-out is asked for. Each frame is a YUV readback of the canvas on the GPU
+// process's main thread, 4-13 ms on the Moto G: the 2 a second kept warm made the game's own frames miss behind them,
+// phase4 akiha_trace_gpu)
 function pipStream(c) {
   const st = c.captureStream(0);
   pipTrack = st.getVideoTracks()[0] || null;
@@ -1159,9 +1028,10 @@ function frameBusRun(now) {
 setInterval(() => { const now = performance.now(); if (now - frameBusAt > 50) frameBusRun(now); }, 1000 / 60);
 window.mbaaFrameBus = frameBus;  // (chat.js: its name effects)
 let pipTickN = 0;
+const pipFrame = () => { try { if (pipTrack && pipTrack.readyState === 'live') pipTrack.requestFrame(); } catch (e) {} };
 frameBus.add(function pipTick() {
   if (pipTrack && pipVideo && pipTrack.readyState === 'live') {
-    if (document.pictureInPictureElement === pipVideo || ++pipTickN % 30 === 0) { try { pipTrack.requestFrame(); } catch (e) {} }
+    if (document.pictureInPictureElement === pipVideo || pipTickN++ === 0) pipFrame();
   }
 });
 function pipSource() {
@@ -1170,8 +1040,8 @@ function pipSource() {
   pipVideo.id = 'pipv'; pipVideo.muted = true; pipVideo.playsInline = true; pipVideo.autoPictureInPicture = true;
   pipVideo.srcObject = pipStream(document.getElementById('canvas'));
   pipSelfAt = performance.now();
-  pipVideo.addEventListener('leavepictureinpicture', () => { pipCover(false); if (document.visibilityState === 'hidden') bgTick(true); });
-  pipVideo.addEventListener('enterpictureinpicture', () => pipCover(true));
+  pipVideo.addEventListener('leavepictureinpicture', () => pipCover(false));
+  pipVideo.addEventListener('enterpictureinpicture', () => { pipFrame(); pipCover(true); });
   // the window's own controls (Firefox draws volume, mute and play / pause; the video has no sound of its own): the
   // page's volume slider and pause follow them, and they follow the page (pipFollow)
   pipVideo.addEventListener('volumechange', () => {
@@ -1212,6 +1082,7 @@ async function togglePip() {
     // (asked straight from the tap: after an await of play() the browser no longer counts it as the user's and ignores it)
     const v = pipSource();
     if (v.paused) v.play().catch(() => {});
+    pipFrame();  // (the picture of now, not the stream's first)
     await v.requestPictureInPicture();
     pipFollow();
   } catch (e) { status(`picture in picture: ${e.message}`); }
@@ -1226,66 +1097,11 @@ if (document.pictureInPictureEnabled) {
   pipSource().play().catch(() => addEventListener('pointerdown', () => pipSource().play().catch(() => {}), { once: true }));
 }
 document.addEventListener('visibilitychange', () => {
-  bgTick(document.visibilityState === 'hidden');
   if (document.visibilityState !== 'visible') return;
   // (a browser that never sends webglcontextrestored: the session is started again once the page is back)
   setTimeout(glRecover, 1000);
   if (actx && actx.state !== 'running' && actx.state !== 'closed') actx.resume().catch(() => {});
 });
-// Boot snapshot: the used memory right after viewer_boot (pages packed like keyframes). The next match of a playlist
-// restores it into the same instance (one wasm instance, one GL context and one copy of the shared files for the whole
-// playlist; a new instance per match ran a phone out of memory). Memory above the boot heap is zeroed as in a fresh
-// instance (the allocator takes fresh sbrk memory as zero); the restore's new GL generation deletes the last match's
-// textures.
-function bootSnapshot(M) {
-  kzM = M;
-  const top = M._viewer_mem_top(), W = PAGE >> 2, H = new Int32Array(M.HEAPU8.buffer), n = Math.ceil(top / PAGE);
-  const pages = new Array(n);
-  // (each page's hash, as a keyframe's, taken before packing (zlib's scratch changes as pages are packed): a kept live
-  // match's keyframe (liveKeepTake) takes the boot page for one the game has not changed since boot, so only its changed
-  // pages cost memory. None for the hash output and the zlib scratch: their content is not what was hashed)
-  const hs = Array.from(pageHashes(M, n * PAGE));
-  const x0 = Math.floor(M._viewer_page_hash_area(0) / PAGE), x1 = Math.ceil(M._viewer_page_hash_area(1) / PAGE);
-  const z0 = M._viewer_kz_base ? Math.floor(M._viewer_kz_base() / PAGE) : -1, z1 = M._viewer_kz_base ? Math.ceil((M._viewer_kz_base() + M._viewer_kz_size()) / PAGE) : -1;
-  let bytes = 0;
-  for (let i = 0; i < n; i++) { pages[i] = packPage(H, i * W, W); pages[i].bootPage = 1; bytes += pages[i].bytes; }
-  // (and only where the page hashes the same after packing: the pages zlib's calls wrote meanwhile (its C stack frames,
-  // its arena counter) were packed with content other than what was hashed)
-  const h2 = pageHashes(M, n * PAGE);
-  for (let i = 0; i < n; i++) {
-    const j = 4 * i;
-    if ((i >= x0 && i < x1) || (i >= z0 && i < z1) || hs[j] !== h2[j] || hs[j + 1] !== h2[j + 1] || hs[j + 2] !== h2[j + 2] || hs[j + 3] !== h2[j + 3]) continue;
-    pages[i].h = [hs[j], hs[j + 1], hs[j + 2], hs[j + 3]];
-  }
-  // (?bootcheck=1, the checks: each page's hash, to compare a prewarmed boot with play()'s own)
-  if (Q.get('bootcheck') === '1') window.__mbaaBootImg = M.HEAPU8.slice(0x400000, 0x800000);
-  if (Q.get('bootcheck') === '1') window.__mbaaBootPages = pages.map(q => (q.h ? q.h.map(x => (x >>> 0).toString(16)).join('') : 'x'));
-  return { top: n * PAGE, pages, bytes };
-}
-// The picture's comment renderer (overlay_gl.cpp) keeps its fonts, glyph / emoji caches, registered comments and switches
-// in the wasm memory too: a restore (the boot snapshot of a live switch / reused session, a keyframe) put them back to the
-// snapshot's (before the fonts were sent: nothing drawn until a reload, user 2026-11-01). The page sets it up again.
-function ovRestored(s) {
-  s.M.mbaaMemGen = (s.M.mbaaMemGen || 0) + 1;
-  if (s.M._viewer_ov_restored) s.M._viewer_ov_restored();
-  try { if (window.mbaaChat && window.mbaaChat.ovRestored) window.mbaaChat.ovRestored(); } catch (e) { console.warn('overlay restore:', e); }
-}
-function restoreBoot(s) {
-  const M = s.M, snap = s.boot, W = PAGE >> 2;
-  call(s, 'viewer_restore_begin');
-  for (const st of M.FS.streams) if (st && st.fd > 2) { try { M.FS.close(st); } catch (e) {} }
-  const top = M._viewer_mem_top(), H = new Int32Array(M.HEAPU8.buffer);
-  snap.pages.forEach((q, i) => unpackPage(q, H, i * W, W));
-  if (top > snap.top) M.HEAPU8.fill(0, snap.top, top);
-  call(s, 'viewer_restore_end', ++s.gen);
-  // (the host's banner state (names on/off, the names, the tuning) lives in the restored memory: it went back to the
-  // snapshot's, from before the page set it (the boot, an early keyframe). Set it again: was "CHALLENGER" in place of
-  // both names after a catch-up jump or a seek for the rest of the session, user 2026-11-01)
-  s.bannerKey = null;
-  ovRestored(s);
-  liveKeptStale(M);  // (a kept live match's textures survive the reset: liveKeepTake)
-  M._viewer_tex_store_reset();  // the last match's sealed textures (the boot ones stay)
-}
 // ---- the engine started ahead (goal D, 2026-11-05: a tap on a live card paid the module, the game's boot and the boot
 // snapshot after all of the match's files were in, ~0.5 s desktop / ~1.7 s at 4x). As soon as the manifest is in, the
 // page fetches the boot files only (plan.boot), makes the instance and boots it exactly as play() does (the same
@@ -1294,257 +1110,20 @@ function restoreBoot(s) {
 // alongside. Never in hash / capture runs or with ?reuse=0. (Was behind ?prewarm=1 while it was a suspect for the owner
 // stage squares, 2026-11-06; those were the snapshot's background block, radio_stage.cpp snap_keep_bg_*.)
 const PREWARM = !HASH && !CAPTURE && Q.get('reuse') !== '0' && !Q.get('files');
-let warmP = null;
-function engineWarm() {
-  if (warmP || !PREWARM || session || !man || !man.plan || !man.plan.boot) return warmP;
-  warmP = (async () => {
-    const boot = withSiblings(man, new Set(man.plan.boot));
-    await fetchAll(man, boot, '', true);
-    if (session) return null;
-    bootMark('warmModule');
-    const wasmV = ((document.querySelector('script[src^="mbaa.js"]') || {}).src || '').split('?')[1];
-    if (SPECTOR_P) await SPECTOR_P;
-    const M = await MBAA({ print: t => console.log(t), printErr: t => console.warn(t), canvas: freshCanvas(), mbaaStoreKeep: !LOWMEM,
-                           locateFile: p => (wasmV && p.endsWith('.wasm') ? `${p}?${wasmV}` : p) });
-    if (session) return null;
-    const w = { M, name: '', rep: new Uint8Array(0), live: true, mute: false, gen: 0, warm: true };
-    // (the session's hooks act for the current session only: this one is it while it boots (one synchronous run, from
-    // here to the snapshot), so its boot opens are tracked as play()'s are; then none again)
-    session = w;
-    try {
-    fillSession(w, boot, null);
-    // (play()'s settings before its viewer_boot)
-    try { call(w, 'viewer_rate', 1); } catch (e) {}
-    call(w, 'viewer_stage_anim', Q.get('stageAnim') !== null ? +(Q.get('stageAnim') !== '0') : 1);
-    if (Q.get('seal') === '0') call(w, 'viewer_seal_off', 1);
-    if (!call(w, 'viewer_boot')) return null;
-    M._viewer_seal_boot();
-    if (M._viewer_files_open()) return null;
-    w.boot = bootSnapshot(M);
-    M.mbaaBootOpened = new Set(w.opened);
-    } finally { if (session === w) session = null; }
-    bootMark('warm');
-    // (the live matches' files after the engine: a list drawn before the manifest preloaded none)
-    if (liveListLast) livePreloadAll(liveListLast.l);
-    // (the shader programs built at idle while the list shows, one pass a callback: the tick's own idle step does it
-    // once a match runs, so a tap's first frame waited on their links)
-    if (M._viewer_gl_prewarm_step) (async () => {
-      for (let more = 1; more && (!session || session.M === M);) {
-        await new Promise(r => window.requestIdleCallback ? requestIdleCallback(() => r(), { timeout: 1000 }) : setTimeout(r, 30));
-        more = M._viewer_gl_prewarm_step();
-      }
-      bootMark('glWarm');
-    })().catch(e => console.warn('shader prewarm:', e));
-    return w;
-  })().catch(e => { console.warn('engine prewarm:', e); return null; });
-  return warmP;
-}
-// the prewarmed instance as this session's (fillSession's reused path: the match's files over the boot ones)
-function warmTake(w, rep, name, want) {
-  const s = { M: w.M, name, rep, live: true, mute: false, gen: w.gen, boot: w.boot, reused: 1 };
-  session = s;
-  const M = s.M;
-  if (movieBytes) M.mbaaMovie = movieBytes;
-  else if (movieH264) M.mbaaMovieVideo = movieVideo(movieH264);
-  movieLoad();
-  return fillSession(s, want, new Set(w.want));
-}
-async function newSession(rep, name, want) {
-  if (!session && warmP) {
-    const w = await warmP;
-    warmP = null;
-    if (w && !session) { bootMark('moduleStart'); bootMark('module'); return warmTake(w, rep, name, want); }
-  }
-  const prev = session;
-  if (prev) { try { prev.M.ccall('viewer_stop', null, [], []); } catch (e) {} }
-  window.dispatchEvent(new Event('mbaa-session-end'));
-  if (prev && prev.boot && (!HASH && !CAPTURE ? Q.get('reuse') !== '0' : Q.get('reuse') === '1')) return reuseSession(prev, rep, name, want);
-  // mbaa.wasm is built with mbaa.js: it takes mbaa.js's cache-busting version (tools/web/deploy_pages.sh)
-  const wasmV = ((document.querySelector('script[src^="mbaa.js"]') || {}).src || '').split('?')[1];
-  // mbaaStoreKeep: the texture store keeps the last match's textures for the next one (web/host/browser/d3d9_gl.cpp)
-  bootMark('moduleStart');
-  if (SPECTOR_P) await SPECTOR_P;
-  const M = await MBAA({ print: t => console.log(t), printErr: t => console.warn(t), canvas: freshCanvas(), mbaaStoreKeep: !LOWMEM,
-                         locateFile: p => (wasmV && p.endsWith('.wasm') ? `${p}?${wasmV}` : p) });
-  bootMark('module');
-  const s = { M, name, rep, live: true, mute: false, gen: 0 };
-  session = s;
-  return fillSession(s, want, null);
-}
-function reuseSession(prev, rep, name, want) {
-  const s = { M: prev.M, name, rep, live: true, mute: false, gen: prev.gen, boot: prev.boot, reused: (prev.reused || 0) + 1 };
-  session = s;
-  restoreBoot(s);
-  return fillSession(s, want, new Set([...prev.want].filter(p => !(prev.freed && prev.freed.has(p)))));
-}
-// MEMFS /game: this match's files. A reused instance keeps the files both matches use and drops the ones only the last
-// match used (a stage's file goes back to its boot placeholder)
-function fillSession(s, want, had) {
-  const M = s.M, rep = s.rep, FS = M.FS;
-  // (a reused instance: the last session's live load gate let go (liveBegin sets this one's). It was kept when a replay
-  // followed a live match: that closure held the live session, its timeline and every keyframe, up to KF_BUDGET)
-  M.mbaaLoaderGate = null;
-  s.want = want || new Set(cache.keys());
-  const probe = new Set((man.plan && man.plan.probe) || []);
-  if (had) {
-    for (const p of had) if (!s.want.has(p)) {
-      try { if (probe.has(p)) FS.writeFile('/game/' + p, new Uint8Array(1)); else FS.unlink('/game/' + p); } catch (e) {}
-    }
-    for (const p of s.want) if (!had.has(p)) { const d = cache.get(p); if (d) fsPut(FS, '/game/' + p, d); }
-    FS.writeFile('/game/replay.rep', rep);
-    M.mbaaAssetMiss = p => { if (man.files[p] && p !== MOVIE && !(s.want.has(p) && cache.has(p))) misses.add(p); };  // (the movie: movieLoad)
-    trackOpens(s);
-    audioHooks(M, s);
-    if (!HASH && !bgmStreamReady) for (const p of s.want) if (/^bgm\/.*\.opus$/.test(p) && cache.has(p)) bgmDecode(p);
-    return s;
-  }
-  FS.mkdir('/game');
-  // files the game only checks exist (plan.probe: every stage .dat at boot) get a 1-byte placeholder; the real file
-  // (the replay's stage, fetched by the plan) is written over it
-  for (const p of (man.plan && man.plan.probe) || []) { mkdirs(FS, '/game/' + p); FS.writeFile('/game/' + p, new Uint8Array(1)); }
-  // only this match's files (a playlist's cache also holds the next match's)
-  for (const p of s.want) { const d = cache.get(p); if (d) fsPut(FS, '/game/' + p, d); }
-  FS.writeFile('/game/replay.rep', rep);
-  M.mbaaAssetMiss = p => { if (man.files[p] && p !== MOVIE && !(s.want.has(p) && cache.has(p))) misses.add(p); };  // (the movie: movieLoad)
-  if (movieBytes) M.mbaaMovie = movieBytes;
-  else if (movieH264) M.mbaaMovieVideo = movieVideo(movieH264);
-  if (!HASH && !s.warm) movieLoad();  // (as soon as a match loads: its VS screen comes first; not for a prewarmed engine)
-  trackOpens(s);
-  audioHooks(M, s);
-  if (!HASH && !bgmStreamReady) for (const p of s.want) if (/^bgm\/.*\.opus$/.test(p) && cache.has(p)) bgmDecode(p);
-  return s;
-}
 const call = (s, f, ...a) => s.M.ccall(f, 'number', a.map(() => 'number'), a);
 
-// play from the start; with catchUp = k, step to frame k first (no pacing) and continue from there
-async function play(rep, name, catchUp = 0, want = null, liveId = null) {
-  { const b = document.getElementById('ffbadge'); if (b) b.hidden = true; } catchUpShow(null);  // (a new session: its own state)
-  misses.clear();
-  const s = await newSession(rep, name, want);
-  swMark('session');
-  try { call(s, 'viewer_rate', 1); } catch (e) {}  // (a reused module keeps the last session's live pacing rate)
-  // stage animations on, except for native comparisons (?stageAnim=0, hash runs): the oracle's settings have them off
-  call(s, 'viewer_stage_anim', Q.get('stageAnim') !== null ? +(Q.get('stageAnim') !== '0') : HASH ? 0 : 1);
-  if (Q.get('seal') === '0') call(s, 'viewer_seal_off', 1);
-  bootMark('session');
-  if (!call(s, 'viewer_boot')) { window.__mbaaStarted = -1; loading(false); status('start failed (see console)'); return; }
-  // boot textures to the GPU store first: the snapshot (and every keyframe) then holds no pixels
-  bootMark('booted');
-  if (!s.reused) s.M._viewer_seal_boot();
-  if (!s.boot && (!HASH && !CAPTURE || Q.get('reuse') === '1') && !s.M._viewer_files_open()) {
-    s.boot = bootSnapshot(s.M);
-    s.M.mbaaBootOpened = new Set(s.opened);  // read before the snapshot: a reused instance's later matches never open them
-  }
-  bootMark('bootSnap');
-  if (!call(s, 'viewer_load')) { window.__mbaaStarted = -1; loading(false); status('start failed (see console)'); return; }
-  // a live clip's replay: the live session's forcing (clipLtFor), before the first frame
-  s.lt = clipLt && clipLt.name === name && !liveSrc ? clipLt.bytes : null;
-  if (s.lt && !s.M.ccall('viewer_lt_set', 'number', ['array', 'number'], [s.lt, s.lt.length])) { console.warn('clip: live forcing unreadable'); s.lt = null; }
-  if (!s.lt) s.M.ccall('viewer_lt_clear', null, [], []);
-  else console.log(`clip: replay played with its live forcing (${s.lt.length} bytes)`);
-  if (HASH || CU_HASH) s.M.ccall('viewer_hash_enable', null, [], []);
-  call(s, 'viewer_play', 0);
-  swMark('play'); swMark('load');
-  // (a live start: start()'s liveId, not the page's ?live=: a chat page joins a match in place (pushState), and with the
-  // URL's parameters as loaded it played the boot tape as a replay, the players idle until a reload; user 2026-11-04)
-  if (liveSrc && liveId && liveSrc.id === liveId) { liveBegin(s); swMark('boot', true, liveSrc.id); }
-  call(s, 'viewer_hud', ui.hud ? 1 : 0);
-  hitstunApply(s);
-  window.__mbaa = { Module: s.M, man };
-  bootMark('played');
-  if (!HASH || CAPTURE) timelineInit(s);
-  bootMark('timeline');
-  swMark('timeline', s);
-  if (s.liveResumeK && s.tl) liveResumeApply(s);  // (back to a kept live match: its keyframe)
-  // the pre-scan is a second copy of the game (~400 MB with its files): not in low-memory mode, where marks come as playback reaches them
-  if (!HASH && !CAPTURE && !PERF && !catchUp && !s.liveSrc && !(LOWMEM && Q.get('scan') !== '1')) startScan(s);
-  window.__mbaaStarted = 1;
-  if (!annDefault.p) setTimeout(annDefaultLoad, 500);  // (Neco's lines: once the first match runs, after its first frames)
-  if (CAPTURE) { status(`loaded ${name} (capture mode)`); return; }
-  if (HASH) return hashRun(s);
-  for (let f = 0; f < catchUp && s === session;) {
-    f = call(s, 'viewer_step', Math.min(240, catchUp - f));
-    status(`catching up: frame ${f} of ${catchUp}`);
-    catchUpShow(catchUp - f, catchUp);
-    await new Promise(r => setTimeout(r, 0));
-    if (misses.size) { catchUpShow(null); return refetchAndReplay(s, f); }
-  }
-  catchUpShow(null);
-  if (PERF) call(s, 'viewer_perf', 1);
-  uiApply(s);
-  const tq = +(Q.get('t') || 0);
-  if (tq > 0 && !catchUp && !PERF && s.tl && window.__mbaaRepUrl) { await requestSeek(tq); }
-  else if ((ui.skipIntro || pl.items.length > 1) && !catchUp && !PERF && s.tl) await skipIntro(s);  // a playlist starts each match at round 1
-  const eq = +(Q.get('e') || 0);
-  if (eq > tq && tq > 0 && !catchUp && window.__mbaaRepUrl && pl.i <= 0) {
-    s.clip = { a: tq, b: eq, stop: true }; marksKey = '';
-    if (Q.get('loop') === '1' && !loopOn) toggleLoop();
-  }
-  if (s !== session) return;
-  call(s, 'viewer_run');
-  bootMark('run');
-  swMark('run');
-  xfRuns++;
-  loading(false);
-  if (!HASH) movieLoad();
-  status(`playing ${name}`);
-  watch(s);
-}
-// a planned file was missing: fetch what the game asked for and replay to where this session was
-async function refetchAndReplay(s, frame) {
-  call(s, 'viewer_stop');
-  const want = withSiblings(man, new Set([...misses, ...(s.freed || [])]));  // every freed file: the replay reads them all
-  console.warn(`asset plan missed ${want.size} files at frame ${frame}:`, [...want]);
-  window.mbaaPlanMisses = (window.mbaaPlanMisses || []).concat([...want]);
-  await fetchAll(man, want, 'fetching missed files');
-  return play(s.rep, s.name, frame, new Set([...s.want, ...want]));
-}
-function watch(s) {
-  s.watching = true;
-  const t = setInterval(() => {
-    if (s !== session) return clearInterval(t);
-    if (misses.size && s.liveSrc) { liveMissed(s); }
-    else if (misses.size) { clearInterval(t); refetchAndReplay(s, call(s, 'viewer_frame')); return; }
-    if (LOWMEM && FREE_FILES && s.freedAt < 0 && s.tl && s.tl.marks.some(m => m[0] > (s.freeArm ?? -1) && m[0] <= s.M._viewer_frame()) && !s.seeking && !call(s, 'viewer_files_open')) freeLoaded(s);
-    // a playlist skips the win screen (scene 5: the winner's quote, which runs to the replay's end): the next match
-    // starts as the battle ends
-    const winScreen = pl.i >= 0 && pl.i + 1 < pl.items.length && !s.seeking && s.M.HEAP32[0x54EEE8 >> 2] === SCENE_WIN;
-    if ((call(s, 'viewer_ended') || winScreen) && !s.endShown) {
-      s.endShown = true;
-      status(`finished ${s.name} (${call(s, 'viewer_frame')} frames)`);
-      if (pl.i >= 0 && pl.i + 1 < pl.items.length && !ui.paused) {  // playlist: the next match a moment later
-        status(`finished ${s.name}: next up ${pl.items[pl.i + 1].name}`);
-        setTimeout(() => { if (s === session && !ui.paused) startItem(pl.i + 1); }, winScreen ? 0 : 1200);
-      }
-    }
-  }, 100);
-}
-async function hashRun(s) {
-  const cap = +(Q.get('frames') || 0);
-  const h = window.__mbaaHash = { state: [], audio: [], frames: 0, done: false, ms: 0 };
-  const t0 = performance.now();
-  while (!call(s, 'viewer_ended') && (!cap || h.frames < cap)) {
-    h.frames = call(s, 'viewer_step', cap ? Math.min(120, cap - h.frames) : 120);
-    h.state.push(s.M.ccall('viewer_hash_take', 'string', [], []));
-    h.audio.push(s.M.ccall('viewer_audio_take', 'string', [], []));
-    if (misses.size) {  // the hash run restarts from scratch with the file present
-      const extra = withSiblings(man, misses);
-      await fetchAll(man, extra, 'fetching missed files');
-      window.mbaaPlanMisses = (window.mbaaPlanMisses || []).concat([...misses]);
-      return play(s.rep, s.name, 0, new Set([...s.want, ...extra]));
-    }
-    status(`state hash ${h.frames} frames`);
-    await new Promise(r => setTimeout(r, 0));
-  }
-  h.ms = performance.now() - t0;
-  h.done = true;
+let play;  // (the engine worker's: set by the worker block below)
+// the hash run's results on the page (the engine worker posts them here): window.__mbaaHash (browser_hash.py reads it)
+// and the state / audio CSVs as download links
+function hashDone(name, h) {
+  window.__mbaaHash = h;
   const link = (text, file) => {
     const a = document.createElement('a');
     a.href = URL.createObjectURL(new Blob([text], { type: 'text/csv' }));
     a.download = file; a.textContent = file; a.style.marginLeft = '8px';
     document.getElementById('status').after(a);
   };
-  const tag = s.name.replace(/\.rep$/i, '').replace(/^.*\//, '');
+  const tag = name.replace(/\.rep$/i, '').replace(/^.*\//, '');
   link(h.state.join(''), `${tag}_state.csv`);
   link(h.audio.join(''), `${tag}_audio.csv`);
   status(`state hash done: ${h.frames} frames in ${(h.ms / 1000).toFixed(1)} s`);
@@ -1569,81 +1148,7 @@ try { ui.framebar = localStorage.getItem('mbaaFramebar') === '1'; } catch (e) { 
 if (Q.get('framebar') === '0' || Q.get('framebar') === '1') ui.framebar = Q.get('framebar') === '1';
 try { ui.names = localStorage.getItem('mbaaNames') !== '0'; } catch (e) { ui.names = true; }
 const tlMax = t => t.end !== null ? t.end : Math.max(t.simMax, t.est, 1);
-function uiApply(s) {
-  call(s, 'viewer_pause', ui.paused || s.seeking ? 1 : 0);
-  call(s, 'viewer_speed', ui.speed);
-  call(s, 'viewer_boxes_enable', ui.boxes ? 1 : 0);
-  call(s, 'viewer_hud', ui.hud ? 1 : 0);
-  hitstunApply(s);
-}
-function timelineInit(s) {
-  const M = s.M;
-  kzM = M;
-  const t = s.tl = { kfs: [], simMax: 0, end: null, marks: [], fights: [], intro: -1, bytes: 0, lastKf: -1, seekMs: [],
-                     want: null, running: false, round: -1, scene: -1, est: repEstimate(s.rep), M };
-  M.mbaaTexKfRef = new Map();  // (a reused instance: the last match's keyframes are gone with its timeline)
-  for (const [k, n] of M.mbaaTexHold || []) M.mbaaTexKfRef.set(k, n);  // (a kept live match's: liveKeepTake)
-  M.mbaaFrame = f => {
-    if (fb.on) fbSample(s, f);  // (the frame bar: every frame, a seek's re-simulation too)
-    if (f > t.simMax) {
-      t.simMax = f;
-      const scene = M.HEAP32[0x54EEE8 >> 2], round = M.HEAP32[0x77BFA4 >> 2];
-      if (scene === 1 && (t.scene !== 1 || round !== t.round) && !t.marks.some(m => m[0] === f)) {
-        t.marks.push([f, round]); t.marks.sort((a, b) => a[0] - b[0]);
-      }
-      t.scene = scene; t.round = round;
-      // each round's fight start (the intro state 0x55D20B reaching 0 in battle): live clip links anchor on it, as the
-      // pre-fight parts (character intros, round calls skipped by the players) run other lengths live and in a replay
-      const intro = M.HEAPU8[0x55D20B];
-      if (scene === 1 && intro === 0 && t.intro !== 0) t.fights.push(f);
-      t.intro = scene === 1 ? intro : -1;
-      if (t.end === null && M._viewer_ended()) t.end = f;
-    }
-    const cu = s.cu;
-    if (cu) {
-      // a live catch-up (liveCatchUp): the watchers where they can act, outside a battle, at the retry menu, a scene or
-      // retry change, and every CU_WATCH frames (a streak post a few frames later); the banner once at the end. In a
-      // battle with no retry menu they have nothing to hold or start: a select's files, the retry menu's rematch
-      const sc = M.HEAP32[0x54EEE8 >> 2], rt = M._viewer_spectate_in_retry();
-      if (sc !== 1 || rt || sc !== cu.scene || rt !== cu.retry || f - cu.full >= CU_WATCH) {
-        cu.scene = sc; cu.retry = rt; cu.full = f;
-        liveCssWatch(s); liveRematchHold(s); liveStreak(s); slogWatch(s);
-      }
-    } else if (s.liveSrc) { liveCssWatch(s); liveRematchHold(s); liveBanner(s); liveStreak(s); slogWatch(s); }
-    else if (TUNE) liveBanner(s);
-    if (!s.seeking) incTick(s, f);
-    // (a live catch-up: a keyframe every CU_KF_EVERY frames, every KF_EVERY in its last CU_KF_TAIL; low memory: none,
-    // CU_KF_LOW, s.cuNoKf: also not in its last drawn frames, ~2 s at 4x against the frame-0 keyframe; the first is the
-    // incremental one after the landing, incTick's slices)
-    else if (!s.cuNoKf && f >= t.lastKf + (cu && f < cu.T - CU_KF_TAIL ? CU_KF_EVERY : KF_EVERY) && f >= t.simMax && !M._viewer_files_open() && !(LOWMEM && !t.marks.length)) keyframe(s, f);  // phones: none in the intro (incTick)
-    // (the page's frame, once per tick: a tick stepping two game frames runs it once)
-    if (!s.seeking && !cu && session === s) { const now = performance.now(); if (now - frameBusAt > 4) frameBusRun(now); }
-  };
-  if (!M._viewer_files_open()) keyframe(s, M._viewer_frame());
-}
-// Background pre-scan (web/shell/scan_worker.js): a headless copy of the game plays the replay ahead in a worker and
-// reports the round starts and the exact end (same rules as above), so the timeline has them before playback does.
-function startScan(s) {
-  if (typeof Worker === 'undefined') return;
-  const v = ((document.querySelector('script[src^="mbaa.js"]') || {}).src || '').split('?')[1] || '';
-  const w = new Worker('scan_worker.js' + (v ? `?${v}` : ''));
-  s.scan = w;
-  window.addEventListener('mbaa-session-end', () => w.terminate(), { once: true });
-  w.onmessage = e => {
-    const m = e.data, t = s.tl;
-    if (m.error) { console.warn('pre-scan:', m.error); w.terminate(); return; }
-    t.scanFrame = m.frame;
-    for (const mk of m.marks) if (!t.marks.some(x => x[0] === mk[0])) t.marks.push(mk);
-    t.marks.sort((a, b) => a[0] - b[0]);
-    if (m.done) {
-      if (m.end !== null && t.end === null) t.end = m.end;
-      t.scanMs = m.ms;
-      w.terminate();
-    }
-  };
-  w.onerror = e => { console.warn('pre-scan failed:', e.message); w.terminate(); };
-  w.postMessage({ files: [...s.want].filter(p => cache.has(p)).map(p => [p, cache.get(p)]), probe: (man.plan && man.plan.probe) || [], rep: s.rep, v, lt: s.lt || null });
-}
+let uiApply;  // (the engine worker's: set by the worker block below)
 // jump to the previous / next round start (dir -1 / +1)
 function jumpRound(dir) {
   const s = session;
@@ -1653,205 +1158,6 @@ function jumpRound(dir) {
   if (target !== undefined) requestSeek(target);
   else if (dir < 0) requestSeek(ms[0]);
 }
-const pageRef = (t, p, d) => {
-  if (!p || p.bootPage) return;  // (a boot snapshot page shared by a keyframe: the snapshot holds it, not counted here)
-  p.n = (p.n || 0) + d;
-  if (p.n <= 0) t.bytes -= p.bytes;
-};
-// A stored page: zero words packed out (most changed pages are mostly zero): m = bitmask of the nonzero words, v = those
-// words in order; a page with few zeros is kept raw (r).
-// Pages with content are stored zlib-compressed (z) when the module that made them can (viewer_kz_*: ~4x on game
-// memory; zlib works in a scratch area keyframes exclude); kzM is the current instance. A zero page stays {m, v: []} (the keyframe code treats those as free heap).
-let kzM = null;
-function kzPack(H, o) {
-  const M = kzM;
-  if (!M || !M._viewer_kz_pack || PAGE !== 16384) return null;
-  const B = M._viewer_kz_base(), U = M.HEAPU8;
-  if (H.buffer === U.buffer && o * 4 + 16384 > B && o * 4 < B + M._viewer_kz_size()) return null;  // the scratch's own pages (the boot snapshot covers them)
-  // always through the scratch: a page of the wasm C stack would change under zlib's own frames while it runs
-  new Int32Array(U.buffer, B, 4096).set(H.subarray(o, o + 4096));
-  const n = M._viewer_kz_pack(B);
-  if (!n) return null;
-  return M.HEAPU8.slice(B + 20480, B + 20480 + n);
-}
-function kzUnpack(z, H, o) {
-  const M = kzM, U = M.HEAPU8, B = M._viewer_kz_base();
-  U.set(z, B + 20480);
-  // inflated into the scratch, then copied: inflating straight into a page of the wasm C stack overwrote zlib's own
-  // live frame (the restore hung), and page 0 is a null output pointer to zlib
-  const ok = M._viewer_kz_unpack(B, z.length) && (H.buffer === U.buffer ? U.copyWithin(o * 4, B, B + 16384) : H.set(new Int32Array(U.buffer, B, 4096), o), 1);
-  if (!ok) throw new Error(`kz: page at ${o * 4} (${z.length} bytes) did not decompress`);
-}
-function packPage(H, o, W) {
-  let nz = 0;
-  for (let j = 0; j < W; j++) if (H[o + j] !== 0) nz++;
-  if (nz > 0 && KZ) {
-    const z = kzPack(H, o);
-    if (z && z.length < Math.min(W * 4, (W >> 5) * 4 + nz * 4)) return { z, bytes: z.length };
-  }
-  if (nz > W * 0.7) return { r: H.slice(o, o + W), bytes: W * 4 };
-  const m = new Int32Array(W >> 5), v = new Int32Array(nz);
-  for (let j = 0, k = 0; j < W; j++) { const x = H[o + j]; if (x !== 0) { m[j >> 5] |= 1 << (j & 31); v[k++] = x; } }
-  return { m, v, bytes: (m.length + nz) * 4 };
-}
-// pack pages copied raw into one buffer per batch: per page the mask then the nonzero words (m, v are views)
-function packBatch(t, list) {
-  const W = PAGE >> 2, M32 = W >> 5;
-  const packed = list.map(q => packPage(q.r, 0, W));
-  let words = 0;
-  for (const pk of packed) if (!pk.r && !pk.z) words += M32 + pk.v.length;
-  const buf = new Int32Array(words);
-  let o = 0;
-  list.forEach((q, k) => {
-    const pk = packed[k];
-    if (pk.r) { q.r = q.r.slice(); return; }  // kept raw: its own copy (the commit buffer can go)
-    if (pk.z) { q.z = pk.z; t.bytes += pk.bytes - q.bytes; q.bytes = pk.bytes; delete q.r; return; }
-    buf.set(pk.m, o); q.m = buf.subarray(o, o + M32); o += M32;
-    buf.set(pk.v, o); q.v = buf.subarray(o, o + pk.v.length); o += pk.v.length;
-    t.bytes += pk.bytes - q.bytes; q.bytes = pk.bytes; delete q.r;
-  });
-}
-function unpackPage(q, H, o, W) {
-  if (q.r) { H.set(q.r, o); return; }
-  if (q.z) { kzUnpack(q.z, H, o); return; }
-  const m = q.m, v = q.v;
-  let k = 0;
-  for (let w = 0; w < m.length; w++) {
-    const bits = m[w], a = o + (w << 5);
-    if (bits === 0) { H.fill(0, a, a + 32); continue; }
-    for (let j = 0; j < 32; j++) H[a + j] = (bits >>> j) & 1 ? v[k++] : 0;
-  }
-}
-// 128-bit hash of every page below top (wasm viewer_page_hashes: one pass at memory speed), 4 int32 per page
-function pageHashes(M, top) {
-  const n = Math.ceil(top / PAGE), p = M._viewer_page_hashes(top, PAGE);
-  return new Int32Array(M.HEAPU8.buffer, p, n * 4);
-}
-// The GPU texture store keeps an entry while a live texture or a kept keyframe names it (web/host/browser/d3d9_gl.cpp
-// js_store_gc): each keyframe records the store keys sealed when it is taken (kf.tex: k0, k1, fmt triples) and counts
-// them per key while it is kept (M.mbaaTexKfRef); after a keyframe is added or dropped the entries neither names go.
-// Without it a long session (a live set) kept every texture it ever sealed (the GPU store grew for good).
-function kfTexAdd(t, kf) {
-  const M = t.M;
-  if (!M || !M._viewer_tex_mark) return;
-  M._viewer_tex_mark();
-  kf.tex = Int32Array.from(M.mbaaTexMark || []);  // (as the store keys spell them: EM_JS passes the u32 words as i32)
-  M.mbaaTexMark = null;
-  const ref = M.mbaaTexKfRef || (M.mbaaTexKfRef = new Map());
-  for (let i = 0; i + 2 < kf.tex.length; i += 3) { const k = kf.tex[i] + ':' + kf.tex[i + 1] + ':' + kf.tex[i + 2]; ref.set(k, (ref.get(k) || 0) + 1); }
-}
-function kfTexDrop(t, kf) {
-  const ref = t.M && t.M.mbaaTexKfRef;
-  if (!ref || !kf.tex) return;
-  for (let i = 0; i + 2 < kf.tex.length; i += 3) {
-    const k = kf.tex[i] + ':' + kf.tex[i + 1] + ':' + kf.tex[i + 2], n = (ref.get(k) || 0) - 1;
-    if (n > 0) ref.set(k, n); else ref.delete(k);
-  }
-  kf.tex = null;
-}
-// Bytes of the store entries the kept keyframes name (GPU textures and SYSTEMMEM data; perm and stale entries are kept
-// anyway, so not counted). A live set's keyframes span many games, each pinning that game's composed frames and images:
-// without a bound on these, thinning by page bytes alone kept a game's textures for every game it had a keyframe in.
-// Low memory: only the entries the newest keyframe does not name (that one's are the match's live textures, ~75-90 MB
-// in a battle, kept by the store anyway): counted with them, one post-load keyframe alone was over the 64 MB budget, so
-// a phone kept 3-4 keyframes whatever their page bytes (perf_plan R1, replay_load/r1/tex_probe.log)
-function kfTexBytes(t) {
-  const M = t.M, ref = M && M.mbaaTexKfRef, S = M && M.mbaaTexStore;
-  let n = 0;
-  const hold = M && M.mbaaTexHold;
-  let live = null;
-  if (LOWMEM) {
-    const kf = t.kfs.find(k => k.frame === t.kfNewFrame) || t.kfs[t.kfs.length - 1];
-    if (kf && kf.tex) { live = new Set(); for (let i = 0; i + 2 < kf.tex.length; i += 3) live.add(kf.tex[i] + ':' + kf.tex[i + 1] + ':' + kf.tex[i + 2]); }
-  }
-  if (ref && S) for (const k of ref.keys()) { const e = S.get(k); if (e && !e.perm && !e.stale && !(hold && hold.has(k)) && !(live && live.has(k))) n += e.bytes || 0; }
-  return n;
-}
-function storeGc(t) {
-  if (STORE_GC && t.M && t.M._viewer_tex_store_gc && session && session.tl === t) t.storeGcN = (t.storeGcN || 0) + t.M._viewer_tex_store_gc();
-}
-// Keyframe: every page of the used memory [0, sbrk). A page whose hash equals the previous keyframe's is shared with
-// it, so a keyframe stores only its changed pages (packed, packPage; h = the page's hash). The hash output array is
-// scratch (null pages: never stored, never restored).
-function keyframe(s, f) {
-  const t = s.tl, M = s.M, t0 = performance.now();
-  const top = M._viewer_mem_top(), n = Math.ceil(top / PAGE), W = PAGE >> 2;
-  const hs = pageHashes(M, top), H = new Int32Array(M.HEAPU8.buffer);
-  let at = t.kfs.length;  // sorted by frame; pages are shared with the nearest earlier keyframe
-  while (at > 0 && t.kfs[at - 1].frame > f) at--;
-  if (at > 0 && t.kfs[at - 1].frame === f) return;
-  // (the first keyframe: shared with the boot snapshot (same instance), so the pages the match has not changed since the
-  // boot (~most of the exe's data and the boot files' heap) are not packed again: at 4x the first keyframe after a
-  // live join took ~350 ms. Only those with a hash (the hash output and the zlib scratch have none)).
-  const prev = at > 0 ? t.kfs[at - 1].pages : (s.boot ? s.boot.pages : []);
-  const x0 = Math.floor(M._viewer_page_hash_area(0) / PAGE), x1 = Math.ceil(M._viewer_page_hash_area(1) / PAGE);
-  const pages = new Array(n);
-  let fresh = 0;
-  for (let i = 0; i < n; i++) {
-    if (i >= x0 && i < x1) { pages[i] = null; continue; }
-    const q = prev[i], j = i * 4;
-    if (q && q.h && q.h[0] === hs[j] && q.h[1] === hs[j + 1] && q.h[2] === hs[j + 2] && q.h[3] === hs[j + 3]) pages[i] = q;
-    else { pages[i] = packPage(H, i * W, W); pages[i].h = [hs[j], hs[j + 1], hs[j + 2], hs[j + 3]]; t.bytes += pages[i].bytes; fresh++; }
-    pageRef(t, pages[i], +1);
-  }
-  const kf = { frame: f, pages, ms: performance.now() - t0, fresh };
-  kfTexAdd(t, kf);
-  t.kfs.splice(at, 0, kf);
-  t.lastKf = t.kfs[t.kfs.length - 1].frame;
-  t.kfNewFrame = f;
-  thin(t);
-  storeGc(t);
-}
-// The first keyframe after the match's load (its first round start; low memory: the round start the freed files were
-// freed after, t.safeFrom): restoring it re-simulates no load, so it is never thinned. Without it a phone's back seek
-// past the thinned keyframes went to frame 0 and re-ran the load with its files freed (a stage .dat read as its 1-byte
-// stand-in): the renderer crashed (perf_plan R1)
-function kfPinned(t) {
-  const from = t.safeFrom ?? (t.marks.length ? t.marks[0][0] : -1);
-  return from < 0 ? null : t.kfs.find(k => k.frame >= from && !k.pending && !k.preSnap) || null;
-}
-// Over the memory budget (keyframe pages, or the store textures they pin): keyframes dropped one at a time, each time
-// the one whose neighbours are closest (the spacing stays even: a back seek's re-simulation stays short everywhere),
-// never the first, the last, a pending one, the pinned post-load one or the one just made (a seek's refinement keyframe
-// near its target). Was: every second one dropped at once, so a phone kept a power-of-two spread and a back seek
-// re-simulated up to 1,700 frames (perf_plan R1)
-const kfOver = t => t.bytes > KF_BUDGET || (STORE_GC && kfTexBytes(t) > KF_TEX_BUDGET);
-function thin(t) {
-  let dropped = 0;
-  while (t.kfs.length > 4 && kfOver(t)) {
-    const pin = kfPinned(t);
-    let best = -1, gap = Infinity;
-    for (let i = 1; i < t.kfs.length - 1; i++) {
-      const k = t.kfs[i];
-      if (k.pending || k === pin || k.frame === t.kfNewFrame) continue;
-      const g = t.kfs[i + 1].frame - t.kfs[i - 1].frame;
-      if (g < gap) { gap = g; best = i; }
-    }
-    if (best < 0) break;
-    const [k] = t.kfs.splice(best, 1);
-    for (const p of k.pages) pageRef(t, p, -1);
-    kfTexDrop(t, k);
-    dropped++;
-  }
-  if (dropped) t.thinned = (t.thinned || 0) + dropped;
-}
-// Put a keyframe's memory back: only the pages whose hash differs from the keyframe's are copied.
-// Incremental keyframe (playback): a whole-memory hash pass at one frame would stall it for tens of ms, so the work
-// is spread over the KF_PHASE frames before and after the keyframe frame F, a slice per simulated frame:
-//   pre  (F - KF_PHASE .. F): hash the cold pages (unchanged in the recent keyframes) in slices; one that changed
-//        since the base keyframe becomes hot.
-//   F    hash the hot pages, the pages above the base's top and the ones the pre pass found changed: those are the
-//        pages that may differ from the base; changed ones are copied, the cold ones are taken from the base.
-//   post (F .. F + KF_PHASE): hash the cold pages again; if one differs from the base, it may have changed before F,
-//        so the keyframe is dropped (and the page becomes hot). Until the post pass ends the keyframe is pending (seeks
-//        do not use it).
-// A cold page counted as unchanged at F was unchanged at its pre hash and at its post hash, at most 2 x KF_PHASE frames
-// apart; and a page once seen changing stays hot. At F the changed pages are copied raw and packed during the post
-// pass. Seeks (no frames shown) keyframe in one pass.
-const KF_PHASE = 60;
-// (the timeline's diagnostics: per frame and per keyframe all a live session long, so the newest STAT_MAX of each)
-const STAT_MAX = 2000;
-function statPush(a, v) { a.push(v); if (a.length > STAT_MAX + 200) a.splice(0, a.length - STAT_MAX); }
 // keyframe packing's time per display frame: PACK_MS from the first pack call of a window (a window = PACK_WIN ms, about
 // one refresh); at least one batch per window, so it always finishes
 const PACK_MS = 3, PACK_WIN = 12;
@@ -1861,340 +1167,12 @@ function packTime() {
   if (now - packWin > PACK_WIN) { packWin = now; packCalls = 0; }
   return packCalls++ === 0 || now - packWin < PACK_MS;
 }
-function hashRuns(M, idx) {  // hash the listed pages (sorted), one wasm call per run of consecutive pages
-  let p = 0;
-  for (let i = 0; i < idx.length;) {
-    let j = i + 1;
-    while (j < idx.length && idx[j] === idx[j - 1] + 1) j++;
-    p = M._viewer_page_hashes_range(idx[i], j - i, PAGE);
-    i = j;
-  }
-  return p;
-}
-const sameHash = (hs, i, q) => q && q.h[0] === hs[4 * i] && q.h[1] === hs[4 * i + 1] && q.h[2] === hs[4 * i + 2] && q.h[3] === hs[4 * i + 3];
-function hashView(M, n) { return new Int32Array(M.HEAPU8.buffer, M._viewer_page_hash_area(0), n * 4); }
-// The commit copies, in one tick, every page changed since the base keyframe: ~250 pages in play, but after a radio
-// stage swap ~3000 (50 MB: 35-50 ms desktop, 200+ ms on a phone, user 2026-11-02 "the stage change still hiccups"). The
-// pre pass copies changed pages ahead, a slice a tick (preCopy: a cold page found changed; preCopyHot: the hot pages,
-// ~1.5 ms a tick), each with its hash at the copy; the commit takes a copy whose page hashes the same then, so only
-// pages changed again since are copied in the commit's tick. (The keyframe is the same: equal hash, equal page.)
-function preCopy(M, c, i, hs) {
-  const W = PAGE >> 2, H = new Int32Array(M.HEAPU8.buffer);
-  (c.pre || (c.pre = new Map())).set(i, { r: H.slice(i * W, i * W + W), h: [hs[4 * i], hs[4 * i + 1], hs[4 * i + 2], hs[4 * i + 3]] });
-}
-function preCopyHot(M, c) {
-  if (!c.hot) {
-    const n = Math.ceil(M._viewer_mem_top() / PAGE), cold = new Uint8Array(n);
-    const x0 = Math.floor(M._viewer_page_hash_area(0) / PAGE), x1 = Math.ceil(M._viewer_page_hash_area(1) / PAGE);
-    for (const i of c.cold) if (i < n) cold[i] = 1;
-    c.hot = []; c.hcur = 0;
-    for (let i = 0; i < n; i++) if (!cold[i] && !(i >= x0 && i < x1)) c.hot.push(i);
-  }
-  const t0 = performance.now();
-  while (c.hcur < c.hot.length && performance.now() - t0 < 1.5) {
-    const part = c.hot.slice(c.hcur, c.hcur + 64);
-    c.hcur += part.length;
-    hashRuns(M, part);
-    const hs = hashView(M, part[part.length - 1] + 1);
-    for (const i of part) if (!sameHash(hs, i, c.base.pages[i]) && !(c.pre && c.pre.has(i))) preCopy(M, c, i, hs);
-  }
-}
-function incTick(s, f) {
-  const t = s.tl, M = s.M;
-  // (a live match being left for another (liveWant: the tap's match) keeps playing until the new one's first frame, ~3 s
-  // on a phone while the new match's files decode; its keyframe slices ran on through that: 0.45-0.65 s of the Moto G's
-  // main thread per switch (join_phone_nokf_1107 profiles, deflate under incTick from the tap to the files mark).
-  // Paused while another match is wanted; a want back to this one resumes them)
-  if (s.liveSrc && liveWant && liveWant !== s.liveSrc.id) return;
-  let c = t.inc;
-  if (!c) {
-    const base = t.kfs[t.kfs.length - 1];
-    if (!base || base.pending || f < base.frame + KF_EVERY - KF_PHASE || f < t.simMax) return;
-    // phones: none before round 1. The intro's frames hold the match's files as the game reads them (a keyframe there
-    // kept ~95 MB of them); a seek into the intro simulates from frame 0
-    if (LOWMEM && !t.marks.length) return;
-    const hot = t.hotAt || (t.hotAt = new Map());
-    const cold = [];
-    for (let i = 0; i < base.pages.length; i++) {
-      const q = base.pages[i];
-      if (q && !hot.has(i) && !(q.v && q.v.length === 0)) cold.push(i);  // a zero page is free heap: hot
-    }
-    // (F at least a pre pass ahead: a commit dropped late, or one started past its frame, had no pre pass, so it hashed
-    // and copied every changed page in one tick: after a radio stage swap, several 40-50 ms ticks in a row)
-    c = t.inc = { F: Math.max(base.frame + KF_EVERY, f + KF_PHASE), base, cold, cur: 0, changed: [], kf: null, t0: 0, ms: 0 };
-  }
-  const t0 = performance.now(), phase = c.kf ? 'post' : f >= c.F ? 'commit' : 'pre';
-  const slice = Math.ceil(c.cold.length / KF_PHASE);
-  if (!c.kf) {  // pre pass
-    const n = Math.min(c.cold.length, c.cur + (f >= c.F ? c.cold.length : slice));
-    if (n > c.cur) {
-      const part = c.cold.slice(c.cur, n);
-      hashRuns(M, part);
-      const hs = hashView(M, part[part.length - 1] + 1);
-      for (const i of part) if (!sameHash(hs, i, c.base.pages[i])) { c.changed.push(i); if (f < c.F) preCopy(M, c, i, hs); }
-      c.cur = n;
-    }
-    if (f < c.F) preCopyHot(M, c);
-    if (f >= c.F && c.cur === c.cold.length && !M._viewer_files_open() && !t.kfs.some(k => k.frame === f)) incCommit(s, f, c);
-  } else {  // post pass
-    // packed against wall time, not a share per game frame: a catch-up tick runs several game frames, and a share each
-    // (zlib on the VS screen's ~2 MB of changed pages: ~40 ms) made a slow tick slower, so one stall fed the next
-    while (c.raw.length && packTime()) packBatch(t, c.raw.splice(0, 8));
-    const n = Math.min(c.tentative.length, c.cur + slice);
-    const part = c.tentative.slice(c.cur, n);
-    if (part.length) {
-      hashRuns(M, part);
-      const hs = hashView(M, part[part.length - 1] + 1);
-      for (const i of part) if (!sameHash(hs, i, c.base.pages[i])) {
-        c.bad = true; t.hotAt.set(i, t.kfs.length);
-        const q = c.base.pages[i];
-        statPush(t.incStat.dropPages, [i * PAGE, q.r ? 'raw' : q.z ? 'z' : q.v.length]);
-      }
-    }
-    c.cur = n;
-    if (c.bad || (n === c.tentative.length && !c.raw.length)) {
-      if (c.bad) {  // a cold page changed around F: its content at F is unknown
-        const at = t.kfs.indexOf(c.kf);
-        if (at >= 0) { t.kfs.splice(at, 1); for (const p of c.kf.pages) pageRef(t, p, -1); kfTexDrop(t, c.kf); }
-        t.lastKf = t.kfs.length ? t.kfs[t.kfs.length - 1].frame : -1;
-        t.incDropped = (t.incDropped || 0) + 1;
-      } else { c.kf.pending = false; c.kf.ms = c.ms; t.kfNewFrame = c.kf.frame; thin(t); }
-      t.inc = null;
-      storeGc(t);
-      // every raw page has been packed or copied out: a commit buffer grown by a big commit (the one after the match
-      // loads copies ~60 MB) is not kept for the rest of the match
-      if (t.commitBuf && t.commitBuf.length > (4 << 20)) t.commitBuf = null;
-    }
-  }
-  const dt = performance.now() - t0;
-  c.ms = Math.max(c.ms, dt);
-  const st = t.incStat || (t.incStat = { pre: [], commit: [], post: [], dropPages: [] });
-  statPush(st[phase], Math.round(dt * 10) / 10);
-}
-function incCommit(s, f, c) {
-  const t = s.tl, M = s.M, W = PAGE >> 2;
-  const top = M._viewer_mem_top(), n = Math.ceil(top / PAGE);
-  const x0 = Math.floor(M._viewer_page_hash_area(0) / PAGE), x1 = Math.ceil(M._viewer_page_hash_area(1) / PAGE);
-  const isCold = new Uint8Array(n);
-  for (const i of c.cold) if (i < n) isCold[i] = 1;
-  for (const i of c.changed) { isCold[i] = 0; t.hotAt.set(i, t.kfs.length); }
-  const now = [];
-  for (let i = 0; i < n; i++) if (!isCold[i] && !(i >= x0 && i < x1)) now.push(i);
-  const T0 = performance.now();
-  hashRuns(M, now);
-  const T1 = performance.now();
-  const hs = hashView(M, n), H = new Int32Array(M.HEAPU8.buffer);
-  const pages = new Array(n), tentative = [], changed = [];
-  for (let i = 0; i < n; i++) {
-    if (i >= x0 && i < x1) { pages[i] = null; continue; }
-    const q = c.base.pages[i];
-    if (isCold[i]) { pages[i] = q; tentative.push(i); }
-    else if (sameHash(hs, i, q)) pages[i] = q;
-    else { changed.push(i); if (q) t.hotAt.set(i, t.kfs.length); }
-  }
-  // the changed pages copied ahead in the pre pass and the same since (its hash now = at the copy): that copy; the
-  // rest copied now into one buffer (one allocation, not one per page)
-  const raw = [], late = [];
-  for (const i of changed) {
-    const p = c.pre && c.pre.get(i);
-    if (p && sameHash(hs, i, p)) {
-      if (KF_VERIFY) { const V = window.__kfVerify || (window.__kfVerify = { reused: 0, bad: 0, late: 0 }); V.reused++;
-        for (let j = 0, o = i * W; j < W; j++) if (p.r[j] !== H[o + j]) { V.bad++; break; } }
-      pages[i] = { r: p.r, bytes: PAGE, h: p.h }; raw.push(pages[i]);
-    }
-    else late.push(i);
-  }
-  c.pre = null;
-  if (late.length && (!t.commitBuf || t.commitBuf.length < late.length * W)) t.commitBuf = new Int32Array(Math.ceil(late.length * 1.5) * W);
-  const buf = t.commitBuf;  // reused: every raw page is packed or copied out during the post pass
-  late.forEach((i, k) => {
-    buf.set(H.subarray(i * W, i * W + W), k * W);
-    pages[i] = { r: buf.subarray(k * W, k * W + W), bytes: PAGE, h: [hs[4 * i], hs[4 * i + 1], hs[4 * i + 2], hs[4 * i + 3]] };
-    raw.push(pages[i]);
-  });
-  t.bytes += changed.length * PAGE;
-  const fresh = changed.length;
-  for (let i = 0; i < n; i++) pageRef(t, pages[i], +1);
-  statPush(t.commitParts || (t.commitParts = []), [now.length, Math.round(T1 - T0), Math.round(performance.now() - T1), fresh]);
-  c.kf = { frame: f, pages, ms: 0, fresh, pending: true, inc: true };
-  kfTexAdd(t, c.kf);
-  t.kfs.push(c.kf);
-  t.lastKf = f;
-  c.tentative = tentative; c.raw = raw; c.rawTotal = raw.length; c.cur = 0;
-}
-function restore(s, kf) {
-  const M = s.M;
-  call(s, 'viewer_restore_begin');
-  // files the game has open now: their streams are closed (a keyframe is only taken with none open)
-  for (const st of M.FS.streams) if (st && st.fd > 2) { try { M.FS.close(st); } catch (e) {} }
-  const top = M._viewer_mem_top();
-  const hs = pageHashes(M, Math.max(top, kf.pages.length * PAGE)), H = new Int32Array(M.HEAPU8.buffer), W = PAGE >> 2;
-  let copied = 0;
-  for (let i = 0; i < kf.pages.length; i++) {
-    const q = kf.pages[i], j = i * 4;
-    if (!q || (q.h[0] === hs[j] && q.h[1] === hs[j + 1] && q.h[2] === hs[j + 2] && q.h[3] === hs[j + 3])) continue;
-    unpackPage(q, H, i * W, W);
-    copied++;
-  }
-  // zlib's calls (kzUnpack) use the wasm C stack and its arena counter: the pages holding those were written again by
-  // each later call. Those few are inflated once more into JS copies and written last, with no wasm call after them.
-  if (kf.pages.some(q => q && q.z)) {
-    const h1 = pageHashes(M, kf.pages.length * PAGE), late = [];
-    for (let i = 0; i < kf.pages.length; i++) {
-      const q = kf.pages[i], j = i * 4;
-      if (!q || (q.h[0] === h1[j] && q.h[1] === h1[j + 1] && q.h[2] === h1[j + 2] && q.h[3] === h1[j + 3])) continue;
-      const tmp = new Int32Array(W);
-      unpackPage(q, tmp, 0, W);
-      late.push([i, tmp]);
-    }
-    for (const [i, tmp] of late) H.set(tmp, i * W);
-  }
-  s.tl.lastCopied = copied;
-  call(s, 'viewer_restore_end', ++s.gen);
-  // (the host's own settings live in the restored memory too, back to the keyframe's: the banner (names) is set again
-  // (liveBanner, by its key), the live pacing (1.05x trim / 2x catch-up) from 1x (the next poll sets what it wants).
-  // Was: "CHALLENGER" in place of both names for the rest of a session after a catch-up jump, user 2026-11-01)
-  s.bannerKey = null;
-  ovRestored(s);
-  if (s.liveSrc) { s.liveTrim = false; s.liveFF = false; call(s, 'viewer_rate', 1); call(s, 'viewer_speed', ui.speed); }
-  if (s.liveSrc) {
-    liveRefeed(s);  // (the stream received since the keyframe)
-    s.M._viewer_resolve_reset();  // (the keyframe's path caches predate files added since: the next game's)
-  }
-  // the restored state-hash / audio row buffers hold the keyframe's leftovers
-  if (HASH) { M.ccall('viewer_hash_take', 'string', [], []); M.ccall('viewer_audio_take', 'string', [], []); }
-  radioStageSync(s);  // (the keyframe's Raito Radio stage state: the pick's sent again)
-}
-// Seek to frame T (the state after T steps; the picture is frame T's). Coalesced: while a seek runs only the latest
-// request waits, the ones in between are dropped (dragging the slider, holding the step key).
-function requestSeek(T) {
-  const s = session;
-  if (!s || !s.tl) return Promise.resolve();
-  if (s.liveSrc && s.liveFollow) liveFollow(s, false);  // a seek on a live match: watching back
-  s.tl.want = T;
-  if (!s.tl.running) s.tl.running = runSeeks(s);
-  return s.tl.running;
-}
-async function runSeeks(s) {
-  const t = s.tl;
-  try {
-    while (t.want !== null && session === s) { const T = t.want; t.want = null; await seekTo(s, T); }
-  } finally { t.running = false; }
-}
-// a keyframe a restore can re-simulate from: none of the files the game would read from there was freed
-const kfSafe = (s, kf) => !kf || !s.freed || !s.freed.size || s.tl.safeFrom == null || kf.frame >= s.tl.safeFrom;
-// a replay's freed files back into MEMFS (a seek to before the match's load); freed again once playback passes a round
-// start (watch, freeArm)
-async function filesBack(s) {
-  const back = [...s.freed];
-  status(`seeking: reloading ${back.length} files`);
-  try { await fetchAll(man, back, 'seeking: reloading files', true); }
-  catch (e) { console.warn('seek: freed files:', e); status(`seek: the match's files did not load (${e.message})`); return false; }
-  if (session !== s) return false;
-  for (const p of back) { const d = cache.get(p); if (!d) return false; fsPut(s.M.FS, '/game/' + p, d); s.freed.delete(p); }
-  s.M._viewer_resolve_reset();
-  s.freedAt = -1; s.freeArm = -1; s.tl.safeFrom = null;
-  return true;
-}
-async function seekTo(s, T) {
-  const t = s.tl, M = s.M, t0 = performance.now();
-  if (t.end !== null) T = Math.min(T, t.end);
-  T = Math.max(1, Math.round(T));
-  if (s.snapFrom != null && T <= s.snapFrom) T = s.snapFrom + 1;  // (a snapshot join: nothing of the game before its load)
-  const cur = M._viewer_frame();
-  // the nearest keyframe strictly before T (at least one step is drawn), unless the current state is nearer
-  let kf = null;
-  for (const k of t.kfs) if (k.frame < T) { if (!k.pending && !k.preSnap) kf = k; } else break;
-  // (the frame bar on, its frames before T not kept: from a keyframe FB_BACK frames further back, so the bar has them)
-  const fbBack = fbSeekBack(T);
-  if (fbBack && kf) for (const k of t.kfs) if (k.frame < T - fbBack) { if (!k.pending && !k.preSnap) kf = k; } else break;
-  // (a snapshot join: nothing to restore before the first keyframe after its load)
-  if (s.snapFrom != null && !kf && !(T > cur)) { status('live: not kept this far back yet'); return; }
-  // low memory: a restore from before the freed files' load (kfSafe) re-simulates it. A replay gets the files back
-  // first (the browser's cache has them); live goes back no further than its pinned keyframe (re-simulating a set from
-  // its first game would take minutes on a phone)
-  const from = kf || t.kfs[0], pinned = kfPinned(t);
-  // (live, low memory: never from before the pinned keyframe, freed files or not: the frame-0 keyframe re-simulates the
-  // whole catch-up, ~20 s at phone speed)
-  if (!(T > cur && (!kf || cur >= kf.frame)) && (!kfSafe(s, from) || (s.liveSrc && LOWMEM && (!pinned || from.frame < pinned.frame)))) {
-    if (s.liveSrc) {
-      const pin = pinned;
-      if (!pin || !kfSafe(s, pin) || pin.frame >= cur) { status('live: not kept this far back on this device'); return; }
-      if (T <= pin.frame) { T = pin.frame + 1; status('live: back to the earliest point kept on this device'); }
-      kf = pin;
-    } else if (!await filesBack(s)) return;
-  }
-  if (t.inc) {  // an incremental keyframe in progress: its passes assume the timeline goes on from here
-    if (t.inc.kf) { const at = t.kfs.indexOf(t.inc.kf); if (at >= 0) { t.kfs.splice(at, 1); for (const p of t.inc.kf.pages) pageRef(t, p, -1); kfTexDrop(t, t.inc.kf); } }
-    t.inc = null;
-    t.lastKf = t.kfs.length ? t.kfs[t.kfs.length - 1].frame : -1;
-  }
-  s.seeking = true; s.mute = true;
-  s.stopSes(); s.bgmHalt();
-  uiApply(s);
-  let restored = false;
-  if (!(T > cur && (!kf || cur >= kf.frame))) { restore(s, kf || t.kfs[0]); restored = true; uiApply(s); }
-  const t1 = performance.now(), f1 = M._viewer_frame();
-  const DRAW = 2;  // the last frames are drawn (render-target feedback effects read the previous frame)
-  let f = M._viewer_frame();
-  call(s, 'viewer_suppress', 1);
-  // refinement keyframe KF_NEAR frames before T (or the first frame after it with no game file open): stepping back
-  // from T stays cheap
-  // (low memory: none before the match's first round start: the intro's frames hold its files as the game reads them,
-  // ~20 MB of pages, and thinning then dropped the match's keyframes to make room)
-  let near = T - f > 3 * KF_NEAR && !(LOWMEM && T <= (t.marks.length ? t.marks[0][0] : Infinity)) ? T - KF_NEAR : -1;
-  while (f < T - DRAW) {
-    const g = call(s, 'viewer_step', Math.min(T - DRAW - f, 600, near > f ? near - f : 1e9));
-    if (near >= 0 && g >= near) { if (M._viewer_files_open()) near = g + 1; else { keyframe(s, g); near = -1; } }
-    if (g === f) break;  // the replay ended
-    f = g;
-    if (T - f > 1200) {
-      status(`seeking ${f}/${T}`);
-      await new Promise(r => setTimeout(r, 0));
-      if (session !== s) return;
-    }
-  }
-  call(s, 'viewer_suppress', 0);
-  const t2 = performance.now();
-  if (f < T) call(s, 'viewer_step', T - f);
-  else call(s, 'viewer_represent');
-  const t3 = performance.now();
-  s.seeking = false; s.mute = ui.paused;
-  uiApply(s);
-  if (!ui.paused) s.bgmSync(M._viewer_frame());
-  const r1 = x => Math.round(x * 10) / 10;
-  statPush(t.seekMs, { from: cur, to: T, ms: r1(performance.now() - t0), restoreMs: restored ? r1(t1 - t0) : 0,
-                  copied: restored ? t.lastCopied : 0, sim: T - f1,
-                  simMs: r1(t2 - t1), drawMs: r1(t3 - t2) });
-  overlayDirty = true;
-  if (!s.endShown) status(ui.paused ? 'paused' : 'playing');
-}
+let requestSeek;  // (the engine worker's: set by the worker block below)
 // Skip the VS intro: simulate (not drawn, silent) up to the first battle frame, then draw from there. The intro is
 // still simulated (the match state depends on it); only its picture and sound are skipped.
 const SCENE_VS = 8, SCENE_WIN = 5;  // the VS screen and the win screen (g_CurrentSceneId 0x54EEE8)
 const inIntro = s => !!(s && s.tl && !s.tl.marks.length && !s.seeking && s.M.HEAP32[0x54EEE8 >> 2] === SCENE_VS);
-async function skipIntro(s) {
-  const t = s.tl, M = s.M;
-  if (!t || t.marks.length || M._viewer_frame() > 2000) return;
-  s.seeking = true; s.mute = true;
-  s.stopSes(); s.bgmHalt();
-  uiApply(s);
-  call(s, 'viewer_suppress', 1);
-  status('skipping intro');
-  let n = 0;
-  while (!t.marks.length && session === s && !call(s, 'viewer_ended') && !misses.size) {
-    call(s, 'viewer_step', 1);
-    if (++n % 240 === 0) await new Promise(r => setTimeout(r, 0));
-  }
-  call(s, 'viewer_suppress', 0);
-  if (session !== s) return;
-  if (!misses.size) call(s, 'viewer_step', 2);  // drawn: render-target feedback effects read the previous frame
-  s.seeking = false; s.mute = ui.paused;
-  uiApply(s);
-  if (!ui.paused) s.bgmSync(M._viewer_frame());
-  overlayDirty = true;
-  status(ui.paused ? 'paused' : 'playing');
-}
+let skipIntro;  // (the engine worker's: set by the worker block below)
 // Copy the current moment: a link that opens this replay at this frame when the replay came from a URL (?rep=),
 // otherwise the replay name, time and frame as text.
 const REPLAY_STORE = 'https://replays.meltyblood.org';
@@ -2211,8 +1189,6 @@ const LIVE = LIVE_URL || location.origin + location.pathname.replace(/\/[^/]*$/,
 const LIVE_FEED = !!(LIVE_URL || document.querySelector('base'));
 // the spectate page: named for what it shows from the first paint on (the replay page's heading until a match loads)
 if (document.querySelector('base')) { document.getElementById('title').textContent = 'necoTV'; document.title = 'necoTV · Melty Blood TV'; }
-const LIVE_BEHIND = 240;  // frames kept buffered (4 s)
-const LIVE_WIN = 8;  // polls (~8 s) the catch-up decisions look back over (a round end's burst and pause: ~5 s)
 let liveSrc = null;  // {id, info, since}
 // the feed's state, shown over the picture (index.html #livenotice): the operator's notice (header X-Live-Notice on any
 // feed answer: tools/web/bridge_restart.sh sets it before restarting the bridge and clears it once it is back), and failed
@@ -2237,9 +1213,9 @@ function wTimeout(fn, ms) {
     return -id;  // (wClear)
   } catch (e) { return setTimeout(fn, ms); }
 }
-const liveNet = { fails: 0, troubleAt: -1e9, notice: '' };
-liveNet.delay = () => liveNet.fails ? Math.min(1000 * 2 ** (liveNet.fails - 1), 5000) : 1000;
-liveNet.recent = () => performance.now() - liveNet.troubleAt < 60000;
+const liveNet = { fails: 0, troubleAt: -1e9, notice: '',
+  delay: () => liveNet.fails ? Math.min(1000 * 2 ** (liveNet.fails - 1), 5000) : 1000,
+  recent: () => performance.now() - liveNet.troubleAt < 60000 };
 function liveNoticeShow() {
   const e = document.getElementById('livenotice'), n = liveNet;
   if (!e) return;
@@ -2300,7 +1276,11 @@ function annLine(path) {
   const b = annDefault.files && annDefault.files.get(id);
   return b ? { key: `neco:${m[1]}`, bytes: b, src: 'neco' } : null;
 }
+// abi: the renderer the stage module is built against (2: the native renderer, WebGL2 / WebGPU; the D3D9-emulation pages
+// had none). A module of another ABI is not run: the page keeps MBAA's own stage until the pair matches again (a deploy
+// window: the pushed module or this page is the older one; updateWatch reloads old pages)
 const liveExtApi = {
+  abi: 2,
   module: () => session && session.M,          // the game's Module (a new one per session: read it each time)
   liveId: () => (session && session.liveSrc ? session.liveSrc.id : null),
   current: () => liveExt.v,
@@ -2357,6 +1337,7 @@ async function liveExtSet(id, v) {
   try {
     const m = await import(u.href);
     if (seq !== liveExt.seq) return;
+    if (m.abi !== liveExtApi.abi) { console.warn('live ext: module ABI', m.abi, 'page', liveExtApi.abi); return offNow(); }
     const r = await m.default(liveExtApi, () => seq === liveExt.seq);
     if (seq !== liveExt.seq) { if (typeof r === 'function') await r(); return; }
     // (the one before stays on until this one is ready, then goes: one stage to the next with no MBAA stage between)
@@ -2443,7 +1424,9 @@ function swCard() {
 async function liveList() {
   const r = await liveFetch(`${LIVE}/live/list`);
   if (!r.ok) throw new Error(`HTTP ${r.status}`);
-  const l = await r.json();
+  return liveListGot(await r.json());
+}
+function liveListGot(l) {
   // (a name the bridge learnt since the panel was drawn (a joiner's, from the hosts list): the panel redrawn from this
   // read at once, not at its next 15 s refresh: user 2026-11-05, "Ciel" listed while the card and the banner had the name)
   const nk = x => JSON.stringify((x || []).map(m => [m.id, m.names]));
@@ -2655,17 +1638,6 @@ function liveStartReqs(id, info) {
   liveFiles(info);
   return q;
 }
-// ---- the server snapshot join (artifacts/xz_check/perf_plan/snapjoin): the bridge's snapshot runner (tools/web/cc_snap.mjs)
-// keeps a typed snapshot of each live game every ~1.5 s (web/host/snapshot.cpp: PC's MBAACC typed deep-join format + the
-// web sections). A join loads it at its battle's first frames instead of re-simulating the game up to the live point, then
-// catches up only the seconds after it. The one way in to a battle under way (2026-11-07, no fallbacks: the join that
-// re-simulated the whole game is gone): no snapshot yet (a bridge just restarted: its runner makes one within seconds)
-// is waited for, asked again each second; a refused load or one whose state hash differs starts the match again (a
-// fresh snapshot), after SNAP_RETRY_MS once it has failed twice. The DVR goes back no further than the load (the frames before it are the
-// joiner's own, not the game's: s.snapFrom), and the game gives no clip replay (its tape lacks the rounds before the join:
-// web/host/spectate.cpp noTape).
-const JOIN_PROF = Q.get('joinprof') === '1', SNAP_RETRY_MS = 5000;
-const snapBad = new Map();   // ("<id>:<game>" -> loads refused / differing so far: the restarts back off after two)
 function liveSnapFetch(id, info, fresh) {
   // (one fetched for its card a moment ago (liveCardPrefetch: a hover, a touch): that one)
   const pre = fresh ? null : snapPre.get(id);
@@ -2753,115 +1725,10 @@ function liveCardPrefetch(m, snap = true) {
   const p = liveSnapFetch(m.id, m);
   if (p) snapPre.set(m.id, { game: m.game, p, at: performance.now() });
 }
-// the join's load: true when loaded (the catch-up then has only the rest); window.__mbaaSnapJoin: what happened (the checks)
-// (goal D) the join's load stores its sprite pages raw and codes them after (viewer_encode_later): desktop all of them;
-// low-memory mode (phones) at most ENC_BUDGET MB raw (?encbudget=<MB>), the pages past it coded in place (user ruling
-// 2026-11-06: a 16-24 MB cap)
-const ENC_LATER = !HASH && !CAPTURE;
-const ENC_BUDGET = LOWMEM ? Math.max(1, +(Q.get('encbudget') || 24)) : 0;
-async function liveSnapJoin(s) {
-  const L = s.liveSrc, M = s.M, t0 = performance.now(), J = window.__mbaaSnapJoin = { t0, ok: false };
-  const p = L.snapP;
-  L.snapP = null;
-  if (!p || !M._viewer_snap_load) return false;
-  // the base: this game's battle under way (scene code and committed scene 1, the live session InGame), unrendered
-  const base = () => M.HEAP32[0x55D1D0 >> 2] === 1 && M.HEAP32[0x54EEE8 >> 2] === 1 && call(s, 'viewer_spectate_phase') === 2;
-  if (JOIN_PROF) console.profile('join-base');   // (?joinprof=1, the checks: a CPU profile of the base's stepping)
-  let f = M._viewer_frame(), stalls = 0, stallAt = 0, stepMs = 0, slow = [];
-  const f0 = f, tw = performance.now();
-  // (desktop: the load's sprite pages coded after the join, viewer_encode_later; the same store contents)
-  const encLater = ENC_LATER && !!M._viewer_encode_later;
-  if (encLater) M._viewer_encode_later(1, ENC_BUDGET * 1048576);
-  try {
-  while (!base() && session === s) {
-    const ta = performance.now(), g = M._viewer_step(1), d = performance.now() - ta;
-    stepMs += d;
-    if (d > 8 && slow.length < 24) slow.push(`${g}:${Math.round(d)}`);
-    // (held: the match's files, the stream. Waited for by time, not turns: 600 message-channel turns were well under
-    // a second, so a join that crossed a character select into a new pair gave up while that pair's files were still
-    // downloading, and the next steps read them missing: "21 game files were missing", then index out of bounds, user
-    // 2026-11-07. A stream that stops is the poll's to handle)
-    if (g === f) { if (!stalls++) stallAt = performance.now(); else if (performance.now() - stallAt > 60000) break;
-                   await new Promise(r => setTimeout(r, stalls < 50 ? 0 : 20)); continue; }
-    stalls = 0;
-    f = g;
-    if (f % 60 === 0) await cuTurn();
-  }
-  } finally { if (encLater) M._viewer_encode_later(0, 0); }
-  // (the checks: frames stepped, time in the steps, the held steps (waits on files / the stream), the slow frames)
-  Object.assign(J, { baseFrom: f0, stepMs: Math.round(stepMs), waitMs: Math.round(performance.now() - tw - stepMs), stalls, slow: slow.join(' ') });
-  J.baseFrame = f; J.baseMs = performance.now() - t0;
-  if (JOIN_PROF) console.profileEnd('join-base');
-  if (session !== s || !base()) { J.why = 'no battle base'; return false; }
-  // (a battle under way: its snapshot, waited for; asked again each second while the bridge has none)
-  // A fetch still downloading is waited for, never dropped: a slow line (the ~1.4 MB snapshot over 5 s) used to start a
-  // new fetch every 5 s and ignore the late answers, so it never joined (artifacts/ah3_join_layers run_before_delay). A
-  // new one is asked for only once the last has settled without one (the bridge had none yet, or the request failed).
-  let pend = p, settled = false, sn = null, tries = 0;
-  const watch = q => { settled = false; Promise.resolve(q).then(() => { if (pend === q) settled = true; }, () => { if (pend === q) settled = true; }); };
-  watch(pend);
-  const race = (q, ms) => Promise.race([Promise.resolve(q).catch(() => null), new Promise(r => setTimeout(() => r(null), ms))]);
-  while (session === s) {
-    sn = await race(pend, 2500);
-    if (sn || session !== s) break;
-    if (++tries === 2) { status('live: joining: waiting for the match\'s snapshot'); slogAdd('live', 'waiting for the match\'s snapshot'); }
-    if (!settled) continue;   // (still downloading)
-    await new Promise(r => setTimeout(r, 1000));
-    if (session !== s) break;
-    pend = liveSnapFetch(L.id, L.info, true); watch(pend);
-  }
-  J.fetched = performance.now() - t0; J.tries = tries;
-  if (!sn || session !== s) { J.why = 'left'; return null; }
-  Object.assign(J, { bytes: sn.bytes.length, senderFrame: sn.frame, age: sn.age });
-  const t = s.tl;
-  if (M._viewer_spectate_set_first_game) M._viewer_spectate_set_first_game(L.firstGame ?? L.info.game);   // (the snapshot's same-game check)
-  const buf = M._malloc(sn.bytes.length);
-  M.HEAPU8.set(sn.bytes, buf);
-  const tl = performance.now(), r = M._viewer_snap_load(buf, sn.bytes.length);
-  J.loadMs = performance.now() - tl;
-  M._free(buf);
-  J.result = r;
-  if (r !== 1) {
-    J.why = M.ccall('viewer_snap_why', 'string', [], []);
-    // (refused, or loaded with a differing state hash: this session's state is not the game's; the match again, from a
-    // fresh snapshot)
-    const k = `${L.id}:${L.info.game}`, n = (snapBad.get(k) || 0) + 1;
-    snapBad.set(k, n);
-    console.warn(`live: snapshot not used (${J.why}, ${n}): the match again`);
-    setTimeout(() => { if (session === s) startLive(L.id, L.info.match || null); }, n > 2 ? SNAP_RETRY_MS : 0);
-    J.restart = true;
-    return null;
-  }
-  // the timeline from here: the keyframes before the load are the joiner's own frames, not the game's. The newest stays
-  // only as the incremental keyframes' base (its pages shared; preSnap: never restored, seekTo / kfPinned); no keyframe is
-  // made here (a whole-memory one: ~1.5 s at phone speed), the first after the load comes KF_EVERY frames on (incTick).
-  // A rewind before it: refused (seekTo)
-  if (t) {
-    const keep = t.kfs.filter(k => !k.pending).pop();
-    for (const k of t.kfs.splice(0)) if (k !== keep) { for (const q of k.pages) pageRef(t, q, -1); kfTexDrop(t, k); }
-    if (keep) { keep.preSnap = true; t.kfs.push(keep); }
-    t.inc = null;
-    t.lastKf = keep ? keep.frame : -1;
-    t.safeFrom = f + 1;
-    t.marks = t.marks.filter(m => m[0] > f);
-    t.simMax = Math.max(t.simMax || 0, f);
-  }
-  s.snapFrom = f;
-  J.ok = true; J.ms = performance.now() - t0;
-  console.log(`live: joined from the server's snapshot (sender frame ${sn.frame}, ${sn.age} ms old, ${sn.bytes.length} bytes) at frame ${f} in ${Math.round(J.ms)} ms`);
-  return true;
-}
 // the match's files, from its setup, into the cache (start() waits on the same fetches)
 function liveFiles(info) {
   const want = liveWantOf(info);
   if (want) fetchAll(man, want, '', true).catch(() => {});
-}
-// the last index number in a block of .ccs records (u32 index, u32 kind, rng 12 + ring 220, u32 frames, u16 x 2 x frames)
-function liveLastIndex(b) {
-  const dv = new DataView(b.buffer, b.byteOffset, b.byteLength);
-  let o = 0, last = -1;
-  while (o + 244 <= b.length) { last = dv.getUint32(o, true); o += 240 + 4 + 4 * dv.getUint32(o + 240, true); }
-  return last;
 }
 const hidden = () => document.visibilityState === 'hidden';
 // "jump to live" (per viewer; off: watch each game from its start at normal speed, as CCCaster's spectate option)
@@ -2901,130 +1768,6 @@ function stepSlicer() {
 const taskTurn = () => new Promise(r => { const ch = new MessageChannel(); ch.port1.onmessage = () => setTimeout(r, 0); ch.port2.postMessage(0); });
 // a short yield (scheduler.yield: its continuation runs ahead of other tasks; else a timer)
 const yieldTask = () => (globalThis.scheduler && typeof scheduler.yield === 'function') ? scheduler.yield() : new Promise(r => setTimeout(r, 0));
-// Catch-up (SWITCH_PLAN.md phases 4-5): frames stepped in ~CU_SLICE_MS tasks, then a real task turn (a message: timers,
-// worker replies and network completions run in it; no 4 ms timer clamp); the frame hook's live watchers only where they
-// can act (outside a battle, the retry menu, a scene change, every CU_WATCH frames: frameHook); DVR keyframes every
-// CU_KF_EVERY frames until the last CU_KF_TAIL (there every KF_EVERY, as playback: a seek back from live finds them);
-// one frame drawn every CU_SHOW_MS (the new match on screen at once, a fast-forward under the progress overlay). Drawn
-// and undrawn frames are the same game state (a tick owing several frames draws only its last). (The old path, every
-// watcher every frame, deleted 2026-11-07.) ?cuhash=1: the state-hash rows, for the checks
-const CU_HASH = Q.get('cuhash') === '1';
-// (the checks: the landing frame rounded down to a multiple of ?cuRound=, so runs that started catching up a few frames
-// apart land on the same frame)
-const CU_ROUND = +(Q.get('cuRound') || 0);
-const cuTarget = (M, n) => { const f = M._viewer_frame(), T = f + n; return CU_ROUND && Math.floor(T / CU_ROUND) * CU_ROUND > f + 2 ? Math.floor(T / CU_ROUND) * CU_ROUND : T; };
-// Phones (low memory): one frame drawn every 1.5 s (each costs ~100 ms at phone speed, texture uploads: 23% of a join),
-// and no keyframes during the catch-up (21%: ~4 s of a 21 s join at 4x; the one against the frame-0 keyframe alone,
-// 69 MB raw, ~424 ms): a rewind right after the join goes back to the landing keyframe at most (seekTo, kfPinned).
-// ?cuKf=1: the keyframes as on desktop (the checks); ?cuShow=: the cadence (perf_plan L2 + L3)
-const CU_SLICE_MS = +(Q.get('cuSlice') || 50), CU_SHOW_MS = +(Q.get('cuShow') ?? (LOWMEM ? 1500 : 200)), CU_KF_EVERY = 1800, CU_KF_TAIL = 600, CU_WATCH = 30;
-const CU_KF_LOW = !LOWMEM || Q.get('cuKf') === '1';
-const cuTurn = () => new Promise(r => { const ch = new MessageChannel(); ch.port1.onmessage = () => { ch.port1.close(); r(); }; ch.port2.postMessage(0); });
-// marks of a match switch (performance.now(); window.__mbaaSwitch, the checks): click, picture (the new match's first
-// frame drawn), cuStart / cuEnd (catch-up), live (caught up)
-async function liveCatchUp(s, n) {
-  bootMark('catchUp');
-  if (s.liveSrc && s.liveSrc.snapP) {
-    const was = s.seeking;
-    s.seeking = true; s.mute = true; s.stopSes(); s.bgmHalt(); call(s, 'viewer_suppress', 1);
-    let ok = false;
-    try { ok = await liveSnapJoin(s); } finally { call(s, 'viewer_suppress', 0); s.seeking = was; }
-    if (session !== s || ok === null) return;   // (left, or the match started again for a fresh snapshot)
-    if (ok) n = call(s, 'viewer_spectate_buffered') - LIVE_BEHIND;
-    if (ok && n <= 2) {
-      call(s, 'viewer_represent'); s.mute = ui.paused; uiApply(s); if (!ui.paused) s.bgmSync(s.M._viewer_frame());
-      if (s.liveSrc) { liveCssWatch(s); liveRematchHold(s); liveBanner(s); liveStreak(s); slogWatch(s); }
-      s.livePic = true; swMark('picture'); swMark('battlePic');
-      cuDone(s, s.M._viewer_frame(), window.__mbaaSnapJoin.t0, 0);
-      return;
-    }
-  }
-  const M = s.M, T = cuTarget(M, n), DRAW = 2, t0 = performance.now(), f0 = M._viewer_frame();
-  catchUpShow(T - f0, T - f0);
-  s.seeking = true; s.mute = true;
-  s.stopSes(); s.bgmHalt();
-  uiApply(s);
-  call(s, 'viewer_suppress', 1);
-  s.cu = { T, scene: -1, retry: -1, full: -1e9 };
-  s.cuNoKf = !CU_KF_LOW;
-  swMark('cuStart', true, s.liveSrc && s.liveSrc.id);
-  if (sw && s.liveSrc && sw.id === s.liveSrc.id) sw.cuFrames = (sw.cuFrames || 0) + (T - f0);
-  let f = f0, per = 0.5, shown = -1e9, said = 0, stalled = false, drawn = 0;
-  const pf = s.cuProf = { sim: 0, draw: 0, turn: 0, turns: 0 };
-  try {
-    while (f < T - DRAW && !stalled) {
-      // a picture now and then, the first before any stepping (a game's first frames load it: its versus screen is on
-      // screen meanwhile); not the last frames before T, drawn below
-      if (CU_SHOW_MS > 0 && f < T - DRAW - 1 && performance.now() - shown >= CU_SHOW_MS && !hidden()) {
-        const td = performance.now();
-        if (s.liveSrc) liveBanner(s);  // (the players' names on the banner of the frame drawn)
-        call(s, 'viewer_suppress', 0);
-        const g = M._viewer_step(1);
-        call(s, 'viewer_suppress', 1);
-        pf.draw += performance.now() - td;
-        if (g === f) { stalled = true; break; }
-        f = g; drawn++; shown = performance.now();
-        if (!s.livePic) { s.livePic = true; swMark('picture'); }
-        if (M.HEAP32[0x54EEE8 >> 2] === 1) swMark('battlePic');
-      }
-      const ts = performance.now();
-      // a task's worth: steps sized to the time left in the slice at the measured cost per frame
-      for (let now = ts; f < T - DRAW && now - ts < CU_SLICE_MS; now = performance.now()) {
-        const k = Math.max(1, Math.min(T - DRAW - f, Math.floor((CU_SLICE_MS - (now - ts)) / per)));
-        const g = M._viewer_step(k), t1 = performance.now();
-        pf.sim += t1 - now;
-        if (g === f) { stalled = true; break; }  // (held: a select's files, the stream)
-        per = Math.max(0.02, 0.5 * per + 0.5 * (t1 - now) / (g - f));
-        f = g;
-      }
-      if (performance.now() - said > 200 || f >= T - DRAW) { said = performance.now(); status(`live: catching up (${T - f} frames to go)`); catchUpShow(T - f, T - f0); }
-      const tt = performance.now();
-      await cuTurn();
-      pf.turn += performance.now() - tt; pf.turns++;
-      if (session !== s) { catchUpShow(null); return; }
-    }
-  } finally { if (s.cu && s.cu.T === T) s.cu = null; }
-  catchUpShow(null);
-  call(s, 'viewer_suppress', 0);
-  const tl0 = performance.now();
-  if (f < T) call(s, 'viewer_step', T - f);
-  else call(s, 'viewer_represent');
-  s.cuLandMs = performance.now() - tl0;  // (the landing frames' time, drawn: the checks)
-  s.cuNoKf = false;
-  if (session === s && s.liveSrc) { liveCssWatch(s); liveRematchHold(s); liveBanner(s); liveStreak(s); slogWatch(s); }  // (the watchers once at the end)
-  s.seeking = false; s.mute = ui.paused;
-  uiApply(s);
-  if (!ui.paused) s.bgmSync(M._viewer_frame());
-  s.livePic = true;
-  swMark('picture'); swMark('battlePic');
-  cuDone(s, f0, t0, drawn);
-}
-// (the checks) the catch-up's rate, and the game state where it landed: the state-hash rows of every frame so far
-// (?cuhash=1: viewer_hash_enable at the start) and the hashes of every memory page
-function cuDone(s, f0, t0, drawn) {
-  const M = s.M, f = M._viewer_frame(), ms = performance.now() - t0;
-  const r = { frames: f - f0, ms, fps: (f - f0) / (ms / 1000), from: f0, frame: f, drawn, kfs: s.tl ? s.tl.kfs.length : 0, prof: s.cuProf || null,
-             at: performance.now(), snap: s.snapFrom != null ? { ...window.__mbaaSnapJoin } : null,
-             kfMs: s.tl ? s.tl.kfs.filter(k => k.frame >= f0).map(k => Math.round(k.ms)) : [], landMs: s.cuLandMs ?? null };
-  s.cuProf = null;
-  if (CU_HASH) {
-    const rows = M.ccall('viewer_hash_take', 'string', [], []);
-    s.cuRows = (s.cuRows || '') + rows;
-    let h = 0x811c9dc5;
-    for (let i = 0; i < s.cuRows.length; i++) h = Math.imul(h ^ s.cuRows.charCodeAt(i), 0x01000193);
-    const lines = s.cuRows.split('\n').filter(l => l && !l.startsWith('k,'));
-    Object.assign(r, { rowsHash: (h >>> 0).toString(16), rows: lines.length, lastRow: lines[lines.length - 1] || '' });
-    const top = M._viewer_mem_top(), hs = pageHashes(M, top);
-    const x0 = Math.floor(M._viewer_page_hash_area(0) / PAGE), x1 = Math.ceil(M._viewer_page_hash_area(1) / PAGE);
-    const pages = [];
-    for (let i = 0; i * 4 < hs.length; i++) pages.push(i >= x0 && i < x1 ? '' : [0, 1, 2, 3].map(j => (hs[i * 4 + j] >>> 0).toString(16)).join(''));
-    r.pages = pages; r.top = top;
-  }
-  (window.__mbaaCatchUp = window.__mbaaCatchUp || []).push(r);
-  swMark('cuEnd'); swMark('live');
-  if (s.cssBgGo) s.cssBgGo();
-  console.log(`live: caught up ${r.frames} frames in ${Math.round(ms)} ms (${Math.round(r.fps)} frames/s, ${drawn} drawn)`);
-}
 // The player block (spectating): per side the character's select-screen icon in its animated 1P / 2P cursor frame, the
 // player's name, the moon and character. The art is the select screen's own (grp/c_sel_aa: icons 48x64, the large row
 // set from row 4; cursor frames 64x64, P1 0-9 and P2 10-19, the 1P / 2P tags 20 / 21; moon icons 56x56 at y 288),
@@ -3070,17 +1813,60 @@ const GX = (() => {
   g.moons.src = 'gx/moons.svg';
   return g;
 })();
+// ---- CSS drop-shadows drawn into a canvas's own pixels, not a filter ----
+// A CSS filter on an element shown beside the game is a render pass of its own, redone on every display frame (the
+// game's canvas changes 120 times a second): on the Moto G the players panel's two 16 px moons' drop-shadow filter cost
+// ~260 of ~290 missed refreshes per 20 s (harness-design/renderer_native/phone_1108/phase4/FINDINGS.txt). The shadow is
+// drawn in instead: the canvas's CSS custom property --bake holds the drop-shadow list (px, the filter's order: each
+// shadow cast by the result of the ones before; canvas shadowBlur is CSS's blur, sigma = blur / 2). The canvas keeps its
+// layout box; its bitmap carries BAKE_PAD CSS px a side for the shadow, shown by a static scale (a transform: no cost per
+// frame). The caller draws into bakeSrc(cv) (the canvas's own size) and calls bakeDone(cv); a resize shows it again.
+const BAKE_PAD = 4;
+const bakeRO = window.ResizeObserver ? new ResizeObserver(es => { for (const e of es) bakeShow(e.target); }) : null;
+function bakeSrc(cv) {
+  if (!cv.__bk) {
+    const s = document.createElement('canvas'); s.width = cv.width; s.height = cv.height;
+    cv.__bk = { s, n: 0, key: '' };
+    if (bakeRO) bakeRO.observe(cv);
+  }
+  return cv.__bk.s;
+}
+function bakeDone(cv) { cv.__bk.n++; bakeShow(cv); }
+function bakeShow(cv) {
+  const B = cv.__bk, w = cv.clientWidth, h = cv.clientHeight;
+  if (!B || !w || !h) return;  // (not laid out: the observer shows it when it is)
+  const v = getComputedStyle(cv).getPropertyValue('--bake'), sh = [];
+  for (const m of v.matchAll(/(-?[\d.]+)px\s+(-?[\d.]+)px\s+([\d.]+)px\s+(#[0-9a-fA-F]{3,8})/g)) sh.push([+m[1], +m[2], +m[3], m[4]]);
+  const key = `${w}x${h}/${v}/${B.n}`;
+  if (B.key === key) return;
+  B.key = key;
+  const s = B.s, kx = s.width / w, ky = s.height / h, px = sh.length ? Math.ceil(BAKE_PAD * kx) : 0, py = sh.length ? Math.ceil(BAKE_PAD * ky) : 0;
+  const W = s.width + 2 * px, H = s.height + 2 * py;
+  cv.width = W; cv.height = H;
+  cv.style.scale = sh.length ? `${W / s.width} ${H / s.height}` : '';
+  let prev = s, ox = px, oy = py;
+  sh.forEach(([dx, dy, blur, col], i) => {
+    const dst = i === sh.length - 1 ? cv : Object.assign(document.createElement('canvas'), { width: W, height: H });
+    const x = dst.getContext('2d');
+    x.clearRect(0, 0, W, H);
+    x.shadowOffsetX = dx * kx; x.shadowOffsetY = dy * ky; x.shadowBlur = blur * kx; x.shadowColor = col;
+    x.drawImage(prev, ox, oy);
+    prev = dst; ox = oy = 0;
+  });
+  if (!sh.length) { const x = cv.getContext('2d'); x.clearRect(0, 0, W, H); x.drawImage(s, 0, 0); }
+}
 // a moon mark (canvas, the 56x56 select-sheet cell scaled; gx: gx/moons.svg's four 48-unit cells)
-function drawMoon(cv, m) {
-  const x = cv.getContext('2d');
+function drawMoon(out, m) {
+  const cv = bakeSrc(out), x = cv.getContext('2d');
   x.clearRect(0, 0, cv.width, cv.height);
-  cv.dataset.moon = m;
+  out.dataset.moon = m;
   const k = m >= 0 && m <= 2 ? m : m === 9 ? 3 : -1;
   // (until the SVG is in: nothing; its onload draws every moon canvas)
   // (the cell's 48 units minus 3 of empty glow margin each side: the disc fills the canvas; the live list's moons
   // showed ~4 px of blank to their left, user 2026-11-07)
   if (GX.moons.complete && GX.moons.naturalWidth && k >= 0) { const w = GX.moons.naturalWidth / 4, h = GX.moons.naturalHeight, in_ = w * 3 / 48;
     x.drawImage(GX.moons, k * w + in_, in_, w - 2 * in_, h - 2 * in_, 0, 0, cv.width, cv.height); }
+  bakeDone(out);
 }
 // this tab's random id, sent with live record requests: the feed counts the tabs watching each match (nothing else)
 const VIEWER = Array.from(crypto.getRandomValues(new Uint8Array(12)), b => 'abcdefghijklmnopqrstuvwxyz0123456789'[b % 36]).join('');
@@ -3232,14 +2018,16 @@ async function cselArt() {
   return cselA;
 }
 // a side's name art (168 x 56: Japanese over romaji) into its canvas; false: none for this character
-function cselName(cv, p, c) {
+function cselName(out, p, c) {
   const k = cselCell(c);
   if (!cselA || k < 0) return false;
+  const cv = bakeSrc(out);  // (its drop-shadow drawn in: bakeShow)
   cv.width = 168; cv.height = 56;
   const x = cv.getContext('2d');
   x.clearRect(0, 0, 168, 56);
   x.drawImage(cselA.jp[p], 168 * (k >> 4), 32 * (k & 15), 168, 32, 0, 0, 168, 32);
   x.drawImage(cselA.ro[p], 168 * Math.floor(k / 21), 24 * (k % 21), 168, 24, 0, 32, 168, 24);
+  bakeDone(out);
   return true;
 }
 // the ring and particles: CharaSelectAura_Update, f32 where the game keeps f32; the random numbers a subtractive
@@ -3282,23 +2070,42 @@ function auraStep(A) {
   }
 }
 // CharaSelectAura_Draw in the card's own 640 x 480 (its height the card's; x centred under the VS), additive
-function auraDraw(A) {
-  const cv = A.cv, dpr = window.devicePixelRatio || 1, w = Math.max(1, Math.round(cv.clientWidth * dpr)), h = Math.max(1, Math.round(cv.clientHeight * dpr));
-  if (cv.width !== w || cv.height !== h) { cv.width = w; cv.height = h; }
+// (the card's geometry is read only when it changes: the card, its portraits or the names band resized, an element
+// shown / hidden / added, the pixel ratio; reading it every frame forced a layout per frame, renderer GOAL C)
+function auraGeo(A) {
+  const cv = A.cv, card = cv.parentNode, dpr = window.devicePixelRatio || 1;
+  if (A.geo && A.geo.dpr === dpr) return A.geo;
+  if (!A.geoObs) {
+    const dirty = () => { A.geo = null; };
+    A.geoObs = [new ResizeObserver(dirty), new MutationObserver(dirty)];
+    A.geoObs[0].observe(card);
+    A.geoObs[1].observe(card, { subtree: true, childList: true, attributes: true, attributeFilter: ['hidden', 'class', 'src'] });
+  }
+  const w = Math.max(1, Math.round(cv.clientWidth * dpr)), h = Math.max(1, Math.round(cv.clientHeight * dpr));
   // (at the splashes' scale: a splash is 512 px on the select screen's 480, so the ring keeps its size against the
   // figures as there; its centre, the screen's (320, 420), on the VS)
-  const card = cv.parentNode, cr = card.getBoundingClientRect(), por = card.querySelector('.por:not([hidden])'), vs = card.querySelector('#players .vs');
+  const cr = card.getBoundingClientRect(), por = card.querySelector('.por:not([hidden])'), vs = card.querySelector('#players .vs');
   // (capped by the card's width: on a narrow card the splash scale made the ring the card's whole width)
   const k = Math.min(por && por.offsetHeight ? por.offsetHeight / 512 : cr.height / 480, cr.width / 640 * 1.2) * dpr;
   const vr = vs ? vs.getBoundingClientRect() : null, cy = (vr && vr.height ? vr.top + vr.height / 2 - cr.top : cr.height * 0.85) * dpr;
+  const pl = card.querySelector('#players'), r = pl ? pl.getBoundingClientRect() : null;
+  const band = r ? { x: (r.left - cr.left) * dpr, y0: (r.top - cr.top) * dpr, y1: (r.bottom - cr.top) * dpr, w: r.width * dpr } : null;
+  for (const e of [por, vs, pl]) if (e && A.geoObs && !(A.geoSeen || (A.geoSeen = new WeakSet())).has(e)) { A.geoSeen.add(e); A.geoObs[0].observe(e); }
+  return (A.geo = { dpr, w, h, k, cy, band, grad: null });
+}
+function auraDraw(A) {
+  const cv = A.cv, G = auraGeo(A), w = G.w, h = G.h, k = G.k, cy = G.cy;
+  if (cv.width !== w || cv.height !== h) { cv.width = w; cv.height = h; }
   const x = cv.getContext('2d');
   x.setTransform(1, 0, 0, 1, 0, 0); x.clearRect(0, 0, w, h);
   // (the names' dark band, drawn here under the ring: as the band's CSS background it covered the ring; .aura-on drops it)
-  const pl = card.querySelector('#players');
-  if (pl) {
-    const r = pl.getBoundingClientRect(), y0 = (r.top - cr.top) * dpr, y1 = (r.bottom - cr.top) * dpr, g = x.createLinearGradient(0, y0, 0, y1);
-    g.addColorStop(0, 'rgba(0,0,0,0)'); g.addColorStop(0.58, 'rgba(0,0,0,0)'); g.addColorStop(1, 'rgba(0,0,0,0.733)');
-    x.globalCompositeOperation = 'source-over'; x.globalAlpha = 1; x.fillStyle = g; x.fillRect((r.left - cr.left) * dpr, y0, r.width * dpr, y1 - y0);
+  if (G.band) {
+    const b = G.band;
+    if (!G.grad) {
+      G.grad = x.createLinearGradient(0, b.y0, 0, b.y1);
+      G.grad.addColorStop(0, 'rgba(0,0,0,0)'); G.grad.addColorStop(0.58, 'rgba(0,0,0,0)'); G.grad.addColorStop(1, 'rgba(0,0,0,0.733)');
+    }
+    x.globalCompositeOperation = 'source-over'; x.globalAlpha = 1; x.fillStyle = G.grad; x.fillRect(b.x, b.y0, b.w, b.y1 - b.y0);
   }
   x.setTransform(k, 0, 0, k, w / 2 - 320 * k, cy - 420 * k);
   x.globalCompositeOperation = 'lighter'; x.imageSmoothingEnabled = true;
@@ -3323,7 +2130,7 @@ function auraStart() {
   let t0 = performance.now();
   const tick = now => {
     aura.raf = requestAnimationFrame(tick);
-    if (document.hidden || !card.classList.contains('pors') || !cv.clientHeight) { aura.lastF = null; t0 = now; return; }
+    if (document.hidden || !card.classList.contains('pors') || auraGeo(aura).h <= 1) { aura.lastF = null; t0 = now; return; }  // (h 1: not laid out, the clientHeight 0 test, from the kept geometry)
     let n;
     if (session && session.M) {
       const f = curFrame();
@@ -3575,34 +2382,47 @@ if (porTune) {
 }
 // the cursor frames' loop over the icons, at the select screen's rate (CharaSelectIcons_Update, CE 0x48BAB0: the next of
 // 10 frames every 2 game ticks)
-// one select-screen icon as a strip of its 10 cursor frames (a 640x64 canvas inside the .ico / .lico box, which clips it):
-// the character icon, side p's cursor frame f (of 10) and its P1/P2 tag per frame, drawn once per (icon, side); the
+// one select-screen icon as a strip of its 10 cursor frames (a canvas inside the .ico / .lico box, which clips it): the
+// character icon, side p's cursor frame f (of 10) and its P1/P2 tag per frame, drawn once per (icon, side, size); the
 // animation then moves the strip by a transform from the frame bus (a compositor move: no 2D-canvas raster per step).
 // Before, each icon canvas was cleared and redrawn 30 times a second: on the Moto G ~1 ms of CrGpuMain raster per
-// redraw, 112-130 ms/s for four icons (phone runs e_trace_1107 / canvas_tally_1107)
+// redraw, 112-130 ms/s for four icons (phone runs e_trace_1107 / canvas_tally_1107).
+// The strip is drawn at the box's own device-pixel size (each 64x64 cell scaled down once, here) and stepped by whole
+// device pixels: a 640x64 strip shown at 1000% of a 28 px box was rescaled by the compositor every step, and the frames
+// came out a pixel apart (the icons' left edge jumped column 6 <-> 7 at 100%: the jitter seen on the live list, 2026-11-10)
 function selStrip(box, cell, p) {
   let cv = box.firstElementChild;
-  if (!cv) { cv = document.createElement('canvas'); cv.width = 640; cv.height = 64; box.append(cv); }
-  const key = `${cell}/${p}`;
+  if (!cv) { cv = document.createElement('canvas'); box.append(cv); }
+  const d = devicePixelRatio || 1, W = Math.max(1, Math.round((box.__bw || box.offsetWidth || 28) * d));
+  const key = `${cell}/${p}/${W}/${d}`;
   if (box.dataset.strip === key) return;
   box.dataset.strip = key;
-  const c = cv.getContext('2d'), tag = 20 + p;
-  c.clearRect(0, 0, cv.width, cv.height);
+  box.__W = W; box.__d = d;
+  cv.width = 10 * W; cv.height = W;
+  cv.style.width = `${10 * W / d}px`; cv.style.height = `${W / d}px`;
+  const one = document.createElement('canvas'); one.width = one.height = 64;
+  const o = one.getContext('2d'), c = cv.getContext('2d'), tag = 20 + p;
+  c.imageSmoothingQuality = 'low';  // (plain bilinear, as the compositor scaled the old strip: 'high' averaged the art soft)
   for (let f = 0; f < 10; f++) {
-    const x = 64 * f, fr = 10 * p + f;
-    if (cell >= 0) c.drawImage(plArt.icons, 48 * (cell % 10), (Math.floor(cell / 10) + 4) * 64, 48, 64, x + 8, 0, 48, 64);  // (centred in the frame, as CharaSelectIcons_Draw)
-    c.drawImage(plArt.cursor, (fr % 8) * 64, Math.floor(fr / 8) * 64, 64, 64, x, 0, 64, 64);
-    c.drawImage(plArt.cursor, (tag % 8) * 64, Math.floor(tag / 8) * 64, 64, 64, x, 0, 64, 64);
+    const fr = 10 * p + f;
+    o.clearRect(0, 0, 64, 64);
+    if (cell >= 0) o.drawImage(plArt.icons, 48 * (cell % 10), (Math.floor(cell / 10) + 4) * 64, 48, 64, 8, 0, 48, 64);  // (centred in the frame, as CharaSelectIcons_Draw)
+    o.drawImage(plArt.cursor, (fr % 8) * 64, Math.floor(fr / 8) * 64, 64, 64, 0, 0, 64, 64);
+    o.drawImage(plArt.cursor, (tag % 8) * 64, Math.floor(tag / 8) * 64, 64, 64, 0, 0, 64, 64);
+    c.drawImage(one, 0, 0, 64, 64, W * f, 0, W, W);
   }
 }
 // the strip's frame f shown (a box not rendered, e.g. the players' icons hidden on a phone: left alone; the visibility
-// read forces style, so it is taken once per loop of the 10 frames, ~3 times a second: 180 reads/s cost 12 ms/s on the
-// Moto G, join_phone_1107 profiles)
+// and size reads force style / layout, so they are taken once per loop of the 10 frames, ~3 times a second: 180 reads/s
+// cost 12 ms/s on the Moto G, join_phone_1107 profiles)
 function selStep(box, cell, p, f) {
-  if (f === 0 || box.__vis == null) box.__vis = box.checkVisibility ? box.checkVisibility() : box.offsetParent !== null;
+  if (f === 0 || box.__vis == null) {
+    box.__vis = box.checkVisibility ? box.checkVisibility() : box.offsetParent !== null;
+    if (box.__vis) box.__bw = box.offsetWidth;  // (the box's size: the strip is drawn at it)
+  }
   if (!box.__vis) return;
   selStrip(box, cell, p);
-  const cv = box.firstElementChild, tr = `translateX(${-10 * f}%)`;
+  const cv = box.firstElementChild, tr = `translateX(${-box.__W * f / box.__d}px)`;
   if (cv.style.transform !== tr) cv.style.transform = tr;
 }
 let plAnimF = -1;
@@ -3612,10 +2432,20 @@ function playersAnimate(t) {
   if (fNow === plAnimF) return;  // (the cursor frame changes 30 times a second)
   plAnimF = fNow;
   if (!box.hidden && plArt) box.querySelectorAll('.pl').forEach((row, p) => selStep(row.querySelector('.ico'), plCells[p], p, fNow));
-  // the live list's icons too (each side's cursor, as on the select screen)
-  if (plArt && !document.getElementById('livesec').hidden)
-    for (const b of document.querySelectorAll('#liveitems .lico, #nextcard .lico')) selStep(b, +b.dataset.cell, +b.dataset.side, fNow);
+  // the live list's icons too (each side's cursor, as on the select screen); the icons are found again only when the
+  // list changes (a query 30 times a second was a top cost on the page, renderer GOAL C)
+  if (plArt && !document.getElementById('livesec').hidden) {
+    if (!licoList) {
+      licoList = [...document.querySelectorAll('#liveitems .lico, #nextcard .lico')].map(b => [b, +b.dataset.cell, +b.dataset.side]);
+      if (!licoMo) {
+        licoMo = new MutationObserver(() => { licoList = null; });
+        for (const id of ['liveitems', 'nextcard']) { const e = document.getElementById(id); if (e) licoMo.observe(e, { childList: true, subtree: true, attributes: true, attributeFilter: ['data-cell', 'data-side'] }); }
+      }
+    }
+    for (const [b, c, sd] of licoList) selStep(b, c, sd, fNow);
+  }
 }
+let licoList = null, licoMo = null;
 frameBus.add(playersAnimate);
 // The stage block and Raito Radio (tools/web/stage_panel.py puts web/stage/* in the bundle, tools/web/old_melty/
 // radio_bundle.py web/radio/*): the stage's select-screen preview and name plate, and the title of the music playing;
@@ -3927,23 +2757,6 @@ function mentionApply(kind, it) {
   if (kind === 'song') return musicSet(it.f);
   return radioSet(it.f, it.key.includes(':') ? 0 : +it.key);
 }
-// The stage: the pick's stage file into MEMFS (sharing the fetched buffer; a stage file MBAACC also ships is bg/bgNN.dat,
-// whose MEMFS copy may be the 1-byte probe placeholder) and sent to the game, which swaps stages between frames. Sent
-// whenever the game's wanted stage differs from the pick: a pick, a new match's instance, a keyframe restore (it puts
-// back the keyframe's: checked every frame and after each restore). Back to the match's music: the game expands the
-// match's stage again, from its file, which low-memory mode may have dropped (put back first; the game waits for it).
-const radioDatIds = new Map();
-const radioDatId = p => radioDatIds.get(p) || (radioDatIds.set(p, radioDatIds.size + 1), radioDatIds.size);
-function radioPut(s, p) {
-  const d = cache.get(p), FS = s.M.FS;
-  if (!d) return false;
-  let n = -1;
-  try { n = FS.stat('/game/' + p).size; } catch (e) {}
-  if (n !== d.length) fsPut(FS, '/game/' + p, d);
-  if (s.freed) s.freed.delete(p);
-  return true;
-}
-let radioOwnFetch = null;
 // an MBAACC stage's files, as a match on it loads them (asset plan: bg/bgNN.dat, its Info.txt, DXT5 table, lights;
 // its drop object image), without its BGM
 function radioStageFiles(id) {
@@ -3951,84 +2764,13 @@ function radioStageFiles(id) {
   if (!p || !p.stage) return [];
   return [...withSiblings(man, [...p.stage.map(t => fmt(t, id, 0)), ...((p.stage_files || {})[id] || [])])].filter(f => !/^bgm\//.test(f));
 }
-const memfsSize = (M, p) => { try { return M.FS.stat('/game/' + p).size; } catch (e) { return -1; } };
-function radioOwnStage(s) {  // the match's stage files back in MEMFS, if they were dropped
-  const M = s.M, idx = M._viewer_radio_stage_match ? M._viewer_radio_stage_match() : M.HEAP32[0x54CE90 >> 2];  // (g_BGLoadedStageIndex)
-  if (idx <= 0 || idx >= 100 || radioOwnFetch) return;
-  const need = radioStageFiles(idx).filter(p => memfsSize(M, p) <= 1);
-  if (!need.length) return;
-  radioOwnFetch = fetchAll(man, need, '', true).then(() => { if (session === s) for (const p of need) radioPut(s, p); })
-    .finally(() => { radioOwnFetch = null; });
-}
-// an MBAACC pick's stage files into MEMFS (all at once, the .dat with them: the game waits for the .dat); false while
-// they are being fetched
-let radioStageFetch = null, radioStageBad = 0;
-function radioFilesIn(s, id) {
-  const files = radioStageFiles(id), miss = files.filter(p => !cache.has(p));
-  if (miss.length) {
-    if (!radioStageFetch && radioStageBad !== id)
-      radioStageFetch = fetchAll(man, miss, '', true).catch(e => { radioStageBad = id; console.warn('radio: stage files:', e); })
-        .finally(() => { radioStageFetch = null; });
-    return false;
-  }
-  for (const p of files) radioPut(s, p);
-  return true;
-}
 // (the viewer's own radio pick names a stage: an older game's stage track, or an MBAACC track's stage, the match's own
 // included)
 // (a ^stage chip's pick always takes its stage: "stage changes" off is for the radio's track picks; user 2026-11-03,
 // gaku's chip under a forced stage changed only the music)
 const stageFollows = () => radioStageFollow || !!(radio && radio.chip);
 const radioPickHasStage = () => !!(radio && stageFollows() && !HASH && (radio.dat || (radio.stages && radio.stages.length)));
-function radioStageSync(s) {
-  const M = s && s.M;
-  if (!M || !M._viewer_radio_stage_id || s.glLost) return;
-  // this viewer's own stage pick on the radio (a track with a stage, the stage following it) wins on this screen over a
-  // live match's extension's stage (user 2026-11-03: a pick under a forced 3D stage showed the match's real stage, not
-  // the pick): an override told so (its second argument, {own: true}) returns none, and a page-drawn stage gives way
-  // (Module.__bgExtYield, below); cleared, the extension's stage is back
-  const own = radioPickHasStage();
-  // a private page's own stage file (window.mbaaStageOverride(s, {own}) -> {dat, lights, data}: a bgmake file the page
-  // holds, put into MEMFS at /game/<dat>); it takes the radio's place while it returns one
-  let ov = null;
-  try { ov = window.mbaaStageOverride ? window.mbaaStageOverride(s, { own }) : null; } catch (e) {}
-  if (ov && ov.data && memfsSize(M, ov.dat) !== ov.data.length) fsPut(M.FS, '/game/' + ov.dat, ov.data);
-  const st = ov && ov.data ? ov : radio && radio.dat && !HASH && stageFollows() ? radio : null;
-  // an MBAACC track: its stage (the match's own when it is one of the track's: nothing to swap)
-  let stage = 0;
-  if (!st && radio && stageFollows() && radio.stages && radio.stages.length && !HASH && M._viewer_radio_stage_want_stage) {
-    const own = M._viewer_radio_stage_match();
-    stage = radio.stages.includes(own) ? 0 : radio.stages[0];
-  }
-  if (radio) radio.stageNow = stage;
-  const want = st ? radioDatId(st.dat) : stage ? radioDatId(`stage:${stage}`) : 0;
-  // (the page-drawn stage (Module.__bgExt, d3d9_gl.cpp) gives way once the pick's stage is in the game and its swap's
-  // crossfade is over, so the stage the pick replaced, hidden under the page's until then, never shows between; back at
-  // once when the pick is cleared. The cut is the page's picture faded, as a stage swap's with no draw slot of its own)
-  const ph = M._viewer_radio_stage_phase ? Math.floor(M._viewer_radio_stage_phase() / 10000) : 0;
-  const yld = own && M._viewer_radio_stage_in() === want && ph !== 1 && ph !== 2 ? 1 : 0;
-  // (faded only for a pick or a clear made just now, xfYieldPending: a keyframe restore swapping the pick's stage in again
-  // cuts as it would without an extension)
-  if ((M.__bgExtYield | 0) !== yld) {
-    if (xfYieldPending && M.__bgExt && M.__bgExtOn && M.HEAP32[0x54EEE8 >> 2] === 1) xfGrab(() => true);
-    M.__bgExtYield = yld;
-  }
-  if (M.__bgExtYield === undefined) M.__bgExtYield = 0;
-  if (M._viewer_radio_stage_id() === want && (M.__bgExtYield | 0) === yld && (!own || yld)) xfYieldPending = false;
-  if (!want && M._viewer_radio_stage_in()) radioOwnStage(s);
-  if (M._viewer_radio_stage_id() === want) { xfStagePending = false; return; }
-  // (a pick's stage swap: crossfaded once it is sent; a keyframe restore sending it again is not)
-  // (in battle only: elsewhere the stage comes in with the battle's own load and fade, and a held copy would freeze the
-  // VS screen)
-  // (the two-phase swap, web/host/radio_stage.cpp, crossfades the stage alone in its own draw slot: no page snapshot,
-  // which would fade the fighters and HUD too; the page fade stays only for the all-at-once reference, mbaaRadioDefer 0)
-  const fade = () => { if (xfStagePending) { xfStagePending = false; if (M.HEAP32[0x54EEE8 >> 2] === 1 && !(M._viewer_radio_stage_phase && M.mbaaRadioDefer !== 0)) xfGrab(() => M._viewer_radio_stage_in() === want); } };
-  if (stage) { if (radioFilesIn(s, stage)) { fade(); M._viewer_radio_stage_want_stage(stage, want); } return; }
-  if (st && !st.data && !radioPut(s, st.dat)) return;
-  fade();
-  if (st) st.lights.forEach(([pos, power], i) => M._viewer_radio_stage_light(i, pos, power));
-  M.ccall('viewer_radio_stage_want', null, ['string', 'number', 'number'], [st ? st.dat : '', want, st ? st.lights.length : 0]);
-}
+let radioStageSync;  // (the engine worker's: set by the worker block below)
 frameBus.add(function radioStageLoop() { radioStageSync(session); });
 // an image cropped to the box of its pixels that are not fully transparent (PNG out)
 async function trimAlpha(blob) {
@@ -4454,12 +3196,6 @@ function liveKeep(L, b) {
     o += n;
   }
 }
-function liveFeed(s, b) {
-  const p = s.M._malloc(b.length);
-  s.M.HEAPU8.set(b, p);
-  call(s, 'viewer_spectate_feed', p, b.length);
-  s.M._free(p);
-}
 // A live session goes on through the retry menu and the character select (scene 20): their files load with the first
 // game (the select screen's parts, portraits and palettes for any character a player hovers, the stage list, the moon
 // check's data/<chara>_<moon>.txt (it only stats them, but a missing one changes which moons are offered), its BGM and
@@ -4479,93 +3215,6 @@ function liveCssFiles(man) {
 // pick is fetched in the background and put in MEMFS; from the finish on, the game is held (viewer_live_hold: no frame
 // steps) until all of them are there. The load comes ~30 frames after the finish (the fade out).
 const CSS_SCENE = 20, CSS_OBJ = 0x773158, CSS_SLOT = 0x74D8E8, BATTLE_SLOT = 0x74D838, STAGE_ID = 0x74FD98;
-function liveCssWatch(s) {
-  const H = s.M.HEAP32, g = a => H[a >> 2];
-  // (held only for a game that goes to the select: the players' retry menu choice 'character select' received
-  // (liveCssChoice), or the select reached. A rematch reads none of these files: it was held all the same at every
-  // result screen until all ~80 MB were in, ~45 s on a phone that joined late in a game, the list meanwhile on the next
-  // game, then a fresh start: "they don't work on the phone", 2026-11-01)
-  const sc = g(0x54EEE8);
-  if (s.cssBgP && !s.cssBgReady && !s.cssBgHeld && (sc === CSS_SCENE || (s.cssChoice && (sc === 5 || call(s, 'viewer_spectate_in_retry'))))) { s.cssBgHeld = true; if (s.cssBgGo) s.cssBgGo(); liveHoldApply(s); }
-  if (g(0x54EEE8) !== CSS_SCENE) { if (s.cssHeld) liveCssHold(s, false); s.cssKey = null; return; }
-  s.cssPassed = true;  // (the next game's load checks the select's picks against the stream's setup: liveLoaderGate)
-  const done = g(CSS_OBJ + 0x3C) >= 4;
-  // (the plan's chara keys are "<chara>:<moon>" only: a lookup by the bare id found none, so no pick was ever seen
-  // and the next game's files came only at the loader gate, after the VS screen had read its cut-ins: missed)
-  const known = c => c >= 0 && Object.keys(man.plan.chara).some(k => k.startsWith(`${c}:`));
-  const sides = [0, 1].map(p => {
-    const st = g(CSS_SLOT + p * 0x24 + 4), c = g(CSS_SLOT + p * 0x24 + 0x14), m = g(CSS_SLOT + p * 0x24 + 0x18);
-    if (st >= 1 && known(c)) return [c, st >= 2 || done ? Math.max(0, m) : null];
-    // Random (99): the battle slot's copy, once the select is finished (its moon is copied a frame after the chara)
-    return done && known(g(BATTLE_SLOT + p * 0x2C + 8)) ? [g(BATTLE_SLOT + p * 0x2C + 8), Math.max(0, g(BATTLE_SLOT + p * 0x2C + 0x14))] : null;
-  });
-  // (0: a random stage, rolled as the game loads: liveLoaderGate fetches it)
-  const stage = done && g(STAGE_ID) > 0 ? g(STAGE_ID) : null, key = JSON.stringify([stage, sides]);
-  if (key !== s.cssKey) {
-    s.cssKey = key;
-    const want = new Set();
-    for (const [i, side] of sides.entries()) {
-      if (!side) continue;
-      const k = { stage: null, p1: null, p2: null };
-      k[i ? 'p2' : 'p1'] = side[1] === null ? null : side;
-      // the moon not picked yet: every moon's files (planFiles takes all of them for a moon it has no key for)
-      if (side[1] === null) { k[i ? 'p2' : 'p1'] = [side[0], -1]; for (const f of planFiles(man, k)) want.add(f); }
-      else for (const f of planFiles(man, k)) want.add(f);
-    }
-    if (stage !== null) for (const f of planFiles(man, { stage, p1: null, p2: null })) want.add(f);
-    s.cssNeed = [...withSiblings(man, want)].filter(p => !liveHas(s, p));
-    console.log(`live: next game P1 ${sides[0]} P2 ${sides[1]} stage ${stage}: ${s.cssNeed.length} files to load`);
-    const fetching = s.cssFetching || (s.cssFetching = new Set());
-    const need = s.cssNeed.filter(p => !fetching.has(p));  // (an earlier pick's download may have them on the way)
-    if (need.length) {
-      const t0 = performance.now(), b0 = net.bytes;
-      for (const p of need) fetching.add(p);
-      fetchAll(man, need, 'next game', true)
-        .then(() => {
-          console.log(`live: ${need.length} next-game files in ${Math.round(performance.now() - t0)} ms (${((net.bytes - b0) / 1e6).toFixed(1)} MB, all downloads)`);
-          if (session === s) liveInstall(s, need);
-        })
-        .catch(e => { console.warn('live: next game files:', e); status(`live: the next game's files did not load (${e.message})`); });
-    }
-  }
-  const ready = s.cssNeed.every(p => liveHas(s, p));
-  if (done && !ready !== !!s.cssHeld) liveCssHold(s, !ready);
-}
-// The game's load starting (web/host/seams_web.cpp g_loaderGate, from VersusIntro): the stage is rolled now (a random
-// one is picked only here: the select screen leaves its id 0) and the battle slots are final. Any of the game's files
-// not in MEMFS: fetched, the load waits and the game is held until they are (false). The select screen's picks
-// (liveCssWatch) usually have them in already.
-function liveLoaderGate(s) {
-  const H = s.M.HEAP32, g = a => H[a >> 2];
-  // After a character select: the game's setup (the bridge's GameSetup for this game, as boot.rep's header) checked
-  // against our select's picks first (liveSetupCheck); not known yet: the load waits for it (liveSetupWait)
-  if (s.cssPassed) {
-    s.cssPassed = false;
-    // (the select's index + 1: the game index itself moves there only a frame after the load starts)
-    const game = call(s, 'viewer_spectate_next_game'), p = livePrepOf(s, game);
-    if (game >= 0 && (!p || !SETUP_WAIT)) { liveSetupWait(s, game); return false; }
-    if (p && !liveSetupCheck(s, p)) return false;
-  }
-  const side = p => [g(BATTLE_SLOT + p * 0x2C + 8), Math.max(0, g(BATTLE_SLOT + p * 0x2C + 0x14))];
-  const want = planFiles(man, { stage: g(STAGE_ID), p1: side(0), p2: side(1) });
-  const need = [...want].filter(p => !liveHas(s, p));
-  if (!need.length) return true;
-  if (need.every(p => cache.has(p))) { liveInstall(s, need); return true; }  // (prepared: liveNextPrep)
-  console.log(`live: the game's load waits for ${need.length} files (stage ${g(STAGE_ID)})`);
-  s.loadNeed = need; s.loadHeld = true; liveHoldApply(s);
-  fetchAll(man, need, 'next game', true)
-    .then(() => { if (session === s) liveInstall(s, need); })
-    .catch(e => { console.warn('live: game files:', e); status(`live: the game's files did not load (${e.message})`); });
-  return false;
-}
-// The next game of the stream, prepared in the background (liveNextPrep: its boot tape from the bridge, every file it
-// reads in the page's cache) as soon as the bridge knows its setup (the list's game, or asked for at our own load):
-// what the session checks its character select against (liveSetupCheck), and the session switched to when ours did not
-// get there (liveSwitch).
-const bootSetup = rep => {  // boot.rep's header (cc_live.mjs bootRep): the stage and both sides' chara / moon / palette
-  const dv = new DataView(rep.buffer, rep.byteOffset, rep.byteLength), i = o => dv.getInt32(o, true);
-  return { stage: i(0x28), chara: [i(0x40), i(0x50)], moon: [i(0x44), i(0x54)], color: [i(0x48), i(0x58)] };
-};
 // A stage the stock game does not have: a player's own extended bg/BgList.ini (stages 60+, live eD8abT4HcJwn: 62, 66;
 // 2 of 746 captures, 2026-11-01). The game's table (BgList_Load 0x4B4A80, Bg_001..Bg_099) has no entry for it and the
 // stage load (Stage_LoadBgDat 0x4B6BF0) loads nothing: a black stage and no music. A stock opponent's game never has
@@ -4583,105 +3232,6 @@ function repStageFix(rep) {  // a .rep / boot tape's header stage (0x28), in pla
   const to = stageStandIn(id);
   console.warn(`stage ${id} is not a stock stage (a modded stage list): stage ${to} stands in`);
   dv.setInt32(0x28, to, true);
-}
-const livePrepOf = (s, game) => { const p = s.liveSrc.preps && s.liveSrc.preps.get(game); return p && p.ready ? p : null; };
-function liveNextPrep(s, game, entry = null) {
-  const L = s.liveSrc, preps = L.preps || (L.preps = new Map());
-  if (preps.has(game)) return preps.get(game).done;
-  for (const g of preps.keys()) if (g < game - 40) preps.delete(g);  // (old games' tapes)
-  const p = { game, ready: false };
-  preps.set(game, p);
-  p.done = (async () => {
-    const r = await liveFetch(`${LIVE}/live/${L.id}/boot.rep?game=${game}`);
-    if (!r.ok) throw new Error(`HTTP ${r.status}`);
-    p.rep = new Uint8Array(await r.arrayBuffer());
-    p.setup = bootSetup(p.rep);  // (the players' stage as sent: liveSetupCheck keeps ours for one we do not have)
-    repStageFix(p.rep);  // (the tape a switch starts from, and its files: a stand-in for a stage we do not have)
-    // (the list entry: names, settings, the streak the bridge has for it; else the session's own with this setup)
-    p.info = Object.assign({}, entry && entry.game === game ? entry : L.info, p.setup, { game });
-    if (!(entry && entry.game === game)) p.info.streak = null;
-    p.want = wantFor(p.rep);
-    if (p.want) { for (const f of liveCssFiles(man)) p.want.add(f); await fetchAll(man, p.want, 'next game', true); }
-    p.ready = true;
-    console.log(`live: game ${game} prepared (P1 ${p.setup.chara[0]}:${p.setup.moon[0]} P2 ${p.setup.chara[1]}:${p.setup.moon[1]} stage ${p.setup.stage})`);
-    return p;
-  })().catch(e => { if (preps.get(game) === p) preps.delete(game); throw e; });
-  p.done.catch(() => {});
-  return p.done;
-}
-// the session's game (its battle slots and stage) has this setup: characters, moons, palettes, stage
-function liveSameSetup(s, S) {
-  const H = s.M.HEAP32, slot = (q, o) => H[(BATTLE_SLOT + q * 0x2C + o) >> 2];
-  return (H[STAGE_ID >> 2] === S.stage || !stageOk(S.stage)) && [0, 1].every(q => slot(q, 8) === S.chara[q] && slot(q, 0x14) === S.moon[q] && slot(q, 4) === S.color[q]);
-}
-// our load after a character select (liveLoaderGate) against the stream's setup of that game: the same characters and
-// moons: the stage and palettes set to the stream's (our select's stage pick, a random roll, and the palette step are
-// not all followed yet: artifacts/cc_spectate/css_unported.txt) and the game goes on. Other characters or moons: it did
-// not follow the players' select: the prepared session takes over (false: the load stays held)
-const STAGE_BGM = 0x76E653;  // g_StageBgmId (s8; BattleLoop_StartFightAndRestoreBGM plays it)
-const LIVE_TEST_SWITCH = Q.get('liveTestSwitch') === '1';  // (test: every check fails, the switch path runs)
-function liveSetupCheck(s, p) {
-  const H = s.M.HEAP32, slot = (q, o) => (BATTLE_SLOT + q * 0x2C + o) >> 2, S = p.setup;
-  const ours = [0, 1].map(q => [H[slot(q, 8)], H[slot(q, 0x14)]]);
-  if (ours.some(([c, m], q) => c !== S.chara[q] || m !== S.moon[q]) || LIVE_TEST_SWITCH) {
-    console.warn(`live: our character select picked ${JSON.stringify(ours)}, the players ${JSON.stringify([0, 1].map(q => [S.chara[q], S.moon[q]]))}: switching to game ${p.game}`);
-    s.loadHeld = true; s.loadNeed = []; liveHoldApply(s);
-    liveSwitch(s, p);
-    return false;
-  }
-  // (a stage our list does not have: ours, from following their select, stands: as on a stock opponent's game)
-  if (!stageOk(S.stage)) { console.warn(`live: game ${p.game}: the players' stage ${S.stage} is not a stock stage: ours (${H[STAGE_ID >> 2]}) stands`); S.stage = stageOk(H[STAGE_ID >> 2]) && H[STAGE_ID >> 2] ? H[STAGE_ID >> 2] : stageStandIn(S.stage); }
-  if (H[STAGE_ID >> 2] !== S.stage || ours.some((x, q) => H[slot(q, 4)] !== S.color[q]))
-    console.log(`live: game ${p.game}: stage ${H[STAGE_ID >> 2]} -> ${S.stage}, palettes ${H[slot(0, 4)]},${H[slot(1, 4)]} -> ${S.color}`);
-  // (the battle music: g_StageBgmId, the stage's own unless a pick set another (a replay's playback sets it to the
-  // stage id): with the stage when it was our stage's, else our select left the bgm of a stage that isn't loaded)
-  if ((s.M.HEAPU8[STAGE_BGM] << 24 >> 24) === H[STAGE_ID >> 2]) s.M.HEAPU8[STAGE_BGM] = S.stage & 255;
-  H[STAGE_ID >> 2] = S.stage;
-  for (const q of [0, 1]) H[slot(q, 4)] = S.color[q];
-  return true;
-}
-// the setup not known at our load yet (the bridge asks the host for it as the players' game starts): the load waits,
-// asked again each second (a host's load and the probe can take ~7 s); none after SETUP_WAIT ms: our own picks, checked
-// again once it comes (liveLateCheck)
-// (2 s: the bridge's probe of the host often takes 5-35 s or fails (journal 2026-11-03: "no InitialGameState; again in
-// 5 s", "not offered"); at 20 s the picture sat on the select's end that long, then jumped in and fast-forwarded the
-// backlog: user 2026-11-02. Our select follows the players', so our picks go on and the late check switches if not)
-const SETUP_WAIT = Q.get('liveTestLate') === '1' ? 0 : 2000;  // (test: no wait, the late check runs)
-async function liveSetupWait(s, game) {
-  s.loadHeld = true; s.loadNeed = []; liveHoldApply(s);
-  const t0 = performance.now();
-  let p = null;
-  while (session === s && !p && performance.now() - t0 < SETUP_WAIT) {
-    p = await liveNextPrep(s, game).catch(() => null);
-    if (!p) await new Promise(r => setTimeout(r, 1000));
-  }
-  if (session !== s) return;
-  if (p && !liveSetupCheck(s, p)) return;
-  if (!p) console.warn(`live: no setup for game ${game} after ${SETUP_WAIT / 1000} s: our own picks`);
-  // (the files of the game as it will load now: in the cache from the preparation, else fetched)
-  const side = q => [s.M.HEAP32[(BATTLE_SLOT + q * 0x2C + 8) >> 2], Math.max(0, s.M.HEAP32[(BATTLE_SLOT + q * 0x2C + 0x14) >> 2])];
-  const need = [...planFiles(man, { stage: s.M.HEAP32[STAGE_ID >> 2], p1: side(0), p2: side(1) })].filter(f => !liveHas(s, f));
-  if (need.some(f => !cache.has(f))) await fetchAll(man, need, 'next game', true).catch(e => console.warn('live: game files:', e));
-  if (session !== s) return;
-  liveInstall(s, need);
-  s.loadHeld = false; liveHoldApply(s);
-  if (!p) liveLateCheck(s, game);
-}
-// the setup came later than our load (the bridge's probe slow or retried): our game against it once it is there; any
-// difference (characters, moons, palettes, stage): the prepared session of that game, so a select we did not follow
-// only ever shows on the select screen, never in the game (asked each second for a minute)
-async function liveLateCheck(s, game) {
-  const t0 = performance.now();
-  let p = null;
-  while (session === s && !p && performance.now() - t0 < 60000) {
-    p = await liveNextPrep(s, game).catch(() => null);
-    if (!p) await new Promise(r => setTimeout(r, 1000));
-  }
-  if (!p || session !== s) return;
-  const H = s.M.HEAP32, slot = (q, o) => H[(BATTLE_SLOT + q * 0x2C + o) >> 2], S = p.setup;
-  const same = (H[STAGE_ID >> 2] === S.stage || !stageOk(S.stage)) && [0, 1].every(q => slot(q, 8) === S.chara[q] && slot(q, 0x14) === S.moon[q] && slot(q, 4) === S.color[q]);
-  console.log(`live: game ${game}'s setup came after our load: ${same ? 'the same' : 'different: switching'}`);
-  if (!same) liveSwitch(s, p);
 }
 // the players' next game on a new session (prepared: its files in the cache, the instance reused): the picture stays on
 // our last frame (no loading movie) until the new one draws. The win streaks go on from ours where the bridge has none.
@@ -4701,31 +3251,32 @@ async function liveSwitch(s, p) {
 // by the game in its ASCII font (viewer_banner_name: main_browser.cpp banner_draw, a marquee past 20 characters); a
 // name with other characters, by the page at the banner's place (#banner0 / #banner1; the streak stays the game's)
 const STREAK = [0x76FC14, 0x770EB4];  // g_P1ConsecutiveWinStreak, g_P2ConsecutiveWinStreak (the player records', +0x4A0)
-const asciiName = n => /^[\x20-\x7e]*$/.test(n);
 // ?tune=1: a panel to fine-tune the banner live (main_browser.cpp BannerTune), also on replays with test names
 const TUNE = Q.get('tune') === '1';
 const bannerTune = { nameGap: -1, nameSize: 16, nameDy: 0, winsGap: -1, winsSize: 11, winsDy: -11, maxPx: 216, scrollSpeed: 40,
   lapGap: 24, streak: -1, pageFont: 13, testP1: '', testP2: '' };
-function liveBanner(s) {
-  const T = bannerTune;
-  const live = ((s.liveSrc && s.liveSrc.info.names) || []).map(n => (n || '').trim());
-  const names = [0, 1].map(p => (TUNE && [T.testP1, T.testP2][p]) || live[p] || '');
-  const key = JSON.stringify([names, ui.names, TUNE && T]);
-  if (key !== s.bannerKey) {
-    s.bannerKey = key;
-    call(s, 'viewer_banner_enable', ui.names && (TUNE || names.some(Boolean)) ? 1 : 0);
-    slogAdd('names', `banner ${ui.names ? 'on' : 'OFF (the NAMES button)'}: ${names.map(n => n ? JSON.stringify(n) : '(none)').join(' vs ')}`);
-    for (const p of [0, 1]) {
-      const n = names[p], game = asciiName(n);
-      s.M.ccall('viewer_banner_name', null, ['number', 'string', 'number'], [p, game ? n : '', n && !game ? 1 : 0]);
-    }
-    call(s, 'viewer_banner_tune', T.nameGap, T.nameSize, T.nameDy, T.winsGap, T.winsSize, T.winsDy, T.maxPx, T.scrollSpeed,
-      T.lapGap, T.streak);
+// the picture canvas's CSS width, kept by a ResizeObserver (a per-frame clientWidth read forces a layout)
+let canvasW = -1;
+function canvasCssW() {
+  if (canvasW < 0) {
+    const c = document.getElementById('canvas');
+    canvasW = c.clientWidth;
+    new ResizeObserver(() => { canvasW = c.clientWidth; }).observe(c);
+    // (a font arriving changes a name's measured width: the banners measure again)
+    if (document.fonts) document.fonts.addEventListener('loadingdone', () => { for (const p of [0, 1]) { const e = document.getElementById(`banner${p}`); if (e) e.__sig = null; } });
   }
-  const W = document.getElementById('canvas').clientWidth, sc = W / 640;
+  return canvasW;
+}
+// the banner's page-drawn names (a name the game's ASCII font cannot draw) at the game's banner y (-1000: none)
+function bannerPage(ys, names, key) {
+  const T = bannerTune;
+  const W = canvasCssW(), sc = W / 640;
   for (const p of [0, 1]) {
     const el = document.getElementById(`banner${p}`), n = names[p];
-    const y = ui.names && n && !asciiName(n) ? call(s, 'viewer_banner_y', p) : -1000;
+    const y = ys[p];
+    const sig = y <= -1000 ? 'off' : `${y}|${W}|${key}`;
+    if (el.__sig === sig) continue;
+    el.__sig = sig;
     if (y <= -1000) { el.hidden = true; continue; }
     const span = el.firstChild;
     if (span.textContent !== n) span.textContent = n;
@@ -4761,117 +3312,6 @@ function bannerTunePanel() {
   document.body.appendChild(box);
 }
 if (TUNE) bannerTunePanel();
-// The players' win streaks, as the game's own (the banner's "N WINS"; ResultMenu_UpdatePlayerStats counts them on):
-// the bridge's for this game (a viewer that knew them sent them), else unknown (from 0, as a CCCaster spectator). Put
-// in after viewer_play (CharaSelect_InitReplayMode zeroes them) and before the first frame: the match start copies them
-// for the banner (ResetBattleMode: Netplay_GetWinCounts).
-function liveSeedStreak(s) {
-  if (liveSrc.info.streak) liveSrc.info.streak.forEach((w, p) => { s.M.HEAP32[STREAK[p] >> 2] = w; });
-}
-// Each game's first battle frame: the streaks it started with, to the bridge (later viewers start from them)
-// Also the moment a game is won (the result counts them on): the next game's, sent ahead (game + 1), so viewers who
-// (re)load between games (a site update reloads everyone at once) still start from them; that game's own first-frame
-// send then confirms them. (Before: everyone reloaded between games -> nobody knew -> the count restarted at 0, 2026-11-02)
-function liveStreak(s) {
-  if (!s.streakKnown) return;
-  const g = call(s, 'viewer_spectate_game'), game = g >= 0 ? g : s.liveSrc.info.game;
-  const w = STREAK.map(a => s.M.HEAP32[a >> 2]), post = (gm, ws) =>
-    liveClipCan() && fetch(`${LIVE}/live/${s.liveSrc.id}/streak?game=${gm}`, { method: 'POST', body: ws.join(',') }).catch(() => {});  // (signed in only: F-06)
-  if (s.M.HEAP32[0x54EEE8 >> 2] === 1 && game !== s.streakSent) {
-    s.streakSent = game; s.streakAt = w.join(','); s.streakAhead = null;
-    post(game, w);
-    return;
-  }
-  // (after this game's start: a change is the win being counted)
-  // (only a count going up, in the battle or win scene (the result counts them there): the next game's setup zeroes them, never sent ahead)
-  const was = s.streakAt == null ? null : s.streakAt.split(',').map(Number);
-  if (game === s.streakSent && was && [1, SCENE_WIN].includes(s.M.HEAP32[0x54EEE8 >> 2]) && w.every((x, i) => x >= was[i]) && w.some((x, i) => x > was[i])
-      && s.streakAhead !== w.join(',')) {
-    s.streakAhead = w.join(',');
-    post(game + 1, w);
-  }
-}
-// in MEMFS for the game: in the session's files and not dropped by freeLoaded (low-memory mode; the next game of the
-// stream, a rematch above all, reads the same files again)
-const liveHas = (s, p) => s.want.has(p) && !s.freed.has(p);
-function liveCssHold(s, on) {
-  s.cssHeld = on;
-  liveHoldApply(s);
-}
-// the game held (no frame steps) while a next game's files are not in: picked at the select screen, or a rematch's
-const liveHoldApply = s => {
-  const on = !!(s.cssHeld || s.rematchHeld || s.loadHeld || s.cssBgHeld);
-  call(s, 'viewer_live_hold', on ? 1 : 0);
-  if (on) status('live: loading the next game');
-};
-// Low-memory mode: a game's files are freed once it has loaded (freeLoaded); a rematch (the retry menu's choice 0, in
-// the stream seconds before the game plays it; the select screen is skipped) reads them all again. They are put back
-// as the choice arrives (from the browser's disk cache: warmDisk kept them there), the game held at the retry menu
-// until they are in.
-function liveRematch(s, b) {
-  if (!LOWMEM || !s.freed.size || s.rematchFetch) return;
-  const dv = new DataView(b.buffer, b.byteOffset, b.byteLength);
-  let rematch = false;
-  for (let o = 0; o + 244 <= b.length; o += 244 + 4 * dv.getUint32(o + 240, true))
-    if ((dv.getUint32(o + 4, true) >> 8) === 1) rematch = true;  // kind >> 8: the menu choice + 1 (0 = rematch)
-  if (!rematch) return;
-  const back = [...s.freed];
-  s.rematchFetch = fetchAll(man, back, 'rematch', true)
-    .then(() => { if (session === s) liveInstall(s, back); })
-    .catch(e => { console.warn('live: rematch files:', e); status(`live: the rematch's files did not load (${e.message})`); })
-    .finally(() => { s.rematchFetch = null; if (s.rematchHeld) { s.rematchHeld = false; liveHoldApply(s); } });
-}
-// the players chose 'character select' at the retry menu (kind >> 8: the menu choice + 1; CCCaster MenuIndex 1), seconds
-// before the game plays it: from then on the select screen's files (liveCssBg) are needed, and the game waits for them
-function liveCssChoice(s, b) {
-  if (s.cssBgReady || s.cssChoice) return;
-  const dv = new DataView(b.buffer, b.byteOffset, b.byteLength);
-  for (let o = 0; o + 244 <= b.length; o += 244 + 4 * dv.getUint32(o + 240, true))
-    if ((dv.getUint32(o + 4, true) >> 8) === 2) { s.cssChoice = true; return; }
-}
-// fetched files into MEMFS (a stage .dat over its placeholder) and the want list (no miss for them; a freed one is back)
-function liveInstall(s, paths) {
-  let n = 0, back = 0;
-  for (const p of paths) {
-    const d = cache.get(p);
-    if (!d || liveHas(s, p)) continue;
-    if (s.freed.delete(p)) back++;
-    fsPut(s.M.FS, '/game/' + p, d); s.want.add(p); n++;
-    if (!HASH && !bgmStreamReady && /^bgm\/.*\.opus$/.test(p)) bgmDecode(p);
-  }
-  if (n) s.M._viewer_resolve_reset();  // (directory listings cached without them)
-  // low-memory mode: freed files back (a rematch or a later pick): freed again once the game that reads them has
-  // loaded (its first round start after now)
-  if (back && LOWMEM) { s.freedAt = -1; s.freeArm = s.M._viewer_frame(); }
-  if (s.cssHeld && s.cssNeed.every(p => liveHas(s, p))) liveCssHold(s, false);
-  if (s.loadHeld && s.loadNeed.every(p => liveHas(s, p))) { s.loadHeld = false; liveHoldApply(s); }
-}
-// (each frame, with liveCssWatch) a rematch's files still on the way when the game reaches the retry menu: it waits there
-function liveRematchHold(s) {
-  const on = !!s.rematchFetch && !!call(s, 'viewer_spectate_in_retry');
-  if (on !== !!s.rematchHeld) { s.rematchHeld = on; liveHoldApply(s); }
-}
-// A file the game looked up that the page did not load: a live session cannot replay from the start (the miss path of
-// a replay); it is reported (the plan above must cover it), never retried silently
-function liveMissed(s) {
-  const l = [...misses];
-  misses.clear();
-  console.warn(`live: the game asked for ${l.length} files the page did not load:`, l);
-  window.mbaaPlanMisses = (window.mbaaPlanMisses || []).concat(l);
-  s.liveMissedN = (s.liveMissedN || 0) + l.length;
-  status(`live: ${s.liveMissedN} game files were missing (see the console); the picture may be wrong`);
-  // fetched now all the same: the game's next look-up of them (the next game, a rematch) finds them
-  const want = [...withSiblings(man, new Set(l))].filter(p => !liveHas(s, p));
-  if (want.length) fetchAll(man, want, 'missed files', true).then(() => { if (session === s) liveInstall(s, want); }).catch(() => {});
-}
-function liveRefeed(s) {  // restore(): after the keyframe is back
-  const L = s.liveSrc, parts = [...L.recs.keys()].sort((x, y) => x - y).map(i => L.recs.get(i));
-  if (!parts.length) return;
-  const all = new Uint8Array(parts.reduce((n, x) => n + x.length, 0));
-  let o = 0;
-  for (const x of parts) all.set(x, o), o += x.length;
-  liveFeed(s, all);
-}
 // ---- Switch-back (harness-design/live_switch/SWITCH_PLAN.md phase 7, option D): desktop only. The live match left for
 // another one is kept warm: a keyframe at the moment it was left (its live point; a page the game has not changed since
 // boot is the boot snapshot's own, so only the changed pages cost memory), its records, read on in the background while
@@ -4888,35 +3328,7 @@ let liveKept = null, liveResumeK = null, liveClickAt = null;
 const SNAP_BACK_S = 4;  // (a switch back after this many seconds away joins from the bridge's snapshot: liveResumeStart)
 // (a switch back's steps, ms since the click: __mbaaSwitchBack.steps)
 const texKey = (a, i) => a[i] + ':' + a[i + 1] + ':' + a[i + 2];
-// the store entries a kept keyframe names: counted in M.mbaaTexHold, and in the timeline's reference map (store eviction
-// skips them; timelineInit seeds a new session's map from the hold)
-function liveHoldTex(M, tex, d) {
-  const hold = M.mbaaTexHold || (M.mbaaTexHold = new Map()), ref = M.mbaaTexKfRef;
-  for (let i = 0; i + 2 < tex.length; i += 3) {
-    const k = texKey(tex, i), n = (hold.get(k) || 0) + d;
-    if (n > 0) hold.set(k, n); else hold.delete(k);
-    if (ref) { const r = (ref.get(k) || 0) + d; if (r > 0) ref.set(k, r); else ref.delete(k); }
-  }
-}
-// (restoreBoot, before the store reset: a held entry the match being left did not use was marked stale by the reset
-// before, and a stale one goes at the next: unmarked, the reset marks it stale again and keeps it)
-function liveKeptStale(M) {
-  const S = M.mbaaTexStore;
-  if (S && M.mbaaTexHold) for (const k of M.mbaaTexHold.keys()) { const e = S.get(k); if (e) e.stale = 0; }
-}
-function liveMemTight() {
-  const m = performance.memory;  // (Chromium only; elsewhere the 5 minutes and the one-match cap bound it)
-  return !!(m && m.jsHeapSizeLimit && m.usedJSHeapSize > 0.8 * m.jsHeapSizeLimit);
-}
-function liveKeptDrop(why) {
-  const K = liveKept;
-  if (!K) return;
-  liveKept = null;
-  wClear(K.timer);
-  try { liveHoldTex(K.M, K.kf.tex, -1); } catch (e) {}
-  console.log(`live: the kept match is dropped (${why})`);
-  if (session && session.tl && session.M === K.M) storeGc(session.tl);
-}
+let liveKeptDrop;  // (the engine worker's: set by the worker block below)
 function liveKeptStat(K) {
   const S = K.M.mbaaTexStore, seen = new Set(), cur = session && session.want;
   let tex = 0, texOnly = 0, files = 0, recs = 0;
@@ -4933,76 +3345,20 @@ function liveKeptStat(K) {
            polls: K.polls, takeMs: Math.round(K.ms * 10) / 10 };
 }
 window.__mbaaKept = () => (liveKept ? liveKeptStat(liveKept) : null);
-// the session being left for another live match (startLive, just before the new one starts): kept
-function liveKeepTake(s) {
-  if (!SW_KEEP || !s || !s.liveSrc || !s.tl || !s.boot || !s.M || session !== s) return;
-  const L = s.liveSrc, M = s.M, t = s.tl, t0 = performance.now();
-  if (L.moved || L.next || L.backEnded || s.cssHeld || s.loadHeld || call(s, 'viewer_ended')) return;
-  if (liveMemTight()) { console.log('live: the match left is not kept (memory pressure)'); return; }
-  // (an incremental keyframe in progress: dropped, as a seek does: its pages are not all packed yet)
-  if (t.inc) {
-    if (t.inc.kf) { const at = t.kfs.indexOf(t.inc.kf); if (at >= 0) { t.kfs.splice(at, 1); for (const p of t.inc.kf.pages) pageRef(t, p, -1); kfTexDrop(t, t.inc.kf); } }
-    t.inc = null;
-    t.lastKf = t.kfs.length ? t.kfs[t.kfs.length - 1].frame : -1;
-  }
-  const f = M._viewer_frame();
-  if (!M._viewer_files_open()) keyframe(s, f);
-  let kf = null;
-  for (const k of t.kfs) if (k.frame <= f && !k.pending) kf = k;
-  if (!kf || kf.frame < f - 600) { console.log('live: the match left is not kept (no keyframe near its frame)'); return; }
-  const B = s.boot.pages;
-  let bytes = 0, shared = 0, own = 0;
-  const pages = kf.pages.map((q, i) => {
-    if (!q) return null;
-    const b = B[i];
-    if (b && b.h && q.h && b.h[0] === q.h[0] && b.h[1] === q.h[1] && b.h[2] === q.h[2] && b.h[3] === q.h[3]) { shared++; return { boot: b }; }
-    own++; bytes += q.bytes;
-    const c = { bytes: q.bytes, h: q.h };
-    if (q.r) c.r = q.r; else if (q.z) c.z = q.z; else { c.m = q.m; c.v = q.v; }
-    return c;
-  });
-  const g0 = call(s, 'viewer_spectate_game');
-  liveKeptDrop('another match kept');
-  const K = liveKept = {
-    M, id: L.id, match: L.info.match || null, info: L.info, game: g0 >= 0 ? g0 : L.info.game, rep: s.rep, name: s.name,
-    want: new Set([...s.want].filter(p => !s.freed.has(p))), kf: { frame: kf.frame, pages, tex: kf.tex ? Int32Array.from(kf.tex) : new Int32Array(0) },
-    recs: L.recs, since: L.since, tapes: L.tapes, firstGame: L.firstGame, marks: t.marks.slice(), fights: t.fights.slice(),
-    // (the game's music requests up to the keyframe: the track playing there started before it, in this session; without
-    // them a switch back played no music until the next game, a live extension's music none either: user 2026-11-07)
-    bgm: (s.bgmLog || []).filter(e => e[0] <= kf.frame),
-    streakKnown: s.streakKnown, at: Date.now(), bytes, shared, own, polls: 0, ms: 0, timer: 0 };
-  liveHoldTex(M, K.kf.tex, +1);
-  K.ms = performance.now() - t0;
-  K.timer = wTimeout(() => liveKeptPoll(K), 1000);
-  console.log(`live: the match left is kept for a switch back (frame ${kf.frame}, ${(bytes / 1e6).toFixed(1)} MB of its own pages, ` +
-              `${shared} pages the boot snapshot's, ${K.ms.toFixed(1)} ms)`);
-}
-// while away: the kept match's records, read on as the session would (not counted as a viewer: no v=), kept only
-async function liveKeptPoll(K) {
-  if (liveKept !== K) return;
-  if (Date.now() - K.at > KEEP_MS) return liveKeptDrop(`kept ${Math.round(KEEP_MS / 1000)} s`);
-  if (liveMemTight()) return liveKeptDrop('memory pressure');
-  try {
-    const r = await fetch(`${LIVE}/live/${K.id}/rec?from=${K.info.game}&since=${K.since}` + (K.match ? `&match=${encodeURIComponent(K.match)}` : ''),
-      { cache: 'no-store', ...(AbortSignal.timeout ? { signal: AbortSignal.timeout(5000) } : {}) });
-    if (liveKept !== K) return;
-    if (r.status === 404) return liveKeptDrop('it left the feed');
-    if (r.ok) {
-      const b = new Uint8Array(await r.arrayBuffer());
-      if (liveKept !== K) return;
-      if (b.length) { liveKeep(K, b); K.since = liveLastIndex(b); }
-      K.polls++;
-    }
-  } catch (e) {}
-  if (liveKept === K) K.timer = wTimeout(() => liveKeptPoll(K), 1000);
-}
+let liveKeepTake;  // (the engine worker's: set by the worker block below)
 // startLive: back to the kept match (its game still the list's). The match being left is kept in its turn.
-async function liveResumeStart(K, prev) {
+// liveBackTake: the engine's half (in the engine worker too: cmd keepBack), the kept match taken for the next play's
+// liveBegin / liveResumeApply, the one being left kept
+function liveBackTake(K, prev, click) {
   liveKept = null; wClear(K.timer);  // (its texture hold stays until the restore takes it over: liveResumeApply)
-  const B = window.__mbaaSwitchBack = { click: liveClickAt, start: performance.now(), awayS: (Date.now() - K.at) / 1000, kept: liveKeptStat(K) };
+  const B = window.__mbaaSwitchBack = { click, start: performance.now(), awayS: (Date.now() - K.at) / 1000, kept: liveKeptStat(K) };
   if (prev && prev.liveSrc && prev.liveSrc.id !== K.id) liveKeepTake(prev);
   console.log(`live: back to the kept match (${B.awayS.toFixed(1)} s away)`);
   liveResumeK = K;
+  return B;
+}
+async function liveResumeStart(K, prev) {
+  const B = liveBackTake(K, prev, liveClickAt);
   // (away long: the bridge's snapshot, asked for now, joins the live point (liveCatchUp's snapshot path) instead of
   // stepping the whole time away from the kept keyframe muted (~260 frames/s: 18 s away was ~5 s without sound or
   // music, run_music3's third return, user 2026-11-07). A short absence steps from the keyframe, faster than a fetch)
@@ -5010,86 +3366,49 @@ async function liveResumeStart(K, prev) {
   window.__mbaaRepUrl = null;
   await start(new File([K.rep], K.name), true, K.id);
 }
-// play(), after timelineInit: the kept keyframe restored into the new session (the instance's boot state + this match's
-// load are under it), the records fed again, then the time away caught up
-function liveResumeApply(s) {
-  const K = s.liveResumeK, t = s.tl, M = s.M, t0 = performance.now(), B = window.__mbaaSwitchBack || (window.__mbaaSwitchBack = {});
-  s.liveResumeK = null;
-  // (pages of its own for this timeline's counts; a boot page counts no bytes: the boot snapshot holds it anyway)
-  const kf = { frame: K.kf.frame, ms: 0, fresh: 0, pages: K.kf.pages.map(q => !q ? null : q.boot ? { ...q.boot, n: 0, bytes: 0 } : { ...q, n: 0 }) };
-  for (const q of kf.pages) if (q) { t.bytes += q.bytes; pageRef(t, q, +1); }
-  liveHoldTex(M, K.kf.tex, -1);  // (the hold, from here the timeline's own reference)
-  kf.tex = K.kf.tex;
-  for (let i = 0; i + 2 < kf.tex.length; i += 3) { const k = texKey(kf.tex, i); M.mbaaTexKfRef.set(k, (M.mbaaTexKfRef.get(k) || 0) + 1); }
-  let at = t.kfs.length;
-  while (at > 0 && t.kfs[at - 1].frame > kf.frame) at--;
-  if (at > 0 && t.kfs[at - 1].frame === kf.frame) { const o = t.kfs.splice(at - 1, 1)[0]; for (const p of o.pages) pageRef(t, p, -1); kfTexDrop(t, o); at--; }
-  t.kfs.splice(at, 0, kf);
-  t.lastKf = t.kfs[t.kfs.length - 1].frame;
-  t.marks = K.marks; t.fights = K.fights; s.bgmLog = K.bgm;  // (later requests come again as the catch-up steps past kf)
-  restore(s, kf);
-  const scene = M.HEAP32[0x54EEE8 >> 2];
-  t.simMax = Math.max(t.simMax, kf.frame); t.scene = scene; t.round = M.HEAP32[0x77BFA4 >> 2]; t.intro = scene === 1 ? M.HEAPU8[0x55D20B] : -1;
-  s.liveHeldSeen = call(s, 'viewer_spectate_held');
-  s.liveJoined = false;  // (the first poll's jump threshold: as at a join)
-  s.swBack = B;
-  B.restored = performance.now(); B.restoreMs = Math.round((B.restored - t0) * 10) / 10; B.frame = kf.frame; B.copied = t.lastCopied;
-  if (Q.get('swhash') === '1') {  // (test: the state rows of the 30 frames after the restored one, live_switch_back_check.py)
-    M.ccall('viewer_hash_enable', null, [], []);
-    call(s, 'viewer_suppress', 1); call(s, 'viewer_step', 30); call(s, 'viewer_suppress', 0);
-    B.rows0 = { from: kf.frame, csv: M.ccall('viewer_hash_take', 'string', [], []) };
-  }
-  B.gap = call(s, 'viewer_spectate_buffered') - LIVE_BEHIND;
-  // (after play() has started the loop: the gap, unrendered; the first poll's jump finds the session seeking)
-  setTimeout(async () => {
-    if (session !== s) return;
-    const n = call(s, 'viewer_spectate_buffered') - LIVE_BEHIND;
-    B.catchStart = performance.now(); B.catchN = n;
-    if (n > 30 && !s.seeking) await liveCatchUp(s, n);
-    if (session !== s) return;
-    B.caught = performance.now();
-    console.log(`live: back at the kept match's live point: restore ${B.restoreMs} ms (${B.copied} pages), ${n} frames caught up, ` +
-                `${Math.round(B.caught - (B.click ?? B.start))} ms from the click`);
-  }, 0);
-}
 // (test, ?swhash=1: the live session's state for the check; the state rows of n frames from frame k (a seek there), or
 // from the current frame (k null))
-if (Q.get('swhash') === '1') window.__mbaaLiveState = () => {
+function liveStateNow() {
   const s = session;
   if (!s || !s.liveSrc || !s.M) return null;
   return { id: s.liveSrc.id, frame: s.M._viewer_frame(), ahead: call(s, 'viewer_spectate_buffered'), seeking: !!s.seeking,
            follow: !!s.liveFollow, game: call(s, 'viewer_spectate_game'), scene: s.M.HEAP32[0x54EEE8 >> 2], swLive: s.swLive ?? null,
+           wt: s.M.HEAP32[0x55D1D4 >> 2],  // (g_WorldTimer: the game's own frame; a session's frame numbers are its own)
            kfs: s.tl ? s.tl.kfs.length : 0, tlMB: s.tl ? Math.round(s.tl.bytes / 1e5) / 10 : 0, heapMB: Math.round(s.M.HEAPU8.length / 1e5) / 10 };
-};
-if (Q.get('swhash') === '1') window.__mbaaStateRows = async (k, n) => {
+}
+async function stateRowsTake(k, n) {
   const s = session;
   if (!s) return null;
   if (k != null) await requestSeek(k);
-  const f0 = s.M._viewer_frame();
+  const f0 = s.M._viewer_frame(), wt = s.M.HEAP32[0x55D1D4 >> 2];
   s.M.ccall('viewer_hash_enable', null, [], []);
   call(s, 'viewer_suppress', 1); call(s, 'viewer_step', n); call(s, 'viewer_suppress', 0); call(s, 'viewer_represent');
-  return { from: f0, csv: s.M.ccall('viewer_hash_take', 'string', [], []) };
-};
+  return { from: f0, wt, csv: s.M.ccall('viewer_hash_take', 'string', [], []) };
+}
+if (Q.get('swhash') === '1') Object.assign(window, { __mbaaLiveState: liveStateNow, __mbaaStateRows: stateRowsTake });
 // live: following the stream (paced, ~LIVE_BEHIND frames behind it); DVR (after a seek, a step or a pause): the replay
 // controls on everything received so far, no pacing; End (or L) goes back
-function liveFollow(s, on) {
-  s.liveFollow = on;
-  if (!on && s.liveFF) { s.liveFF = false; call(s, 'viewer_speed', ui.speed); }
-  if (!on && s.liveTrim) { s.liveTrim = false; call(s, 'viewer_rate', 1); }
+// the link card's picture, due (liveBegin's poll: a fight on screen 4 s on): the page's canvas read and its POST
+function liveThumb(s, L) {
+  const due = liveExt.thumbDue, extNow = due != null && performance.now() >= due;
+  // (cardDark reads the canvas back, a GPU stall of 40-80 ms on a phone: only once the picture is due, never per poll)
+  if ((extNow || (due == null && performance.now() - (s.liveThumbAt || -1e9) > 120000)) && liveClipCan() && !cardDark()) {
+    // (signed in only: the bridge takes link-card pictures from signed-in viewers alone (AUDIT_1107 F-06); a guest's
+    // POST was a 401 in its console)
+    s.liveThumbAt = performance.now(); liveExt.thumbDue = null;
+    // (ext: the extension this frame shows; the bridge keeps a frame of the match's current one over an older one's. In the
+    // query, not a header: a custom header would need a CORS preflight the bridge does not answer)
+    grabCard().jpeg.then(b => b && fetch(`${LIVE}/live/${L.id}/thumb?ext=${encodeURIComponent(liveExt.v || '')}`,
+      { method: 'POST', body: b }).catch(() => {}));
+  }
+}
+const ffBadge = on => { const b = document.getElementById('ffbadge'); if (b) b.hidden = !on; };
+let liveFollow;  // (the engine worker's: set by the worker block below)
+function liveFollowUi(on) {
   const te = document.getElementById('toend');
   te.classList.toggle('on', on); te.title = on ? 'following live' : 'back to live (End / L)';
 }
-async function liveGoLive() {
-  const s = session;
-  if (!s || !s.liveSrc) return;
-  if (s.liveSrc.next) return startLive(s.liveSrc.id, s.liveSrc.info.match);  // the game being watched is over: the current one
-  if (ui.paused) setPaused(false);
-  liveFollow(s, true);
-  // (the stream grows while the jump runs: again until it is close)
-  for (let k = 0, ahead; k < 4 && (ahead = call(s, 'viewer_spectate_buffered')) > LIVE_BEHIND + 90 && session === s; ++k) {
-    await liveCatchUp(s, ahead - LIVE_BEHIND);
-  }
-}
+let liveGoLive;  // (the engine worker's: set by the worker block below)
 // ---- the likely next matches kept warm (SWITCH_PLAN.md Phase 6): a switch to one of them finds its files in the page's
 // memory (the likeliest, desktop) or Cache Storage, and its game's records up to a few seconds ago (the join then brings
 // only the rest). Candidates: the next-match card's (liveNextCands, the likeliest first: liveNextMatch), from the newest
@@ -5142,329 +3461,6 @@ async function livePreTick() {
     }
   }
   if (!LOWMEM && !(top && livePre.has(top.id))) livePreKeep = new Set();
-}
-function liveBegin(s) {  // play(): after viewer_play
-  livePreStart();
-  const L = liveSrc;
-  s.liveSrc = L;
-  s.M.mbaaLoaderGate = () => liveLoaderGate(s);
-  s.streakKnown = !!L.info.streak;
-  liveSeedStreak(s);
-  s.streakSent = -1; s.streakAt = null; s.streakAhead = null; s.bannerKey = null;
-  L.since = L.info.game;
-  L.recs = new Map();
-  // (a start whose entry is fresh (the join, a list read just now): the first poll goes straight to the records and the
-  // jump; its list read comes with the poll after (was: awaited before the catch-up could start)
-  if (L.fresh) { L.fresh = false; L.listAt = performance.now(); }
-  L.next = false;
-  // (the session's finished games' replays, for clip links: liveTapes; a reused instance's older ones go)
-  L.tapes = new Map(); L.firstGame = L.info.game; L.clipPend = null;
-  // (back to a kept match: its records, read on while away, and its finished games' tapes; play() restores its keyframe)
-  const KB = liveResumeK && liveResumeK.id === L.id && liveResumeK.M === s.M ? liveResumeK : null;
-  liveResumeK = null;
-  s.swClick = liveClickAt; liveClickAt = null;
-  if (KB) { L.recs = KB.recs; L.since = KB.since; L.tapes = KB.tapes; L.firstGame = KB.firstGame; s.streakKnown = KB.streakKnown; s.liveResumeK = KB; }
-  try { for (const n of s.M.FS.readdir('/lt')) if (n.endsWith('.rep') || n.endsWith('.lt')) s.M.FS.unlink(`/lt/${n}`); } catch (e) {}
-  liveFollow(s, true);
-  call(s, 'viewer_spectate_open', L.info.rollback, L.info.winCount);
-  // the waits that end on a record (the players' retry menu choice, the host's next index ending the VS screen) end
-  // LIVE_BEHIND frames after it arrived, so every game after a result screen starts with the buffer (spectate.cpp
-  // arrived_for; was: at the stream's edge, artifacts/xz_check/live_winscreen)
-  call(s, 'viewer_spectate_delay', LIVE_BEHIND);
-  s.liveHeldSeen = call(s, 'viewer_spectate_held');
-  // (an update reload of this match and game: liveResumeTake)
-  const R = liveResume;
-  liveResume = null;
-  if (R && R.id === L.id && (R.match || null) === (L.info.match || null) && R.game === L.info.game) s.liveResumeN = R.ahead;
-  const poll = async () => {
-    if (session !== s) return;
-    try {
-      // (match: our match's key; the bridge answers 404 once the host is on another match, and so does the page itself
-      // once the list has said so (L.moved): another match's records fed into ours hung the picture, user 2026-11-02)
-      // (the first answer: the records startLive asked for with the boot tape or the join, the same request)
-      const f0 = L.first;
-      L.first = null;
-      const f = f0 && !L.moved ? await f0 : null;
-      const r = f ? { ok: true, status: 200, headers: { get: () => f.ext }, arrayBuffer: async () => f.bytes }
-        : L.moved ? { ok: false, status: 404 } : await liveFetch(`${LIVE}/live/${L.id}/rec?from=${L.info.game}&since=${L.since}&v=${VIEWER}` +
-        (L.info.match ? `&match=${encodeURIComponent(L.info.match)}` : ''),
-        AbortSignal.timeout ? { signal: AbortSignal.timeout(5000) } : undefined);
-      if (r.ok && session === s) liveExtSet(L.id, r.headers.get('X-Live-Ext'));
-      // (a 404 is the bridge saying the capture or game is not there: its capture closed (the match over) or the host's
-      // id is on another match now: no data, so the stream reads as quiet, not an outage. Was: every 404 restarted the
-      // quiet clock, so a session whose match had left the bridge never read as dry and sat frozen)
-      if (!r.ok && r.status !== 404) L.failAt = performance.now();
-      // (404 with the match still ours on the list: after a bridge restart: the list check below)
-      if (r.status === 404 && !L.moved && !f) L.noGameAt ??= performance.now(); else if (r.ok) L.noGameAt = null;
-      if (r.ok) {
-        const b = new Uint8Array(await r.arrayBuffer());
-        // (every answer repeats the newest index whole: new data = a later index or a longer answer, else the stream is
-        // quiet, which the dry check below needs to see)
-        const last = b.length ? liveLastIndex(b) : -1;
-        if (b.length && (last !== L.since || b.length !== L.recLen)) L.dataAt = performance.now();
-        L.recLen = b.length;
-        if (b.length && session === s) {
-          swMark('records', true, L.id);
-          liveKeep(L, b);
-          liveFeed(s, b);
-          liveRematch(s, b);
-          liveCssChoice(s, b);
-          L.since = liveLastIndex(b);
-        }
-      }
-    } catch (e) { L.failAt = performance.now(); console.warn('live feed:', e); }
-    if (session !== s) return;
-    liveTapes(s);
-    let ahead = call(s, 'viewer_spectate_buffered');
-    // how long the feed has been up and brought nothing new (a failed or timed-out request starts it again: an outage
-    // is not the stream going quiet. Was: one 10 s hung request read as "the stream is dry", and with the next game
-    // not prepared yet the session was restarted from the list, the streak lost: real1 t=1857)
-    const quietFor = performance.now() - Math.max(L.dataAt ?? (L.dataAt = performance.now()), L.failAt ?? -1e9);
-    // a Skippable index whose frames ran out, the feed up and quiet 3 s: the players at the result screen (its last
-    // frames and the retry menu come with their choice): the game goes on to the win quote (spectate.cpp spectate_ready)
-    // (set as soon as the feed is quiet, not once the buffer is low: the game uses it only where the index's frames have
-    // run out, and a session LIVE_BEHIND behind gets there after the 3 s, where waiting for the next poll to see the
-    // low buffer froze the win pose up to a second)
-    const quietSkip = call(s, 'viewer_spectate_quiet', s.liveFollow && quietFor > 3000 ? 1 : 0) === 1 && quietFor > 3000;
-    if (s.tl && !s.seeking) s.tl.est = s.M._viewer_frame() + ahead;  // the timeline reaches the newest frame received
-    // the buffer's floor over the last LIVE_WIN polls: what the catch-up decisions go by. The stream is bursty: each
-    // poll brings ~60 frames at once, and at every round end the host's stream runs ahead (its KO / win pose: ~1.2 s of
-    // input messages at twice the rate, ~60-110 frames over real time) then pauses (~1.5 s with no frames while it loads
-    // the next round), so the buffer swings ~+100 / -90 frames there and settles back. Judged by the newest sample, the
-    // burst set off the 2x fast-forward (and could set off the unrendered jump) right on the KO: a visible hiccup before
-    // the win pose (artifacts/xz_check/live_end). A real backlog (a hidden tab, a slow machine, a load) raises the floor too.
-    const hist = s.liveAheadHist || (s.liveAheadHist = []);
-    hist.push(ahead);
-    if (hist.length > LIVE_WIN) hist.shift();
-    const floor = Math.min(...hist);
-    // the game is over (or, following live, its stream has gone quiet: the players left at the win quote, which CCCaster's
-    // spectators never see end): the match's next game, another match when this one has left the list, or wait
-    const over = call(s, 'viewer_ended') || L.next;
-    const dry = s.liveFollow && ahead < 15 && quietFor > 6000;
-    // (following, the list is also read every 5 s for a game the session has not reached: below)
-    // (every second outside a battle: the result menu, a character select, a load, where the next game's setup comes)
-    // (2 s: each viewer's requests are the feed's 1/s plus this; the list is not rate limited, but every request is a
-    // Worker request)
-    const listEvery = over || s.M.HEAP32[0x54EEE8 >> 2] !== 1 ? 2000 : 5000;
-    // (watching back: once its picture has reached the stream's newest frame too, the end is looked for there. Was: only
-    // following, so a viewer watching back never read the list and never saw the match end: match_end_follow_check)
-    if ((over || dry || s.liveFollow || ahead < 15) && performance.now() - (L.listAt || -1e9) > listEvery) {
-      L.listAt = performance.now();
-      try {
-        const l = await liveList(), now = l.find(m => m.id === L.id);
-        if (session !== s) return;
-        // OUR match on the list. A live id is the host's (cc_live.mjs liveId: a hash of its address), not the match's:
-        // when a set ends and the same host starts another (a new opponent), the id comes back on the list as that
-        // match, with its own match key and game numbers from 2 again. Never our next game: our match is over (user
-        // 2026-11-01: Counsel's set with tigre ended, Counsel hosted Inf20 on the same id; the page left, came back to
-        // it, and showed the next-match card there)
-        const mine = now && liveOurs(now, L) ? now : null, t = performance.now();
-        if (now && !mine) L.moved = true;  // (the host on another match: nothing more of ours comes; the poll stops asking)
-        // The end, from evidence that holds up (a list read missing an entry or a host poll that failed is not an end;
-        // nor is a quiet stream: players at a result screen): the stream has nothing more for us (ended, or the buffer
-        // run down and no new data for 6 s; a 404 feed counts as no data) AND the list has said so: the host is in
-        // another match (at once), the list's silent / idle (liveGone: the host's keep-alives stopped) on 3 reads over
-        // 5 s, or the match missing from it for 30 s (the bridge's capture closes 30 s after the host goes silent; not
-        // while the feed was just down: a restarted bridge re-joins its hosts). Was: one read missing it with the
-        // stream quiet showed the card (and its countdown left the match), whatever the reason
-        const endSign = !mine || liveGone(mine);
-        if (!endSign) { L.endAt = null; L.endReads = 0; }
-        else { if (L.endAt == null) L.endAt = t; L.endReads = (L.endReads || 0) + 1; }
-        const streamOver = over || (ahead < 15 && quietFor > 6000);
-        const ended = streamOver && endSign && (!!now && !mine ||
-          (mine ? L.endReads >= 3 && t - L.endAt > 5000 : !liveNet.recent() && t - L.endAt > 30000));
-        if (endSign && !L.endSaid) {
-          L.endSaid = true;
-          slogAdd('live', now && !mine ? `the host is on another match (${liveName(now)}): ours is over` : mine ? `the list has the match silent ${mine.silent} s / idle ${mine.age} s` : 'the match is not on the list');
-        }
-        if (!endSign) L.endSaid = false;
-        // The bridge restarted mid-set: its new capture of our match holds the games from its own join on, so our
-        // records (asked from the game this session started on, from=L.info.game) are a 404 'no such game' for good
-        // while the list still has our match. Index numbers are the host's, so the rule below (mine.index < L.since)
-        // never fires there, and a rematch (same setup) waited for that stream forever (user 2026-11-09: the page sat
-        // at the result screen after a restart). 3 s of 404s with our match listed: start again on its current game.
-        if (mine && L.noGameAt != null && t - L.noGameAt > 3000 && (s.liveFollow || over || ahead < 15) && liveNet.recent()) {
-          console.warn(`live: the feed has no game ${L.info.game} any more (the bridge re-joined the match): starting again on game ${mine.game}`);
-          return startLive(L.id, L.info.match);
-        }
-        if (mine && (over || dry) && mine.index < L.since && liveNet.recent()) {
-          return startLive(L.id, L.info.match);  // (after a restart: the bridge's new capture of the match, numbered from its own join)
-        } else if (ended && !s.liveFollow && (ui.paused || !(call(s, 'viewer_ended') || ahead < 15))) {
-          // (watching back (a seek, a chat timestamp, a step): the card once the picture has played to the end (the game
-          // over, or the stream's last frames played: a spectator's game waits there, never ends), unless paused. Was:
-          // never, so a viewer who had clicked a chat timestamp stayed on the ended match for good: part of the audience
-          // lost at every match end, user 2026-11-03. The poll goes on meanwhile (was: a return, which stopped it: the
-          // end was never looked at again)
-          L.backEnded = true;
-        } else if (ended) {
-          // (the next one: the card's countdown with jump to live on, else the card to pick from; or its wait for one)
-          status('the match has ended');
-          slogAdd('live', 'the match has ended: the next-match card');
-          nextCardShow(s, l, 'Match over');
-          nextCard.why = null;
-          return;
-        }
-        else if (mine && mine.game !== L.info.game) {
-          // the session goes on into the players' next game itself (retry menu, character select, loading; after a
-          // character select its load checks the picks against the stream's setup: liveLoaderGate). A newer game on the
-          // list it has not reached: prepared in the background at once (liveNextPrep), and switched to (liveSwitch) when
-          // the session is not getting there: still at the result / retry menu or the win quote 5 s after the list
-          // showed it (a rematch's menu takes ~1-2 s after the choice), or not there by the time its frames to it have played (+3 s). (Before: a fresh start 30 s after
-          // the list showed it, the page sitting on the result menu or the select meanwhile.)
-          const g0 = call(s, 'viewer_spectate_game'), g = g0 >= 0 ? g0 : L.info.game;  // (-1: still the first)
-          const behind = g < mine.game, scene = s.M.HEAP32[0x54EEE8 >> 2];
-          if (L.seenGame !== mine.game) { L.seenGame = mine.game; L.seenGameAt = t; L.haveAt = null; L.stuckAt = null; L.lostSaid = false; }
-          // the stream as received has the new game (its Loading index): from then on the session should be getting there
-          if (L.haveAt == null && L.since >= mine.game) { L.haveAt = t; L.haveAhead = ahead; }
-          if (behind && s.liveFollow) liveNextPrep(s, mine.game, mine).catch(e => console.warn(`live: game ${mine.game} not prepared:`, e.message));
-          const p = behind ? livePrepOf(s, mine.game) : null;
-          const stuckScene = behind && (call(s, 'viewer_spectate_in_retry') || scene === SCENE_WIN);
-          if (!stuckScene) L.stuckAt = null; else if (L.stuckAt == null) L.stuckAt = t;
-          // LOST: our game did not follow a stream it has: the new game's records received, and the session still at the
-          // result / retry menu or the win quote 5 s after both, or not in it by the time those frames played (+3 s). Keyed on
-          // the records received, not on the list (the list is ahead of a feed that stalled: real1 t=1857)
-          // (+ LIVE_BEHIND: the retry menu takes the players' choice that long after it arrived, viewer_spectate_delay)
-          const H = L.haveAt, D = 1000 * LIVE_BEHIND / 60;
-          const lost = liveJump() && behind && H != null &&
-            ((stuckScene && t - Math.max(L.stuckAt, H) > 5000 + D) || t - H > 1000 * (L.haveAhead / 60 + 3) + D);
-          // a rematch (the players' setup unchanged) is followed by the session itself, never switched: only once it has
-          // ended (the end of a replayed stream)
-          // (not at a character select or the load after one: there the picks decide, and the load checks them)
-          const same = p && scene !== 20 && call(s, 'viewer_spectate_next_game') === g0 && liveSameSetup(s, p.setup);
-          if (lost && s.liveFollow && !over && !L.lostSaid) {
-            L.lostSaid = true;
-            console.warn(`live: the list is on game ${mine.game}, this session still on ${g} (scene ${scene}): ` +
-              (same ? 'the same setup: waiting for it' : p ? 'switching' : 'preparing it'));
-          }
-          // (a quiet stream on the game the session is on is the players at its result menu, not an end: nothing to
-          // start; restarting that game there replayed it from its start on every long result screen)
-          // Only ever forward: to a game of this match newer than the session's (behind). Was: a session whose game had
-          // ended (over) restarted the list's game whatever it was, the one being watched included (the same game again
-          // from its start)
-          if (s.liveFollow && behind && (over || ((dry || lost) && !same))) {
-            if (p) return liveSwitch(s, p);
-            // (no prepared game: the plain start, once the session is over, or 30 s after the list showed the game)
-            if (over || t - L.seenGameAt > 30000) return startLive(L.id, L.info.match);
-          }
-          if (!s.liveFollow && behind) {
-            L.next = true;  // (DVR: stays on this game; LIVE goes to the current one)
-            status('live: watching back; the next game is on (LIVE to join it)');
-          }
-        }
-      } catch (e) {}
-    }
-    if (over) {
-    } else if (s.liveFollow) {
-      // pace: LIVE_BEHIND frames behind the newest frame received. At the join (the stream starts at the game's start)
-      // and whenever the buffer's floor is more than 10 s over (a hidden tab, a slow machine, a load) it jumps
-      // there, unrendered as a seek ("jump to live" off: no jump, the game from its start); then normal speed, stalling
-      // only when the stream runs dry (until 2 s are buffered again)
-      if (ahead > 0) s.liveSynced = true;
-      // after an update reload: back where the page was (as many frames short of the stream's newest as then; the
-      // stream grown meanwhile: that much later), unrendered, whatever jump to live is (liveResumeTake)
-      if (s.liveResumeN != null && s.liveSynced && !s.seeking && !s.cssHeld && !s.loadHeld) {
-        const n = ahead - s.liveResumeN;
-        s.liveResumeN = null;
-        if (n > 0) {
-          slogAdd('live', `back where the page was before the update: ${n} frames on`);
-          await liveCatchUp(s, n);
-          if (session !== s) return;
-          ahead = call(s, 'viewer_spectate_buffered');
-          hist.length = 0; hist.push(ahead); s.liveJoined = true;
-        }
-      }
-      // (timing: each poll between the first records and the catch-up, what the jump waits on)
-      if (sw && sw.id === L.id && sw.marks.records != null && sw.marks.cuStart == null && (sw.polls || (sw.polls = [])).length < 12)
-        sw.polls.push({ t: Math.round(performance.now() - sw.t0), ahead, floor, synced: !!s.liveSynced, css: !!s.cssHeld, load: !!s.loadHeld,
-                        retry: call(s, 'viewer_spectate_in_retry'), seeking: !!s.seeking });
-      // (the jump only while the engine's loop runs: a covered window's browser runs no animation frames, and jumping
-      // its stalled session to live every ~17 s only spent the CPU of the game in front of it)
-      const tkNow = s.M._viewer_tick_count() >>> 0, looping = tkNow !== s.pollTk;
-      s.pollTk = tkNow;
-      if (s.liveSynced && liveJump() && !hidden() && looping && !s.cssHeld && !s.loadHeld && !call(s, 'viewer_spectate_in_retry')) {
-        // (the stream grows while the jump runs: again until it is close)
-        // (at the join: a jump past 2 s over; later only a real backlog, 10 s over the floor: a hidden tab, a load. The
-        // stream also drifts ahead ~1-2 s over a few round ends, the host's transitions being shorter than ours: the
-        // fast-forward below takes that up, rendered, where a jump cut the sound and skipped the picture at a round end)
-        const jumpOver = s.liveJoined ? 600 : 120;
-        s.liveJoined = true;
-        for (let k = 0; k < 4 && Math.min(ahead, floor) > LIVE_BEHIND + jumpOver && !s.seeking; ++k) {
-          await liveCatchUp(s, ahead - LIVE_BEHIND);
-          if (session !== s) return;
-          ahead = call(s, 'viewer_spectate_buffered');
-          hist.length = 0; hist.push(ahead);  // (the floor starts again from where the jump landed)
-        }
-      }
-      if (s.liveSynced && !s.seeking && !s.livePic) { s.livePic = true; swMark('picture'); if (s.cssBgGo) s.cssBgGo(); }  // (no catch-up: drawn as it plays)
-      // the link card's picture (tools/web/cc_live.mjs): a fight on screen (4 s into the battle scene: past its fade-in;
-      // not mid-jump, not dark), as soon as there is one, then every 2 minutes
-      const battle = s.M.HEAP32[0x54EEE8 >> 2] === 1;
-      if (!battle) s.battleAt = null;
-      else if (s.battleAt == null) s.battleAt = performance.now();
-      const due = liveExt.thumbDue, extNow = due != null && performance.now() >= due;
-      // (cardDark reads the canvas back, a GPU stall of 40-80 ms on a phone: only once the picture is due, never per poll)
-      if (s.liveSynced && battle && !hidden() && !s.seeking && performance.now() - s.battleAt > 4000
-          && (extNow || (due == null && performance.now() - (s.liveThumbAt || -1e9) > 120000)) && liveClipCan() && !cardDark()) {
-        // (signed in only: the bridge takes link-card pictures from signed-in viewers alone (AUDIT_1107 F-06); a guest's
-        // POST was a 401 in its console)
-        s.liveThumbAt = performance.now(); liveExt.thumbDue = null;
-        // (ext: the extension this frame shows; the bridge keeps a frame of the match's current one over an older one's. In the
-        // query, not a header: a custom header would need a CORS preflight the bridge does not answer)
-        grabCard().jpeg.then(b => b && fetch(`${LIVE}/live/${L.id}/thumb?ext=${encodeURIComponent(liveExt.v || '')}`,
-          { method: 'POST', body: b }).catch(() => {}));
-      }
-      // (not at the retry menu: it has no stream frames to count, the players' choice comes when they make it, and
-      // CCCaster's spectator never waits there: the game shows the win quote meanwhile)
-      // (starved: the game waited for the stream since the last poll, in a battle. ahead is read just after the poll's
-      // data went in, so at the stream's edge it was never low here: the game ran dry between polls, ~0.5 s of every
-      // second frozen, and the hold that builds 2 s back up never came on)
-      slogWatch(s);  // (here too: a stalled game steps no frames, so the frame hook never runs)
-      const heldNow = call(s, 'viewer_spectate_held'), starved = heldNow > s.liveHeldSeen && s.M.HEAP32[0x54EEE8 >> 2] === 1;
-      s.liveHeldSeen = heldNow;
-      // (nor in the last win pose once the players' retry menu choice is in: the game plays the pose out, the win quote
-      // and the menu without the stream. Its few frames left read as a low buffer and held the pose ~3 s while the next
-      // game's frames built 2 s up: the freeze on the WINNER banner, artifacts/xz_check/live_winscreen after_css_gpu)
-      const hold = !call(s, 'viewer_spectate_in_retry') && !quietSkip && !call(s, 'viewer_spectate_match_end') &&
-        (ahead < 15 || starved || (s.liveHeld && ahead < 120));
-      s.liveHeld = hold;
-      call(s, 'viewer_pause', hold || ui.paused || s.seeking ? 1 : 0);
-      // up to the jump (or without it): CCCaster's spectateFastFwd, more than 60 frames (2 x NUM_INPUTS) over the kept
-      // buffer (its floor: not a burst), two game frames per drawn frame until caught up
-      // Pacing: the stream drifts slowly ahead (~1-2 frames a second: each stall's time is not made up). Up to 3 s over
-      // the target it is taken up unseen, the clock at 1.05x (63 game frames a second) from 0.5 s over until back on
-      // target; 2x (CCCaster's spectateFastFwd, with its badge) only for a real backlog past that. (2x from 1 s over
-      // flashed "2x catching up" every 30-40 s all match: artifacts/xz_check/live_catchup)
-      const excess = Math.min(ahead, floor) - LIVE_BEHIND;
-      if (s.liveSynced && !s.seeking && ahead <= LIVE_BEHIND + 90 && ahead > 0) {
-        if (sw && sw.marks.frame == null) swMark('frame', true, L.id);
-        swMark('live', true, L.id);
-        if (!s.cardLive) { s.cardLive = true; cardDraw(); }  // (the engine's data from here: redrawn only where they differ)
-      }
-      const ff = !hold && excess > 180;
-      const trim = !hold && !ff && (excess > 30 || (s.liveTrim && excess > 0));
-      if (trim !== !!s.liveTrim) { s.liveTrim = trim; call(s, 'viewer_rate', trim ? 1.05 : 1); }
-      if (ff !== !!s.liveFF) { s.liveFF = ff; call(s, 'viewer_speed', ff ? 2 : ui.speed); }
-      { const b = document.getElementById('ffbadge'); if (b) b.hidden = !ff; }
-      // (a switch's time to live: the click to the session caught up and paced near LIVE_BEHIND (no 2x fast-forward,
-      // excess within 180 frames); window.__mbaaSwitchTimes, newest last; a switch back to a kept match: also
-      // __mbaaSwitchBack.live)
-      if (s.swClick != null && s.swLive == null && s.liveSynced && !s.seeking && !hold && ahead >= 15 && !ff && (!s.swBack || s.swBack.caught)) {
-        s.swLive = performance.now();
-        if (s.swBack) { s.swBack.live = s.swLive; s.swBack.liveAhead = ahead; }
-        const a = window.__mbaaSwitchTimes || (window.__mbaaSwitchTimes = []);
-        a.push({ id: L.id, back: !!s.swBack, ms: Math.round(s.swLive - s.swClick), frame: s.M._viewer_frame() });
-        if (a.length > 20) a.shift();
-      }
-      if (s.cssHeld || s.loadHeld) status('live: loading the next game');
-      else status(hold ? `live: waiting for the stream (${(ahead / 60).toFixed(1)} s buffered)`
-                  : `live: ${(ahead / 60).toFixed(1)} s behind the players` + (ff ? ' (catching up)' : ''));
-    } else if (!s.seeking) {
-      status(L.backEnded ? 'the match has ended (watching back: the next match once this one has played out)'
-                         : `live: watching back, ${(ahead / 60).toFixed(0)} s behind (LIVE to catch up)`);
-    }
-    wTimeout(poll, liveNet.delay());
-  };
-  poll();
 }
 // The next live match once the one watched is over (it left the list, or its host went quiet or idle 5 min: players
 // waiting at the result screen are not an end): a card over the picture, "Next: A vs B" with a NEXT_SECS countdown, Go now /
@@ -5666,7 +3662,8 @@ async function shareThumb(id, f, shots) {
 // the picture only in the task that presented it. A reader at any other time presents the frame again first (the same
 // picture, with the comments of now)
 function canvasNow() {
-  if (session && session.M && session.M._viewer_represent) try { session.M._viewer_represent(); } catch (e) {}
+  // (composed now, in the reader's task: the canvas is not preserved; viewer_present_now)
+  if (session && session.M && session.M._viewer_present_now) try { session.M._viewer_present_now(); } catch (e) {}
   return document.getElementById('canvas');
 }
 function cardDark() {
@@ -5773,17 +3770,7 @@ function setPaused(p) {
   if (!s.seeking) uiApply(s);
 }
 const curFrame = () => session ? (session.tl && session.tl.want !== null ? session.tl.want : session.M._viewer_frame()) : 0;
-function stepBy(n, pause = true) {
-  if (!session || !session.tl) return Promise.resolve();
-  if (session.liveSrc && session.liveFollow) liveFollow(session, false);
-  if (pause && !ui.paused) setPaused(true);
-  if (n === 1 && session.tl.want === null && !session.tl.running) {  // one frame forward: just step
-    call(session, 'viewer_step', 1);
-    overlayDirty = true;
-    return Promise.resolve();
-  }
-  return requestSeek(curFrame() + n);
-}
+let stepBy;  // (the engine worker's: set by the worker block below)
 window.__mbaaSession = () => session;  // tests
 window.__mbaaSeek = T => requestSeek(T);  // tests
 window.__mbaaMisses = () => [...misses];  // tests (freed files the game opened again; bundle files not fetched)
@@ -5949,25 +3936,15 @@ function fbClear(s) {
   if (!fb.raw) { fb.raw = new Int32Array(FB_CAP * FB_N); fb.tag = new Int32Array(FB_CAP); }
   fb.tag.fill(-1);
 }
-// Module.mbaaFrame (every game frame, also a seek's re-simulation) while the bar is on
-function fbSample(s, f) {
-  const M = s.M;
-  if (!M._viewer_framebar_sample) return;
+// frame f's sample R (FB_N values) into the bar (the engine worker's samples come to the page's bar here)
+function fbPut(s, f, R) {
   if (fb.s !== s) fbClear(s);
-  const p = M._viewer_framebar_sample() >> 2, i = f % FB_CAP;
-  fb.raw.set(M.HEAP32.subarray(p, p + FB_N), i * FB_N);
+  const i = f % FB_CAP;
+  fb.raw.set(R, i * FB_N);
   fb.tag[i] = f;
   if (f === fb.procF + 1 && !fb.rebuild) { fbStep(fb.m, fb.raw, i * FB_N); fb.procF = f; }
   else fb.rebuild = true;
   fb.last = f; fb.dirty = true;
-}
-// a seek to T: how much further back its re-simulation should start for the bar (0: the frames before T are kept)
-const FB_BACK = 180;
-function fbSeekBack(T) {
-  if (!fb.on) return 0;
-  if (!fb.tag || fb.s !== session) return FB_BACK;
-  for (let f = Math.max(0, T - FB_BACK); f < T; f++) if (fb.tag[f % FB_CAP] !== f) return FB_BACK;
-  return 0;
 }
 // after a seek: the bar again from the kept frames up to the one shown
 function fbRebuild() {
@@ -6172,7 +4149,10 @@ function uiLoop() {
   if (s && s.tl) {
     const t = s.tl, f = s.M._viewer_frame(), max = tlMax(t);
     clipTick(s, f);
-    if (rec) { try { recTick(s, f); } catch (e) { recFail(e); } }
+    if (rec && !s.remote) { try { recTick(s, f); } catch (e) { recFail(e); } }
+    // (the engine worker's recording: its frames drawn as they come (recFrame); stopped here as recTick stops the
+    // page's: another session, or the replay ended at the last frame drawn (no more frames will come to stop it))
+    else if (rec && s.remote && (rec.s !== s || (t.end !== null && rec.last >= t.end))) stopRecording(rec.s === s);
     const seek = document.getElementById('seek');
     // (the slider spans the timeline's view: the whole replay, or zoomed in while clipping, tlView)
     const { lo, hi } = tlView(s, max), span = Math.max(1, hi - lo);
@@ -6542,7 +4522,7 @@ if (Q.get('perf') === 'hud') (() => {
 // sampled frame and the one after it are left out of the frame statistics. Then a summary (percentiles, per-part means, GPU string, DPR, sizes, 3D tier / light) on a
 // panel: download it as JSON (with the per-frame rows), or send it (a button: opt-in) to the bridge's diag log
 // (/live/<id>/diag, why 'perf': no address, no names). window.__mbaaProf: start(secs), stop(), summary(), frames().
-if (Q.get('perf') === '1') (() => {
+function perfProfiler(host) {
   const WAIT = Q.get('perfwait') || 'battle', GPU_MODE = /^(fence|off)$/.test(Q.get('perfgpu') || '') ? Q.get('perfgpu') : 'sync';
   const GPU_N = Math.max(5, +(Q.get('perfgpuN') || 30));
   let SECS = Math.max(2, Math.min(120, +(Q.get('perfsecs') || 10)));
@@ -6616,6 +4596,8 @@ if (Q.get('perf') === '1') (() => {
   function glFind() {
     const M = session && session.M;
     if (!M || M === glM || !M.canvas || !M._viewer_frame || !(M._viewer_frame() > 0)) return;
+    // (the WebGPU backend: its own counters stand in for the wrapped calls (boundary); no GPU samples)
+    if (M.__wg) { glM = M; gl = null; gpuStr = ('webgpu ' + (M.__wg.info || '')).slice(0, 120); gpuVendor = ''; return; }
     const g = M.canvas.getContext('webgl2');
     if (!g) return;
     glM = M; gl = g; wrapGl(g);
@@ -6624,8 +4606,9 @@ if (Q.get('perf') === '1') (() => {
   let frameT = -1, prevT = -1, t0 = 0, g0 = { tot: 0, draws: 0, fb: 0, fbSw: 0, upN: 0, upB: 0 }, byStart = null;
   const ENG_PARTS = ['simMs', 'renderMs', 'submitMs', 'bgExtMs', 'lightMs', 'glowPx', 'specPx', 'tagged'];
   let lastPS = null, lastM = null, lastTickN = -1, lastF = -1, lastCl = null, gpuCount = 0, skipNext = false, pend = null, longs = [], lo = null, startedAt = 0;
-  const P = window.__mbaaProf = { on: false, done: false, mode: GPU_MODE };
+  const P = { on: false, done: false, mode: GPU_MODE };
   function boundary(t) {
+    if (glM && glM.__wg) { const w = glM.__wg.st; G.tot = w.api; G.draws = w.draws; G.fb = G.fbSw = w.passes; G.upN = w.uploads + w.bufUploads; G.upB = w.uploadBytes; }
     if (P.on && frameT >= 0) {
       A[C.t] = frameT - t0; A[C.iv] = prevT >= 0 ? frameT - prevT : 0;
       A[C.gl] = G.tot - g0.tot; A[C.draws] = G.draws - g0.draws; A[C.fbBind] = G.fb - g0.fb; A[C.fbSwitch] = G.fbSw - g0.fbSw;
@@ -6648,7 +4631,7 @@ if (Q.get('perf') === '1') (() => {
   let battleSince = 0;
   function autoStart(t) {
     const M = session && session.M;
-    if (!M || !gl || document.hidden) { battleSince = 0; return; }
+    if (!M || !glM || host.hidden()) { battleSince = 0; return; }
     // (battle: steady play, not a live join's 2x catch-up, a hold or a seek, for 3 s)
     const s = session, ok = WAIT === '0' ? M._viewer_frame() > 0
       : M.HEAP32[0x54EEE8 >> 2] === 1 && !s.liveFF && !s.seeking && !s.liveHeld && !s.loadHeld && !s.cssHeld && !(typeof ui !== 'undefined' && ui.paused);
@@ -6712,8 +4695,8 @@ if (Q.get('perf') === '1') (() => {
   mc.port1.onmessage = fencePoll;
   // window.requestAnimationFrame wrapped (profiler mode only): each callback timed; Emscripten's main loop (MainLoop_runner)
   // is the engine
-  const rafOrig = window.requestAnimationFrame.bind(window);
-  window.requestAnimationFrame = cb => rafOrig(t => {
+  const rafOrig = self.requestAnimationFrame.bind(self);
+  self.requestAnimationFrame = cb => rafOrig(t => {
     if (t !== frameT) boundary(t);
     if (cb.name !== 'MainLoop_runner') {
       const a = performance.now();
@@ -6741,14 +4724,14 @@ if (Q.get('perf') === '1') (() => {
     fenceOut.ok = fenceOut.timeout = fenceOut.failed = 0;
     try { lo = new PerformanceObserver(l => { for (const e of l.getEntries()) if (longs.length < 2000) longs.push([e.startTime - t0, e.duration]); }); lo.observe({ type: 'longtask' }); } catch (e) { lo = null; }
     P.on = true; P.done = false; P.sum = null;
-    panel(`perf: recording ${SECS} s…`);
+    host.panel(`perf: recording ${SECS} s…`, P);
   }
   function finish() {
     if (!P.on) return;
     P.on = false; P.done = true;
     if (lo) { try { lo.disconnect(); } catch (e) {} lo = null; }
     P.sum = summary();
-    panelResult(P.sum);
+    host.result(P.sum, { columns: COLS, frames: frames(), longTasks: longs }, P);
   }
   // ---- summary ----
   const r2 = v => v == null || !isFinite(v) ? null : Math.round(v * 100) / 100;
@@ -6776,13 +4759,9 @@ if (Q.get('perf') === '1') (() => {
       (e ? ept : pt)[e ? k.slice(7) : k] = stat(Array.from(a.subarray(0, n)).filter((v, i) => e ? eng(i) : hooked(i)));
     }
     let tex = null; try { tex = h && h.stats ? h.stats().texBytes : null; } catch (e) {}
-    const ua = navigator.userAgent;
     return {
       v: 1, kind: 'mbaa-frame-profile', at: new Date(startedAt).toISOString(), secs: r2(secs), frames: n,
-      page: { browser: (ua.match(/(Firefox|Edg|OPR|SamsungBrowser|Chrome|Version)\/[\d.]+/) || [''])[0], os: (ua.match(/\(([^)]*)\)/) || ['', ''])[1].slice(0, 80),
-        mobile: PHONE, dpr: devicePixelRatio, screen: [screen.width, screen.height], canvas: cv ? [cv.width, cv.height] : null,
-        css: cv ? [cv.clientWidth, cv.clientHeight] : null, cores: navigator.hardwareConcurrency || null, mem: navigator.deviceMemory || null,
-        lowmem: !!LOWMEM, live: !!(session && session.liveSrc), paused: !!(typeof ui !== 'undefined' && ui.paused) },
+      page: host.page(cv),
       gpu: { renderer: gpuStr, vendor: gpuVendor, timerQuery: timerQ },
       stage: { scene: M ? M.HEAP32[0x54EEE8 >> 2] : null, s3d: !!h, tier: h && h.tier ? h.tier : null, s3dq, xlight,
         light: h && h.light ? h.light.mode : 0, texMB: tex ? r2(tex / 1048576) : null },
@@ -6811,7 +4790,21 @@ if (Q.get('perf') === '1') (() => {
     for (let i = 0; i < n; i++) { const r = {}; for (let k = 0; k < NC; k++) r[COLS[k]] = r2(D[i * NC + k]); for (const [k, a] of parts) r[k] = r2(a[i]); rows.push(r); }
     return rows;
   }
-  // ---- the panel: a result to read, download, or send (opt-in) ----
+  P.start = start; P.stop = finish; P.summary = () => P.sum || (n ? summary() : null); P.frames = frames;
+  if (WAIT !== 'manual') host.panel(WAIT === '0' ? 'perf: waiting for the game' : 'perf: waiting for a battle', P);
+  return P;
+}
+// the profiler's page side: the page's facts in the summary (the engine worker's canvas size), and the panel: a result
+// to read, download, or send (opt-in). The engine's rAF runs in the engine worker (engine.js runs perfProfiler, its
+// panel / result posted here)
+function perfPageInfo(cv, size) {
+  const ua = navigator.userAgent;
+  return { browser: (ua.match(/(Firefox|Edg|OPR|SamsungBrowser|Chrome|Version)\/[\d.]+/) || [''])[0], os: (ua.match(/\(([^)]*)\)/) || ['', ''])[1].slice(0, 80),
+    mobile: PHONE, dpr: devicePixelRatio, screen: [screen.width, screen.height], canvas: size || (cv ? [cv.width, cv.height] : null),
+    css: cv ? [cv.clientWidth, cv.clientHeight] : null, cores: navigator.hardwareConcurrency || null, mem: navigator.deviceMemory || null,
+    lowmem: !!LOWMEM, live: !!(session && session.liveSrc), paused: !!(typeof ui !== 'undefined' && ui.paused) };
+}
+function perfPanel() {
   let el = null;
   function panel(text) {
     if (!el) {
@@ -6823,7 +4816,7 @@ if (Q.get('perf') === '1') (() => {
     el.textContent = text;
     return el;
   }
-  function panelResult(s) {
+  function panelResult(s, dl, P) {
     const f = (o, k = 'p50') => o ? o[k] : '-';
     const lines = [
       `perf ${s.secs} s, ${s.frames} frames: display ${s.display.fps} fps, >20 ms ${Math.round((s.display.over20 || 0) * 100)}%, rAF p95 ${f(s.display.iv, 'p95')} ms`,
@@ -6837,7 +4830,7 @@ if (Q.get('perf') === '1') (() => {
     const btn = (t, fn) => { const b = document.createElement('button'); b.textContent = t; b.style.cssText = 'margin:4px 6px 0 0;font:11px ui-monospace,monospace'; b.onclick = fn; el.append(document.createElement('wbr'), b); return b; };
     el.append('\n');
     btn('download JSON', () => {
-      const blob = new Blob([JSON.stringify({ summary: s, columns: COLS, frames: frames(), longTasks: longs }, null, 1)], { type: 'application/json' });
+      const blob = new Blob([JSON.stringify({ summary: s, columns: dl.columns, frames: dl.frames, longTasks: dl.longTasks }, null, 1)], { type: 'application/json' });
       const a = Object.assign(document.createElement('a'), { href: URL.createObjectURL(blob), download: `mbaa_perf_${s.at.replace(/[:.]/g, '-')}.json` });
       document.body.append(a); a.click(); a.remove(); setTimeout(() => URL.revokeObjectURL(a.href), 5000);
     });
@@ -6849,12 +4842,11 @@ if (Q.get('perf') === '1') (() => {
         sb.textContent = r.ok ? 'sent ✓' : `not sent (${r.status}): download it instead`;
       } catch (e) { sb.textContent = 'not sent: download it instead'; }
     });
-    btn('again', () => start());
+    btn('again', () => P.start());
     btn('×', () => { el.remove(); el = null; });
   }
-  P.start = start; P.stop = finish; P.summary = () => P.sum || (n ? summary() : null); P.frames = frames;
-  if (WAIT !== 'manual') panel(WAIT === '0' ? 'perf: waiting for the game' : 'perf: waiting for a battle');
-})();
+  return { hidden: () => document.hidden, page: cv => perfPageInfo(cv), panel: t => panel(t), result: panelResult };
+}
 window.__mbaaPerf = () => {
   const M = session.M, n = call(session, 'viewer_perf_count'), p = call(session, 'viewer_perf_data');
   return Array.from(M.HEAPF64.subarray(p / 8, p / 8 + n));
@@ -6877,7 +4869,7 @@ const MOVIE = 'dat/dat_m_vs.vsmv';
 // the lossless file (32 MB: the picture matches CE exactly), or in low-memory mode (phones) the 2 MB H.264 copy of it
 // (tools/web/vsmovie/vsmovie_h264.py; lossy), decoded by movieVideo
 const MOVIE_H264 = 'dat/dat_m_vs.vsmh';
-let movieBytes = null, movieH264 = null, movieLoading = null;
+let movieBytes = null, movieH264 = null, movieLoading = null, movieHook = null;
 // (user 2026-11-03: "the vs movie is missing on our site, just black": the 32 MB file was fetched once the match was already
 // running, so over the network the first VS screen (~10 s in a replay, ~0.5 s live) was over before it came. Now it is
 // fetched as soon as a match starts loading, and on desktop the 2 MB H.264 copy plays first (here in ~1 s) until the
@@ -6891,6 +4883,7 @@ function movieLoad() {
       if (!fh) return;
       if (!(await movieCanH264())) throw new Error('this browser cannot decode the H.264 movie (WebCodecs)');
       movieH264 = await movieGet(fh);
+      if (movieHook) return movieHook();
       if (session) session.M.mbaaMovieVideo = movieVideo(movieH264);
       return;
     }
@@ -6900,11 +4893,13 @@ function movieLoad() {
       const b = await movieGet(fh);
       if (movieBytes) return;  // (the lossless one came first)
       movieH264 = b;
+      if (movieHook) return movieHook();
       if (session && !session.M.mbaaMovie) session.M.mbaaMovieVideo = movieVideo(b);
     })().catch(e => console.warn('VS movie (H.264):', e));
     movieBytes = await movieGet(fl);
     movieH264 = null;
-    if (session) { session.M.mbaaMovie = movieBytes; delete session.M.mbaaMovieVideo; }
+    if (movieHook) { movieHook(); await quick; return; }
+    if (session) { session.M.mbaaMovie = movieBytes; if (session.M.mbaaMovieVideo) session.M.mbaaMovieVideo.close(); delete session.M.mbaaMovieVideo; }
     await quick;
   })().catch(e => { movieLoading = null; console.warn('VS movie:', e); });
   return movieLoading;
@@ -6946,6 +4941,14 @@ function movieVideo(b) {
       }
       if (next === n && sent.length && !flushed) { flushed = true; dec.flush().catch(() => {}); }  // (the last frames out)
       return have.get(f) || null;
+    },
+    // (an instance dropped (a new one for a lost picture, a replay not reusing it): its decoded frames closed, not left
+    // to the garbage collector, which Chrome warns stalls the decoder)
+    close() {
+      for (const fr of have.values()) fr.close();
+      have.clear(); sent = [];
+      if (dec && dec.state !== 'closed') try { dec.close(); } catch (e) {}
+      dec = null;
     },
   };
 }
@@ -7055,21 +5058,7 @@ async function start(file, quiet = false, liveId = null) {
   else if (want) cachePrune(new Set([...want, ...(cssBg || [])]));  // the last match: the previous one's files go
   if (cssBg && session && session.liveSrc) liveCssBg(session, cssBg);
 }
-// (live) the select screen's files in the background; until they are in MEMFS the game is held on reaching the result
-// screen (scene 5) or the retry menu, where the next select may follow (a match lasts minutes: in practice never held)
-function liveCssBg(s, paths) {
-  s.cssBgReady = false;
-  // (not while the join's catch-up runs: ~80 MB read, decrypted and stored competed with it for the main thread in
-  // every task turn it gives, a third of a phone's catch-up time. Started at its end (cuDone), on the first poll that
-  // needs none, at a hold (liveCssWatch: the game at a result screen or select wanting them), or 20 s on)
-  let go;
-  const gate = new Promise(r => { go = r; });
-  s.cssBgGo = () => { if (go) { const g = go; go = null; g(); } };
-  s.cssBgP = gate.then(() => fetchAll(man, paths, '', true))
-    .then(() => { if (session !== s) return; liveInstall(s, paths); s.cssBgReady = true; if (s.cssBgHeld) { s.cssBgHeld = false; liveHoldApply(s); } })
-    .catch(e => { console.warn('live: select screen files:', e); if (session === s) { s.cssBgP = null; s.cssBgHeld = false; liveHoldApply(s); } });
-  if (s.livePic) s.cssBgGo(); else setTimeout(s.cssBgGo, 20000);
-}
+let liveCssBg;  // (the engine worker's: set by the worker block below)
 // ---- playlist: several replays played back to back (each from round 1); the next one's files load during play ----
 async function prefetch(it, cur) {
   try {
@@ -8062,6 +6051,11 @@ async function fastExport(s, c, vcfg, acfg) {
   setPaused(true);
   const hooks = ['mbaaVoicePlay', 'mbaaVoiceParam', 'mbaaVoiceStop', 'mbaaBgmStart', 'mbaaBgmStop'], orig = {};
   const cv = document.getElementById('canvas'), keep = { w: cv.width, h: cv.height };
+  // (the engine in its worker: it steps, the frames come over as VideoFrames, its sound calls into the page's hooks)
+  const EW = s.remote && window.__mbaaEngine, HM = EW ? s.SM : M;
+  let exF = M._viewer_frame();
+  const frameNow = () => (EW ? exF : M._viewer_frame());
+  const exTake = r => { exF = r.frame; if (r.sfx && r.sfx.length) EW.sfx(s, r.sfx); if (r.boxes) EW.st = { ...EW.st, frame: r.frame, boxes: r.boxes, inputs: r.inputs }; return r; };
   let venc = null, sized = false;
   const pinned = ovNative && M._viewer_ov_wall_pin;
   try {
@@ -8090,19 +6084,22 @@ async function fastExport(s, c, vcfg, acfg) {
     });
     // the sound events of every stepped frame, with the frame they happen in
     const ev = [];
-    for (const h of hooks) { orig[h] = M[h]; M[h] = (...a) => { ev.push([M._viewer_frame(), h, ...a]); return orig[h](...a); }; }
+    for (const h of hooks) { orig[h] = HM[h]; HM[h] = (...a) => { ev.push([HM._viewer_frame(), h, ...a]); return orig[h](...a); }; }
     // the pre-roll: simulated for its sounds, nothing drawn
     let q = performance.now();
-    call(s, 'viewer_suppress', 1);
-    try {
-      for (let k = M._viewer_frame(); k < c.a; k++) {
-        const k0 = M._viewer_frame();
-        call(s, 'viewer_step', 1);
-        if (M._viewer_frame() === k0) break;
-      }
-    } finally { call(s, 'viewer_suppress', 0); }
+    if (EW) { exF = EW.st ? EW.st.frame : exF; exTake(await EW.cmd('exportPreroll', { to: c.a })); }
+    else {
+      call(s, 'viewer_suppress', 1);
+      try {
+        for (let k = M._viewer_frame(); k < c.a; k++) {
+          const k0 = M._viewer_frame();
+          call(s, 'viewer_step', 1);
+          if (M._viewer_frame() === k0) break;
+        }
+      } finally { call(s, 'viewer_suppress', 0); }
+    }
     P.preroll = performance.now() - q;
-    if (M._viewer_frame() !== c.a) throw new Error(`the pre-roll ended at frame ${M._viewer_frame()}, not ${c.a}`);
+    if (frameNow() !== c.a) throw new Error(`the pre-roll ended at frame ${frameNow()}, not ${c.a}`);
     const over = () => ui.boxes || ui.inputs || (clipChat && !clipNative);
     // Firefox reads a WebGL canvas back slowly (a 1920x1440 VideoFrame: ~24 ms a frame, 0.4x real time in all): there the
     // canvas stays at the game's own 640x480, each frame is read at that size (a ninth of the pixels) and scaled up here
@@ -8111,8 +6108,8 @@ async function fastExport(s, c, vcfg, acfg) {
     const rd = Q.get('exportRead'), S = W / 640;
     const upRead = (rd === 'up' || (rd !== 'canvas' && IS_FIREFOX)) && !ovNative && !over() && Number.isInteger(S) && S >= 1;
     let upSrc = null, upDst = null, upFmt = null;
-    const upFrame = (ts, dur) => {
-      const f = new VideoFrame(cv, { timestamp: ts, duration: dur, alpha: 'discard' });
+    const upFrame = (ts, dur, from) => {
+      const f = new VideoFrame(from || cv, { timestamp: ts, duration: dur, alpha: 'discard' });
       try {
         const fw = f.codedWidth, fh = f.codedHeight;
         if (fw !== 640 || fh !== 480 || !/^(RGB|BGR)[AX]$/.test(f.format || '')) throw new Error(`frame ${fw}x${fh} ${f.format}`);
@@ -8129,7 +6126,8 @@ async function fastExport(s, c, vcfg, acfg) {
       }
       return new VideoFrame(d, { format: upFmt, codedWidth: W, codedHeight: H, timestamp: ts, duration: dur });
     };
-    if (upRead) { cv.width = 640; cv.height = 480; sized = true; }
+    if (EW) { await EW.cmd('exportBegin', upRead ? { w: 640, h: 480 } : { w: W, h: H }); sized = true; if (!upRead && M._viewer_ov_canvas) M._viewer_ov_canvas(W, H); }
+    else if (upRead) { cv.width = 640; cv.height = 480; sized = true; }
     else {
       cv.width = W; cv.height = H; sized = true;
       if (M._viewer_ov_canvas) M._viewer_ov_canvas(W, H);
@@ -8139,25 +6137,28 @@ async function fastExport(s, c, vcfg, acfg) {
     for (let k = c.a; k < c.b; k++) {
       if (fx.cancel || session !== s) throw new Error('cancelled');
       if (encErr) throw encErr;
-      const k0 = M._viewer_frame();
+      const k0 = frameNow();
       // (the renderer's wall clock, which the name styles' gradient and the emotes' frames run on, pinned to the frame's
       // own time: the clip page's clock (mbaaNameFx), so every export of a range animates alike)
       if (ovNative) { M._viewer_ov_clock((k0 + 1) / 60); if (pinned) M._viewer_ov_wall_pin((k0 + 1) / 60); }
       q = performance.now();
-      call(s, 'viewer_step', 1);
+      let wf = null;
+      if (EW) wf = exTake(await EW.cmd('exportStep')).vf;
+      else call(s, 'viewer_step', 1);
       P.step += performance.now() - q;
-      if (M._viewer_frame() === k0) break;  // the end of the replay (or of the live stream received)
+      if (frameNow() === k0) break;  // the end of the replay (or of the live stream received)
       q = performance.now();
-      let src = cv;
+      let src = wf || cv;
       if (over()) {  // the hitboxes / inputs painted over a copy, at the video's size (crisp)
         if (!out) { out = document.createElement('canvas'); out.width = W; out.height = H; g = out.getContext('2d', { alpha: false }); }
-        g.drawImage(cv, 0, 0);
+        g.drawImage(wf || cv, 0, 0);
         paintOverlay(g, W, H, W / 960);
         src = out;
       }
       P.copy += performance.now() - q; q = performance.now();
       const ts = Math.round((k - c.a) * 1e6 / 60), dur = Math.round(1e6 / 60);
-      const vf = upRead ? upFrame(ts, dur) : new VideoFrame(src, { timestamp: ts, duration: dur, alpha: 'discard' });
+      const vf = upRead ? upFrame(ts, dur, wf) : new VideoFrame(src, { timestamp: ts, duration: dur, alpha: 'discard' });
+      if (wf) wf.close();
       P.vframe += performance.now() - q; q = performance.now();
       venc.encode(vf, { keyFrame: (k - c.a) % 120 === 0 }); vf.close(); nIn++;
       P.encode += performance.now() - q; q = performance.now();
@@ -8174,7 +6175,7 @@ async function fastExport(s, c, vcfg, acfg) {
       }
     }
     P.loop = performance.now() - t0;
-    for (const h of hooks) M[h] = orig[h];
+    for (const h of hooks) HM[h] = orig[h];
     q = performance.now();
     exportProgress(true, 0.95, 'Saving MP4: finishing the video');
     await venc.flush(); venc.close();
@@ -8222,10 +6223,11 @@ async function fastExport(s, c, vcfg, acfg) {
     if (e.message !== 'cancelled') throw e;
     status('export cancelled');
   } finally {
-    for (const h of hooks) if (orig[h]) M[h] = orig[h];
+    for (const h of hooks) if (orig[h]) HM[h] = orig[h];
     if (venc && venc.state !== 'closed') try { venc.close(); } catch (e) {}
     if (pinned) M._viewer_ov_wall_pin(-1);
-    if (sized) {  // the canvas back at its own size, the picture on it again
+    if (sized && EW) await EW.cmd('exportEnd');
+    else if (sized) {  // the canvas back at its own size, the picture on it again
       cv.width = keep.w; cv.height = keep.h;
       if (M._viewer_ov_canvas) M._viewer_ov_canvas(keep.w, keep.h);
       if (M._viewer_represent) M._viewer_represent();
@@ -8330,16 +6332,19 @@ async function exportRealtime(s, c) {
   mr.onerror = e => recFail(e.error || e);
   if (s.M._viewer_ov_on) s.M._viewer_ov_on(0);  // (the chat's comments stay out of the video)
   rec = { s, a: c.a, b: c.b, round: !!c.round, mr, g, out, dest, chunks, type, last: -1, save: true,
-          speed: ui.speed, track: stream.getVideoTracks()[0], frames: 0 };
+          speed: ui.speed, track: stream.getVideoTracks()[0], frames: 0, vf: null };
   if (ui.speed !== 1) call(s, 'viewer_speed', 1);
   document.getElementById('clipexp').classList.add('on');
-  recDraw();
+  // (each game frame drawn once, by recTick: the page's frames from uiLoop; the engine worker's as it posts them, a
+  // VideoFrame of each frame it shows (recFrame), from the clip's first)
+  if (s.remote) window.__mbaaEngine.w.postMessage({ cmd: 'rec', on: true });
+  else { recDraw(); rec.last = s.M._viewer_frame(); }  // (the clip's first frame, now: before the game moves on)
   setPaused(false);
 }
 function recDraw() {
   const r = rec;
   const W = r.out.width, H = r.out.height;
-  r.g.imageSmoothingEnabled = false; r.g.drawImage(canvasNow(), 0, 0, W, H);
+  r.g.imageSmoothingEnabled = false; r.g.drawImage(r.s.remote ? r.vf : canvasNow(), 0, 0, W, H);
   if (ui.boxes || ui.inputs || (clipChat && !clipNative)) paintOverlay(r.g, W, H, W / 960);
   if (r.track.requestFrame) r.track.requestFrame();
   r.frames++;
@@ -8364,6 +6369,7 @@ function stopRecording(save) {
   const r = rec;
   if (!r) return;
   rec = null;
+  if (r.s.remote && window.__mbaaEngine.w) window.__mbaaEngine.w.postMessage({ cmd: 'rec', on: false });
   if (window.mbaaOvSync) window.mbaaOvSync();
   setPaused(true);
   if (ui.speed !== 1 && session === r.s) call(r.s, 'viewer_speed', ui.speed);
@@ -8708,7 +6714,7 @@ async function main() {
     man = JSON.parse(new TextDecoder().decode(await openObject(await r.arrayBuffer())));
     bootMark('manifest');
     stagePanelLoad().catch(e => console.warn('stage panel:', e));
-    engineWarm();  // (the engine boots while the page shows its list / the match's files come in)
+    if (PREWARM) __mbaaEngine.start();  // (the engine worker boots its instance while the page shows its list / the match's files come in)
     if (!PREWARM && liveListLast) livePreloadAll(liveListLast.l);   // (no prewarm: the live matches' files now)
     if (!man.plan) await fetchAll(man, Object.keys(man.files), 'assets');  // a bundle without a plan: everything
   }
@@ -8760,6 +6766,547 @@ async function main() {
     start(file);
   }
 }
+// ---- the engine in a worker (WORKER_PLAN.md; the only path since phase 5) ----
+// engine.js (web/shell/engine_core.js + the statements of this file it shares, tools/web/emit_engine.mjs) runs the module, session, timeline and seeking on its own
+// thread, drawing into #canvas as an OffscreenCanvas. The page keeps a session view: its M answers the page's reads
+// from the worker's per-frame state and sends every ccall over (setters), so the page's code runs unchanged.
+// The owner's background tool (a private panel on the page, loaded for the owner only): what it sets runs where the game
+// module is (engine.js), the panel reaches it through window.__mbaaLab. c (labApply): {words: Int32Array, the words of g_lab (web/host/stage_lab.cpp: camera, lights, per-object
+// patches; Module.__labSync copies them in once a frame), void: the battle picture cleared magenta (Module.__labVoid),
+// set: {sid, set} the stage values for a live extension's stage (self.__mbaaLabSet)} | null (closed: nothing changes a
+// draw). While open the radio swap's deferred coding is off (Module.mbaaRadioDefer 0: a redraw is a seek, a keyframe
+// restore from before the stage came in brings it back whole on the re-simulation's first tick)
+let labCfg = null, labOn = null;
+function labApply(c) {
+  labCfg = c || null;
+  self.__mbaaLabSet = c && c.set ? c.set : null;
+  labAttach();
+}
+function labAttach() {
+  const m = session && session.M;
+  if (labOn && labOn !== m) { try { delete labOn.__labSync; labOn.__labVoid = 0; labOn.mbaaRadioDefer = labOn.__labDefer; delete labOn.__labDefer; } catch (e) {} labOn = null; }
+  if (!m) return;
+  if (labCfg) {
+    if (labOn !== m) { m.__labDefer = m.mbaaRadioDefer; m.mbaaRadioDefer = 0; }
+    const w = labCfg.words;
+    m.__labSync = ptr => { if (w) m.HEAP32.set(w, ptr >> 2); };
+    m.__labVoid = labCfg.void ? 1 : 0; labOn = m;
+  } else if (labOn === m) { delete m.__labSync; m.__labVoid = 0; m.mbaaRadioDefer = m.__labDefer; delete m.__labDefer; labOn = null; }
+}
+// what the tool reads: the stage file's objects as expanded in the engine's memory (g_BGMakeFileData: header + offsets
+// + objects; what is drawn now), and a live extension's stage on screen (self.__mbaaLabStage: its id, own settings)
+function labInfo() {
+  const m = session && session.M, objs = [];
+  if (m && m.HEAPU8 && !m.__remote) {
+    const U8 = m.HEAPU8, dv = new DataView(U8.buffer), fd = dv.getUint32(0x750830, true);
+    for (let i = 0; fd && i < 256; i++) {
+      const off = dv.getInt32(fd + 0x54 + 4 * i, true);
+      if (off === -1 || off < 0 || off > 0x4000000) continue;
+      const h = fd + off, n = dv.getUint32(h, true);
+      if (n > 4096) continue;
+      const f0 = h + 0x3C;
+      objs.push({ i, n, parX: dv.getInt16(h + 4, true), layer: dv.getUint32(h + 8, true), parYraw: dv.getInt16(h + 0x18, true),
+                  scale: dv.getUint16(h + 0x20, true) / 1000 || 1, sprite: dv.getUint16(f0, true), x: dv.getInt16(f0 + 2, true), y: dv.getInt16(f0 + 4, true),
+                  react: U8[h + 0x1A] === 1 });
+    }
+  }
+  return { stage: self.__mbaaLabStage || null, objs };
+}
+window.__mbaaLab = { set: c => labApply(c), info: () => labInfo() };
+// the engine worker (engine.js): the page's side of it
+(() => {
+  const E = window.__mbaaEngine = { w: null, st: null, ready: null, n: 0, waits: new Map(), sent: new Set(), errors: [] };
+  E.up = new Promise(r => { E.upGo = r; });  // (the page started the worker (engStart), after its manifest: init carries it)
+  const wasmV = () => ((document.querySelector('script[src^="mbaa.js"]') || {}).src || '').split('?')[1] || '';
+  E.start = () => engStart();
+  function engStart() {
+    if (E.ready) return E.ready;
+    const c = freshCanvas(), off = c.transferControlToOffscreen();
+    // (the page's query on the worker's own address: the module reads its options (gpu=, capture=, nos3tc=...) from
+    // location.search, which in a worker is the worker script's)
+    E.w = new Worker('engine.js' + (location.search ? `${location.search}&` : '?') + `ev=${wasmV()}&to=${performance.timeOrigin}`);
+    E.w.onerror = e => { E.errors.push(String(e.message || e)); console.error('engine:', e.message || e); };
+    E.w.onmessage = e => engMsg(e.data);
+    E.ready = new Promise(r => { E.readyGo = r; });
+    E.upGo();
+    const ls = {};
+    try { for (const k of ['s3dq', 'xlight']) { const v = localStorage.getItem(k); if (v !== null) ls[k] = v; } } catch (e) {}
+    E.w.postMessage({ cmd: 'init', off, search: location.search, wasmV: wasmV(), man, ui: { ...ui }, lowmem: LOWMEM, swKeep: SW_KEEP, fbOn: fb.on, ls, live: LIVE, page: pageNow() }, [off]);
+    if (document.visibilityState === 'hidden') visSend();  // (a page started hidden: its clock from the start)
+    return E.ready;
+  }
+  // (the page's state the worker's live code reads: jump to live, the tab hidden, signed in)
+  function pageNow() { let jump = true; try { jump = liveJump(); } catch (e) {} return { jump, hidden: hidden(), clip: liveClipCan() }; }
+  let pageSent = '';
+  function pageSync() { if (!E.w) return; const p = pageNow(), k = JSON.stringify(p); if (k !== pageSent) { pageSent = k; E.w.postMessage({ cmd: 'page', page: p }); } }
+  document.addEventListener('visibilitychange', pageSync);
+  const cmd = (c, x = {}) => { const id = ++E.n; E.w.postMessage({ cmd: c, id, ...x }); return new Promise(r => E.waits.set(id, r)); };
+  // (asked: the worker's needFiles, every one sent again: it may have freed its copy (freeLoaded) and asks for it back,
+  // a seek to before the match's load on a phone: those were skipped as sent, and the seek gave up)
+  function sendFiles(paths, id, asked = false) {
+    const list = [], tr = [];
+    for (const p of paths) { const d = cache.get(p); if (!d || (!asked && E.sent.has(p))) continue; const b = d.slice(); list.push([p, b]); tr.push(b.buffer); E.sent.add(p); }
+    E.w.postMessage({ cmd: 'files', id, list }, tr);
+  }
+  function engMsg(d) {
+    if (d.st) {
+      // (the page's frame bus once per game frame the worker shows, as the page engine's Module.mbaaFrame runs it: the
+      // pop-out's frames (pipTick), the chat's name effects, the bar; was the bus's 60-a-second timer alone, and the
+      // picture-in-picture window got ~16 frames a second)
+      const moved = d.st.frame !== E.busF;
+      E.st = d.st; E.busF = d.st.frame;
+      if (moved && !d.st.seeking && !d.st.cu && session && session.remote) { const now = performance.now(); if (now - frameBusAt > 4) frameBusRun(now); }
+      const s = session;
+      if (s && s.remote) {
+        if (d.st.tl) { s.tl = Object.assign(s.tl || { marks: [], kfs: [], fights: [], seekMs: [] }, d.st.tl, { marks: d.st.marksList || (s.tl && s.tl.marks) || [] }); s.tl.kfs = { length: d.st.tl.kfs }; }
+        s.seeking = d.st.seeking;
+        const v = d.st.live;
+        if (v && s.liveSrc) {  // (the worker's live session, as the page's code reads it)
+          if (v.cardLive && !s.cardLive) { s.cardLive = true; }
+          Object.assign(s, { liveFollow: v.follow, liveSynced: v.synced, streakKnown: v.streakKnown, liveHeld: v.held, liveFF: v.ff });
+          s.liveSrc.next = v.next;
+          if (v.switchTimes) window.__mbaaSwitchTimes = v.switchTimes;
+          if (v.snapJoin) window.__mbaaSnapJoin = v.snapJoin;
+          if (v.switchBack) window.__mbaaSwitchBack = v.switchBack;
+        }
+      }
+      pageSync();
+      return;
+    }
+    if (d.id && E.waits.has(d.id)) { E.waits.get(d.id)(d); E.waits.delete(d.id); }
+    switch (d.ev) {
+      case 'ready': E.readyGo(); break;
+      case 'sfx': if (session && session.remote) sfxPlay(session, d.q); break;
+      case 'fb': if (session && session.remote && fb.on) for (let j = 0; j < d.f.length; j++) fbPut(session, d.f[j], d.raw.subarray(j * FB_N, (j + 1) * FB_N)); break;
+      case 'status': status(d.t); break;
+      case 'loading': loading(d.on); break;
+      case 'catchUp': catchUpShow(d.left, d.total); break;
+      case 'bootMark': bootMark(d.k); if (d.k === 'warm' && liveListLast) livePreloadAll(liveListLast.l); break;  // (the live matches' files after the engine's boot)
+      case 'swMark': swMark(d.k, d.first, d.id); break;
+      case 'paused': ui.paused = d.p; document.querySelector('#pause .i').className = `i ${d.p ? 'i-play' : 'i-pause'}`; break;
+      case 'toggleLoop': toggleLoop(); break;
+      case 'startItem': startItem(d.i); break;
+      case 'needFiles': fetchAll(man, new Set(d.paths), d.label, d.quiet).then(() => sendFiles(d.paths, d.id, true)); break;
+      case 'played': window.__mbaaStarted = d.started; break;
+      case 'perf': perfMsg(d); break;
+      case 'rs': {  // (the renderer's profiler ring: the records the worker sent, at their places in the page's copy)
+        let R = E.rs;
+        if (!R || R.inst !== d.inst) { const b = new ArrayBuffer(d.N * d.W * 4); R = E.rs = { inst: d.inst, N: d.N, W: d.W, ring: new Uint32Array(b), F: new Float32Array(b), t: new Float64Array(d.N), seq: 0 }; }
+        for (let j = 0, s = d.from; s < d.seq; s++, j++) { R.ring.set(d.ring.subarray(j * d.W, (j + 1) * d.W), (s % R.N) * R.W); R.t[s % R.N] = d.t[j]; }
+        Object.assign(R, { seq: d.seq, on: d.on, timer: d.timer, backend: d.backend });
+        break;
+      }
+      case 'hashDone': if (d.misses) window.mbaaPlanMisses = d.misses; hashDone(d.name, d.h); break;
+      case 'planMisses': window.mbaaPlanMisses = d.l || undefined; break;
+      case 'kept': keptGot(d.k); break;
+      case 'needMovie': movieLoad(); break;
+      case 'needCanvas': { E.canvases = (E.canvases || 0) + 1; const off = freshCanvas().transferControlToOffscreen(); E.w.postMessage({ cmd: 'offscreen', id: d.id, off }, [off]); break; }
+      case 'annDefaultLoad': annDefaultLoad(); break;
+      case 'ovColors': E.ov.col.set(d.gid, d.c); if (E.ov.col.size > 64) E.ov.col.delete(E.ov.col.keys().next().value); break;
+      case 'xfGrab': { const id = d.id; xfGrab(() => E.xfDone.delete(id), d.max); break; }
+      case 'xfDone': E.xfDone.add(d.id); break;
+      // (exportRealtime: each frame the engine shows, with its boxes / inputs for the overlay; drawn at the page's next
+      // animation frame, all that came in order: drawn as they arrived, the page's copy held the worker's next frame
+      // up (358-449 of 600 recorded; 519-520 so))
+      case 'recFrame': {
+        const s = session;
+        if (!rec || rec.s !== s) { d.vf.close(); break; }
+        const r = rec;
+        (r.pend = r.pend || []).push(d);
+        if (r.pend.length === 1) requestAnimationFrame(() => {
+          for (const x of r.pend.splice(0)) {
+            if (rec === r) {
+              // (the overlay of this frame: its boxes / inputs for recDraw's paintOverlay, the latest state put back)
+              const st0 = E.st, st1 = E.st = { ...E.st, frame: x.f, boxes: x.boxes, inputs: x.inputs };
+              r.vf = x.vf;
+              try { recTick(s, x.f); } catch (e) { recFail(e); }
+              if (E.st === st1) E.st = st0;
+              r.vf = null;
+            }
+            x.vf.close();
+          }
+        });
+        break;
+      }
+      case 'extSetLocal': liveExtApi.setLocal(d.v); break;
+      case 'lab': E.lab = d.info; break;
+      case 'extApi':  // (the extension's music / announcer / stage card, from the worker: its tokens to the page's)
+        if (d.o) E.extTok.set(d.wtok, liveExtApi[d.kind](d.o));
+        else { liveExtApi[d.kind](null, E.extTok.get(d.wtok)); E.extTok.delete(d.wtok); }
+        break;
+      case 'error': E.errors.push(`${d.cmd}: ${d.msg}`); console.error(`engine ${d.cmd}:`, d.msg); break;
+      // ---- live (the worker's liveBegin poll): the page's halves ----
+      case 'liveNet': Object.assign(liveNet, { fails: d.fails, notice: d.notice, troubleAt: d.trouble }); liveNoticeShow(); break;
+      case 'liveList': liveListGot(d.l); break;
+      case 'livePreStart': livePreStart(); break;
+      case 'liveExtSet': liveExtSet(d.id, d.v); break;
+      case 'nextCard': if (session && session.remote) { nextCardShow(session, d.l, d.why); nextCard.why = null; } break;
+      case 'startLive': startLive(d.id, d.match); break;
+      case 'liveSwitch': if (session && session.remote && session.liveSrc) liveSwitch(session, { rep: d.rep, info: d.info, game: d.game }); break;
+      case 'liveThumb': if (session && session.remote && session.liveSrc) liveThumb(session, session.liveSrc); break;
+      case 'ffBadge': ffBadge(d.on); break;
+      case 'liveFollowUi': liveFollowUi(d.on); break;
+      case 'bannerPage': bannerPage(d.ys, d.names, d.key); break;
+      case 'cardDraw': cardDraw(); break;
+      case 'slog': slogAdd(d.e, d.d); break;
+      case 'slogSend': slogSend(session, d.why); break;
+      case 'liveRecs': if (session && session.remote && session.liveSrc) liveKeep(session.liveSrc, d.b); break;
+      case 'liveTape': if (session && session.remote && session.liveSrc) liveTapeTake(session, d.g, d.t); break;
+    }
+  }
+  // the game's sound calls, replayed into the page's audioHooks (its own stand-in module: the frame and stage of each
+  // call, the files from the page's cache)
+  function soundM() {
+    const SM = { cur: [0, 0] };
+    SM._viewer_frame = () => SM.cur[0];
+    SM.HEAP32 = new Proxy({}, { get: (t, k) => (+k === 0x74FD98 >> 2 ? SM.cur[1] : 0) });
+    SM.FS = { readFile: p => {
+      const k = String(p).replace(/\\/g, '/').replace(/^\/game\//, '').replace(/^(\.\/)+/, '');
+      const d = cache.get(k) || cache.get(k.toLowerCase());
+      if (!d) { (E.sndMiss = E.sndMiss || []).push(k); throw new Error('no such file: ' + k); }
+      return d;
+    } };
+    return SM;
+  }
+  function sfxPlay(s, q) {
+    const SM = s.SM;
+    E.sfxN = (E.sfxN || 0) + q.length; (E.sfxKinds = E.sfxKinds || {});
+    for (const e of q) E.sfxKinds[e[3]] = (E.sfxKinds[e[3]] || 0) + 1;
+    for (const [k, stage, mute, ev, ...a] of q) {
+      SM.cur = [k, stage]; s.mute = mute || ui.paused;
+      if (ev === 'play') SM.mbaaVoicePlay(...a);
+      else if (ev === 'param') SM.mbaaVoiceParam(...a);
+      else if (ev === 'stop') SM.mbaaVoiceStop(...a);
+      else if (ev === 'bgmStop') SM.mbaaBgmStop();
+      else if (ev === 'bgmStart') SM.mbaaBgmStart(...a);
+      else if (ev === 'stopSes') s.stopSes();
+      else if (ev === 'bgmHalt') s.bgmHalt(a[0]);
+      else if (ev === 'bgmSync') { s.bgmLog = a[1]; s.bgmSync(a[0]); }
+    }
+  }
+  // the session's module, seen from the page: reads from the posted state, every call sent over
+  const GET = { viewer_frame: () => (E.st ? E.st.frame : 0), viewer_ended: () => (E.st ? E.st.ended : 0) };
+  // (memory: the worker's mirror of the addresses the page reads; an address read for the first time is asked for and
+  // reads 0 until the next frame's state; the overlay's boxes / inputs arrays stand at two pretend addresses)
+  const BOXES = 0x40000000, INPUTS = 0x50000000;
+  function peek(key) {
+    const v = E.st && E.st.peek ? E.st.peek[key] : undefined;
+    if (v === undefined) { if (!E.peekAsked.has(key)) { E.peekAsked.add(key); E.w.postMessage({ cmd: 'peek', keys: [key] }); } return 0; }
+    return v;
+  }
+  E.peekAsked = new Set();
+  // ---- the comment overlay (chat.js glov) on the worker's renderer: its calls in order; buffers it writes staged
+  // (viewer_ov_buf's code points, _malloc'd font bytes: the worker writes them into its own memory first); what it asks
+  // answered here: ov_has / ov_measure from the same font bytes (stbtt's cmap + hmtx, its f32 sums), ov_colors (the
+  // health check) from the worker's answer to the last asking ----
+  const OVBUF = 0x60000000, MEM0 = 0x70000000, f32 = Math.fround;
+  E.ov = { cps: new Uint32Array(0), faces: [null, null, null, null], mem: new Map(), memN: 0, col: new Map(), colBuf: new ArrayBuffer(24) };
+  function ttf(b) {
+    const dv = new DataView(b.buffer, b.byteOffset, b.byteLength), u16 = o => dv.getUint16(o), s16 = o => dv.getInt16(o), u32 = o => dv.getUint32(o);
+    const T = {};
+    for (let i = 0, n = u16(4); i < n; i++) T[String.fromCharCode(...b.subarray(12 + 16 * i, 16 + 16 * i))] = u32(12 + 16 * i + 8);
+    if (T.head === undefined || T.hhea === undefined || T.hmtx === undefined || T.cmap === undefined) return null;
+    let idx = 0;  // (stbtt_InitFont: the last Microsoft Unicode BMP / full or Unicode-platform subtable)
+    for (let i = 0, n = u16(T.cmap + 2); i < n; i++) {
+      const r = T.cmap + 4 + 8 * i, pl = u16(r), en = u16(r + 2);
+      if ((pl === 3 && (en === 1 || en === 10)) || pl === 0) idx = T.cmap + u32(r + 4);
+    }
+    const nLong = u16(T.hhea + 34), hm = T.hmtx;
+    const glyph = cp => {  // stbtt_FindGlyphIndex
+      if (!idx) return 0;
+      const fmt = u16(idx);
+      if (fmt === 0) { const len = u16(idx + 2); return cp < len - 6 ? b[idx + 6 + cp] : 0; }
+      if (fmt === 6) { const first = u16(idx + 6), cnt = u16(idx + 8); return cp >= first && cp < first + cnt ? u16(idx + 10 + (cp - first) * 2) : 0; }
+      if (fmt === 4) {
+        if (cp > 0xffff) return 0;
+        const seg = u16(idx + 6) >> 1; let range = u16(idx + 8) >> 1, sel = u16(idx + 10); const shift = u16(idx + 12) >> 1;
+        const endc = idx + 14; let se = endc;
+        if (cp >= u16(se + shift * 2)) se += shift * 2;
+        se -= 2;
+        while (sel) { range >>= 1; if (cp > u16(se + range * 2)) se += range * 2; --sel; }
+        se += 2;
+        const item = (se - endc) >> 1, start = u16(idx + 14 + seg * 2 + 2 + 2 * item), last = u16(endc + 2 * item);
+        if (cp < start || cp > last) return 0;
+        const off = u16(idx + 14 + seg * 6 + 2 + 2 * item);
+        if (off === 0) return (cp + s16(idx + 14 + seg * 4 + 2 + 2 * item)) & 0xffff;
+        return u16(off + (cp - start) * 2 + idx + 14 + seg * 6 + 2 + 2 * item);
+      }
+      if (fmt === 12 || fmt === 13) {
+        let lo = 0, hi = u32(idx + 12);
+        while (lo < hi) {
+          const mid = lo + ((hi - lo) >> 1), g = idx + 16 + mid * 12, st = u32(g), en = u32(g + 4);
+          if (cp < st) hi = mid; else if (cp > en) lo = mid + 1; else return fmt === 12 ? u32(g + 8) + cp - st : u32(g + 8);
+        }
+      }
+      return 0;
+    };
+    const adv = cp => { const g = glyph(cp); return u16(hm + 4 * (g < nLong ? g : nLong - 1)); };
+    return { glyph, adv, upem: f32(1 / f32(1 / u16(T.head + 18))) };
+  }
+  // overlay_gl.cpp viewer_ov_measure_face, in f32 as there
+  function ovMeasure(M, n, px, f) {
+    const F0 = E.ov.faces[0];
+    if (!F0) return 0;
+    px = f32(px);
+    const fi = f > 0 && f < 4 && E.ov.faces[f] ? f : 0, F = E.ov.faces[fi], sc = f32(px / F.upem);
+    let w = f32(0);
+    for (let i = 0; i < n; i++) {
+      const cp = E.ov.cps[i];
+      if (cp >= 0x180000 && cp < 0x200000) {
+        let r = 0; try { r = M.mbaaOvRunW ? +M.mbaaOvRunW(cp - 0x180000, px, fi) : 0; } catch (e) {}
+        w = f32(w + f32(r > 0 && r < 1e5 ? r : 0)); continue;
+      }
+      if (cp >= 0x100000) {
+        let a = 0; try { a = M.mbaaOvEmoAr ? +M.mbaaOvEmoAr(cp - 0x100000) || 0 : 0; } catch (e) {}
+        const ar = a > 0.05 && a < 20 ? f32(a) : 0, B0 = f32(Math.ceil(f32(px * f32(1.25))));
+        w = f32(w + (ar > 0 ? f32(Math.round(f32(B0 * Math.min(1, ar)))) : px)); continue;
+      }
+      const f0 = fi === 3 && !F.glyph(cp);
+      w = f32(w + f32((f0 ? F0 : F).adv(cp) * (f0 ? f32(px / F0.upem) : sc)));
+    }
+    return w;
+  }
+  function remoteM() {
+    const heap = (kind, size) => new Proxy({}, { get: (t, k) => {
+      if (k === 'subarray' || k === 'slice') return (a, b) => {
+        const src = a === BOXES >> 2 ? E.st && E.st.boxes : a === INPUTS >> 2 ? E.st && E.st.inputs : null;
+        if (src) return src.subarray(0, b - a);
+        const o = new (kind === 'i' ? Int32Array : Uint8Array)(b - a); for (let i = 0; i < o.length; i++) o[i] = peek(`${kind}:${(a + i) * size}`); return o;
+      };
+      if (k === 'length') return 0x7fffffff;
+      if (k === 'buffer') return E.ov.colBuf;
+      if (k === 'set') return (arr, off = 0) => {  // (staged writes: the code point buffer, _malloc'd bytes)
+        if (kind === 'u' && off === OVBUF >> 2) { E.ov.cps = Uint32Array.from(arr); E.w.postMessage({ cmd: 'ovbuf', cps: E.ov.cps }); }
+        else if (kind === 'b' && E.ov.mem.has(off)) { const b = Uint8Array.from(arr); E.ov.mem.set(off, b); E.w.postMessage({ cmd: 'mem', p: off, b }); }
+      };
+      return typeof k === 'string' && /^\d+$/.test(k) ? peek(`${kind}:${+k * size}`) : undefined;
+    } });
+    const base = {
+      HEAP32: heap('i', 4), HEAPU8: heap('b', 1), HEAPU32: heap('u', 4), __remote: true,
+      mbaaMemGen: 0,  // (the worker sets its comment renderer up again itself after a memory restore: engOvReplay)
+      get __wg() { return E.st && E.st.backend === 1 ? { remote: true } : undefined; },
+      _viewer_ov_count: () => (E.st ? E.st.ovn : 0),
+      _malloc: n => { const p = MEM0 + (++E.ov.memN) * 16; E.ov.mem.set(p, null); return p; },
+      _free: p => { if (E.ov.mem.delete(p)) E.w.postMessage({ cmd: 'memFree', p }); },
+      _viewer_ov_buf: () => OVBUF,
+      _viewer_ov_font_face(f, p, len) { const b = E.ov.mem.get(p); if (b) E.ov.faces[f] = ttf(b); E.w.postMessage({ cmd: 'fn', f: '_viewer_ov_font_face', a: [f, p, len] }); },
+      _viewer_ov_font(p, len) { this._viewer_ov_font_face(0, p, len); },
+      _viewer_ov_has: cp => (E.st && E.st.ovf === 0 ? 0 : E.ov.faces[0] && E.ov.faces[0].glyph(cp) ? 1 : 0),
+      _viewer_ov_measure_face(n, px, f) { return ovMeasure(this, n, px, f); },
+      _viewer_ov_measure(n, px) { return ovMeasure(this, n, px, 0); },
+      _viewer_ov_colors: id => {  // (the worker's answer when it has one for id, else found; asked again)
+        const c = E.ov.col.get(id), o = new Float64Array(E.ov.colBuf);
+        if (c) o.set(c); else o.set([1, 0, 0]);
+        E.w.postMessage({ cmd: 'ovColors', id });
+        return 0;
+      },
+      __resize: (w, h) => E.w.postMessage({ cmd: 'canvas', w, h }),
+      __ovLists: m => {
+        if (m.reset && !E.flags) {  // (the flag emoji font, as the page's @font-face: the worker's tiles use it too)
+          E.flags = {};
+          try { for (const sh of document.styleSheets) for (const r of sh.cssRules || []) if (r instanceof CSSFontFaceRule && /MbaaFlags/.test(r.style.getPropertyValue('font-family')))
+            E.flags = { src: r.style.getPropertyValue('src'), range: r.style.getPropertyValue('unicode-range') }; } catch (e) {}
+          m.flags = E.flags;
+        }
+        E.w.postMessage({ cmd: 'ovLists', ...m });
+      },
+      _viewer_box_count: () => (E.st && E.st.boxes ? E.st.boxes.length / 5 : 0), _viewer_boxes: () => BOXES,
+      _viewer_input_count: () => (E.st && E.st.inputs ? E.st.inputs.length / 5 : 0), _viewer_inputs: () => INPUTS,
+      ccall: (f, rt, ts, a = []) => { if (GET[f]) return GET[f](); E.w.postMessage({ cmd: 'call', f, a }); return 0; },
+      _viewer_frame: () => (E.st ? E.st.frame : 0), _viewer_tick_ms: () => (E.st ? E.st.tick : 0),
+      // (the renderer's profiler ring, render_stats.js: the worker's, mirrored once read; its overlay is the page's)
+      get __rsProf() { if (!E.rsSub) { E.rsSub = true; E.w.postMessage({ cmd: 'rsSub' }); } return E.rs || null; },
+      _viewer_render_overlay: on => { const A = window.mbaaRenderStats; return A && A.overlay ? (A.overlay(on < 0 ? undefined : !!on) ? 1 : 0) : -1; },
+      _viewer_render_backend: () => (E.st ? E.st.backend : 0),
+      _viewer_radio_stage_in: () => (E.st ? E.st.rsi : 0), _viewer_radio_stage_phase: () => (E.st ? E.st.rsp : 0),
+      _viewer_radio_stage_id: () => (E.st ? E.st.rsid : 0),
+    };
+    // (any other module function: sent over, fire and forget (the page's setters: overlay clock, comments on, represent))
+    return new Proxy(base, { get: (t, k) => (k in t ? t[k] : typeof k === 'string' && k.startsWith('_viewer_') ? (...a) => { E.w.postMessage({ cmd: 'fn', f: k, a }); return 0; } : undefined) });
+  }
+  // kept matches (switch back, liveKeepTake / liveKeptPoll / liveBackTake / liveResumeApply): the worker's. The page keeps a
+  // stand-in of the kept match for startLive's choice and start()'s files (its boot tape and name from the page's session
+  // left: keepPend); startLive's switch back asks the worker to take it (cmd keepBack), then starts as the page path does
+  let keepPend = null;
+  function keptGot(k) {
+    const p = k && keepPend && keepPend.id === k.id ? keepPend : null;
+    // (M: the worker's instance check (K.M === its session's M) is made there, by keepBack; the page's sessions each have
+    // their own remote module, so the page's own check reads the current one)
+    liveKept = p ? { ...k, want: new Set(k.want), rep: p.rep, name: p.name, tapes: p.tapes, get M() { return session && session.remote ? session.M : null; } } : null;
+  }
+  liveKeepTake = s => {
+    if (!E.w || !s || !s.remote || s !== session || !s.liveSrc) return;
+    keepPend = { id: s.liveSrc.id, rep: s.rep, name: s.name, tapes: s.liveSrc.tapes };
+    E.w.postMessage({ cmd: 'keepTake', from: s.liveSrc.id });
+  };
+  liveKeptDrop = why => { liveKept = null; if (E.w) E.w.postMessage({ cmd: 'keptDrop', why }); };
+  liveResumeStart = async (K, prev) => {
+    liveKept = null;
+    if (prev && prev.remote && prev.liveSrc && prev.liveSrc.id !== K.id) keepPend = { id: prev.liveSrc.id, rep: prev.rep, name: prev.name, tapes: prev.liveSrc.tapes };
+    const r = await cmd('keepBack', { lid: K.id, click: liveClickAt });
+    if (!r.ok) return startLive(K.id, K.match);  // (the worker's instance moved on: a fresh start, as the page path's check)
+    // (the page's session gets back what the page path's liveBegin hands over from the kept match: its records (the
+    // worker's, read on while away), its finished games' tapes (the page's own: their clip ids) and its first game)
+    K.recsB = r.recs; K.firstGame = r.firstGame;
+    liveResumeK = K;
+    const awayS = (Date.now() - K.at) / 1000;
+    liveSrc = { id: K.id, info: K.info, since: K.info.game, snapP: awayS > SNAP_BACK_S ? liveSnapFetch(K.id, K.info) : null };
+    window.__mbaaRepUrl = null;
+    await start(new File([K.rep], K.name), true, K.id);
+  };
+  window.__mbaaKept = () => (E.st && E.st.kept) || (liveKept ? { frame: liveKept.frame, game: liveKept.game } : null);
+  if (Q.get('swhash') === '1') Object.assign(window, {
+    __mbaaLiveState: () => (E.st && E.st.lstate) || null,
+    __mbaaStateRows: (k, n) => (E.w ? cmd('stateRows', { k, n }).then(r => r.v) : Promise.resolve(null)),
+  });
+  // a finished game's tape from the worker (liveTapes there): the clip links' (liveTapes' page half)
+  function liveTapeTake(s, g, t) {
+    const L = s.liveSrc, old = L.tapes.get(g);
+    if (!old || !old.id) L.tapes.set(g, t);
+    const p = L.clipPend;
+    if (p && L.tapes.has(p.game) && !p.busy) liveClipUpload(s, p);
+    const can = liveClipCan();
+    if (can !== L.clipCan) { L.clipCan = can; clipPanelKey = ''; marksKey = ''; }
+  }
+  let liveSeq = 0;
+  play = async function enginePlay(rep, name, catchUp = 0, want = null, liveId = null) {
+    { const b = document.getElementById('ffbadge'); if (b) b.hidden = true; }
+    await engStart();
+    const w = want || new Set(cache.keys());
+    sendFiles([...w], 0);
+    radioSent = ''; radioStageSync();
+    movieHook();  // (a capture run's movie, fetched before the play: before the play command)
+    const s = { name, rep, remote: true, want: w, live: true, mute: false, gen: 0, M: remoteM(), tl: null, SM: soundM() };
+    // a live start (startLive, liveSwitch): the source to the worker, whose liveBegin runs the poll; its first records and
+    // snapshot sent on as they come; the page's session keeps the source's bookkeeping (records, tapes: clips, chat)
+    let live = null;
+    const L = liveSrc && liveId && liveSrc.id === liveId ? liveSrc : null;
+    if (L) {
+      const seq = ++liveSeq;
+      live = { seq, id: L.id, info: L.info, since: L.since, fresh: !!L.fresh, first: !!L.first, snap: !!L.snapP, resume: liveResume, click: liveClickAt };
+      liveResume = null; liveClickAt = null; L.fresh = false;
+      const KB = liveResumeK && liveResumeK.id === L.id ? liveResumeK : null;
+      liveResumeK = null;  // (the page's stand-in for a switch back's kept match: start() read its files; the worker restores it)
+      const f = L.first, sp = L.snapP;
+      L.first = null; L.snapP = null;
+      if (f) Promise.resolve(f).catch(() => null).then(v => E.w.postMessage({ cmd: 'liveFirst', seq, v }));
+      if (sp) Promise.resolve(sp).catch(() => null).then(v => E.w.postMessage({ cmd: 'liveSnap', seq, v }));
+      s.liveSrc = L; L.recs = new Map(); L.tapes = new Map(); L.firstGame = L.info.game; L.clipPend = null; L.since = L.info.game;
+      if (KB) { if (KB.recsB) liveKeep(L, KB.recsB); if (KB.tapes) L.tapes = KB.tapes; if (KB.firstGame != null) L.firstGame = KB.firstGame; }
+    }
+    if (session && session !== s) window.dispatchEvent(new Event('mbaa-session-end'));
+    session = s;
+    audioHooks(s.SM, s);
+    window.__mbaa = { Module: s.M, man };
+    E.st = null;
+    pageSync();
+    await cmd('play', { rep: rep.slice(), name, catchUp, want: [...w], live }).catch(() => {});
+  };
+  requestSeek = T => (session && session.remote ? cmd('seek', { T }) : Promise.resolve());
+  stepBy = (n, pause = true) => { if (pause && !ui.paused) { ui.paused = true; document.querySelector('#pause .i').className = 'i i-play'; } return cmd('step', { n, pause }); };
+  skipIntro = () => cmd('skip');
+  uiApply = () => { if (E.w) E.w.postMessage({ cmd: 'ui', ui: { ...ui } }); };
+  // (the movie's bytes go to the worker, transferred: the page has no use for them)
+  movieHook = () => {
+    if (!E.w) return;  // (enginePlay sends what came before the worker)
+    if (movieBytes && movieBytes.length) { const b = movieBytes; movieBytes = new Uint8Array(0); E.w.postMessage({ cmd: 'movie', lossless: b }, [b.buffer]); }
+    else if (movieH264) { const b = movieH264; movieH264 = null; E.w.postMessage({ cmd: 'movie', h264: b }, [b.buffer]); }
+  };
+  // (the frame bar: the worker samples, the page's bar steps and draws)
+  const framebarSet0 = framebarSet;
+  framebarSet = on => { if (E.w) E.w.postMessage({ cmd: 'fb', on }); framebarSet0(on); };
+  E.cmd = cmd; E.sfx = (s, q) => sfxPlay(s, q); E.extTok = new Map(); E.xfDone = new Set();
+  // the radio pick's stage: the engine swaps it (radioStageSync there); the page sends its pick when it changes, and the
+  // fades it asks for (the engine clears them once done)
+  let radioSent = '';
+  radioStageSync = () => {
+    if (!E.w) return;
+    const r = radio ? { dat: radio.dat, stages: radio.stages, chip: radio.chip, lights: radio.lights } : null;
+    const key = JSON.stringify([r, radioStageFollow]);
+    if (key === radioSent && !xfStagePending && !xfYieldPending) return;
+    radioSent = key;
+    if (r && r.dat) sendFiles([r.dat], 0);
+    E.w.postMessage({ cmd: 'radio', radio: r, follow: radioStageFollow, xfS: xfStagePending, xfY: xfYieldPending });
+    xfStagePending = xfYieldPending = false;
+  };
+  // a live extension (the secret stages) runs in the worker, where the game module is: the page keeps the bookkeeping
+  liveExtSet = async function liveExtSetW(id, v) {
+    try { v = decodeURIComponent(v || ''); } catch (e) { v = ''; }
+    if (v === liveExt.v && (id === liveExt.id || !v)) return;
+    const seq = ++liveExt.seq;
+    liveExt.v = v; liveExt.id = v ? id : null;
+    await engStart();
+    E.w.postMessage({ cmd: 'extSeq', seq });
+    const offNow = async () => { const f = liveExt.off; liveExt.off = null; if (f) { try { await f(); } catch (e) { console.warn('live ext off:', e); } } };
+    if (!v) return offNow();
+    let u;
+    try { u = new URL(v, location.origin); } catch (e) { return offNow(); }
+    if (u.origin !== location.origin) return offNow();
+    const r = await cmd('ext', { href: u.href, v, seq });
+    if (r.err) { console.warn('live ext:', r.err); if (seq === liveExt.seq) await offNow(); return; }
+    if (seq !== liveExt.seq) { if (r.off) await cmd('extOff', { seq }); return; }
+    await offNow();
+    if (r.off) liveExt.off = () => cmd('extOff', { seq });
+  };
+  // the hidden page's clock and a lost picture are the worker's (engine_tail.js engBgTick / glRecoverW): the page tells it
+  // when it is hidden or shown and whether a picture-in-picture window shows the picture; it hands over a new canvas
+  // when the worker asks (needCanvas)
+  const visSend = () => { if (E.w) E.w.postMessage({ cmd: 'vis', hidden: document.visibilityState === 'hidden', pip: !!document.pictureInPictureElement, shown: document.visibilityState === 'visible' }); };
+  glRecover = async () => {};
+  document.addEventListener('visibilitychange', visSend);  // (hidden: the worker ticks the game on its own timer)
+  for (const ev of ['enterpictureinpicture', 'leavepictureinpicture']) document.addEventListener(ev, visSend, true);
+  E.loseGl = ms => cmd('loseGl', { ms });  // (tests: engine_clock_check.py)
+  E.eval = (src, arg) => cmd('eval', { src, arg }).then(r => { if (r.err) throw new Error(r.err); return r.v; });  // (tests: s3d_render_ab.py)
+  E.tl = (on, prof = 0) => cmd('tl', { on: on ? 1 : 0, prof }).then(r => (r.tl ? { tl: r.tl, cmds: r.cmds, timers: r.timers, kfv: r.kfv, kfs: r.kfs, drops: r.drops, dropPages: r.dropPages } : r.ok));  // (tests: the frame timeline, engine_head.js engTL)
+  E.vis = visSend;
+  // live: following / back to live are the worker's (its poll paces the session)
+  liveCssBg = (s, paths) => { if (E.w) E.w.postMessage({ cmd: 'liveCssBg', paths: [...paths] }); };  // (the select's files: into the worker's MEMFS)
+  liveFollow = (s, on) => { if (s) s.liveFollow = on; if (E.w) E.w.postMessage({ cmd: 'liveFollow', on }); };
+  liveGoLive = () => { const s = session; if (!s || !s.liveSrc) return; if (s.liveSrc.next) return startLive(s.liveSrc.id, s.liveSrc.info.match);
+                       if (ui.paused) setPaused(false); return cmd('liveGoLive'); };
+  E.capture = (k, wait) => cmd('capture', { k, wait });  // (tests: frame_hashes.py)
+  // ?perf=1: the frame profiler runs in the worker (engine_tail.js engProf); the page shows its panel and keeps a
+  // window.__mbaaProf of the same shape: on / done / sum as the worker posts them, start / stop sent over (stop's
+  // promise: the summary is in), summary() / frames() from the posted result
+  // (start and stop go over in the order called, once the page has started the worker itself (never started from here:
+  // its init needs the manifest); the worker answers every stop, a stop that found nothing recording too, so stop()'s
+  // promise always settles)
+  let perfUi = null, perfWait = [], perfSend = Promise.resolve();
+  const perfCmd = m => (perfSend = perfSend.then(() => E.up).then(() => E.ready).then(() => E.w.postMessage(Object.assign({ cmd: 'perf' }, m))));
+  const P = Q.get('perf') === '1' ? window.__mbaaProf = {
+    on: false, done: false, mode: /^(fence|off)$/.test(Q.get('perfgpu') || '') ? Q.get('perfgpu') : 'sync', sum: null, dl: null,
+    start(secs) { P.on = true; P.done = false; P.sum = null; P.dl = null; perfCmd({ start: secs ? +secs : 0 }); },
+    stop() { if (!P.on) return Promise.resolve(P.sum); perfCmd({ stop: 1 }); return new Promise(r => perfWait.push(r)); },
+    summary: () => P.sum, frames: () => (P.dl ? P.dl.frames : []),
+  } : null;
+  function perfMsg(d) {
+    if (!P) return;
+    if (!perfUi) perfUi = perfPanel();
+    P.on = d.on; P.done = d.done;
+    if (d.text) perfUi.panel(d.text);
+    if (d.sum) {
+      d.sum.page = perfPageInfo(document.getElementById('canvas'), d.sum.page && d.sum.page.canvas);
+      P.sum = d.sum; P.dl = d.dl;
+      perfUi.result(d.sum, d.dl, P);
+    }
+    if (d.sum || d.stopped) for (const r of perfWait.splice(0)) r(P.sum);
+  }
+  // the owner's background tool (labApply / labInfo run in the worker): its settings sent when they change, what it
+  // reads as the worker last posted it
+  E.lab = { stage: null, objs: [] };
+  let labSent = '';
+  window.__mbaaLab = {
+    set: c => {
+      const k = c ? JSON.stringify([c.void, c.set, c.words ? Array.from(c.words) : null]) : '';
+      if (k === labSent || !E.w) return;
+      labSent = k;
+      E.w.postMessage({ cmd: 'lab', c: c ? { ...c, words: c.words ? c.words.slice() : null } : null });
+    },
+    info: () => E.lab,
+  };
+  if (window.mbaaViewer) Object.assign(window.mbaaViewer, { seek: requestSeek, step: stepBy });
+  window.__mbaaSeek = T => requestSeek(T);
+})();
 main().catch(e => { console.error(e); status('error: ' + e.message); });
 
 // New version: every deploy rewrites index.html (each page file's content hash), so the page checks it every 3 min (past

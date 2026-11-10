@@ -21,7 +21,7 @@
 <meta name="twitter:description" content="Live Melty Blood: Actress Again Current Code matches, chat and replays in your browser.">
 <meta name="twitter:image" content="https://watch.meltyblood.org/preview.png">
 <meta name="mbaa-manifest" content="2a2e2bac19a8">
-<meta name="mbaa-chatjs" content="chat.js?v=727a1af0f15e">
+<meta name="mbaa-chatjs" content="chat.js?v=3d6cfaaa5bfc">
 <meta name="mbaa-announcer" content="announcer/neco.bin?v=932b15248e89">
 <link rel="manifest" href="site.webmanifest">
 <link rel="icon" href="favicon-48.png" sizes="48x48">
@@ -434,14 +434,14 @@
   /* a select-screen icon box clips its strip of 10 cursor frames (viewer.js selStrip); the frame shown is a transform
      step from the frame bus, a compositor move and no canvas redraw */
   .ico, .lico { display: inline-block; overflow: hidden; position: relative; }
-  .ico > canvas, .lico > canvas { display: block; width: 1000%; height: 100%; will-change: transform; }
+  .ico > canvas, .lico > canvas { display: block; will-change: transform; }  /* (sized in device pixels: viewer.js selStrip) */
   #players .who { min-width: 0; display: flex; flex-direction: column; line-height: 1.25; }
   #players .nm { font-size: 14px; font-weight: 650; white-space: nowrap; overflow: hidden; }
   #players .nm > .mqx { display: block; }  /* (the name's own clip box, inside the plate's padding: viewer.js marquee) */
   #players .ch { font-size: 11.5px; color: var(--muted); display: flex; align-items: center; gap: 4px; }
   #players .moon { width: 16px; height: 16px; flex: none; }
   /* (a tight dark rim plus a soft shadow under it: the moon stays readable over a bright stage picture) */
-  #players .moon { filter: drop-shadow(0 0 1px rgba(0, 0, 0, .95)) drop-shadow(0 1px 2px rgba(0, 0, 0, .7)); }
+  #players .moon { --bake: 0px 0px 1px #000000f2, 0px 1px 2px #000000b3; }  /* (drawn in, not a filter: viewer.js bakeShow) */
   #players .vs { font-size: 10px; color: var(--faint); letter-spacing: .12em; padding-left: 72px; }
   /* the match card: once the stage is known, both players over its select-screen picture (P1 left, P2 right), the name
      plate along its bottom, the song under it */
@@ -449,8 +449,7 @@
   #matchcard:has(#stageblk:not([hidden])) #stageblk { display: contents; }
   #matchcard:has(#stageblk:not([hidden])) .view { grid-area: 1 / 1; max-width: none; aspect-ratio: 256 / 110; border-radius: 8px;
     -webkit-mask: linear-gradient(#000 55%, #0008); mask: linear-gradient(#000 55%, #0008); }
-  #matchcard:has(#stageblk:not([hidden])) .name { grid-area: 1 / 1; align-self: end; justify-self: center; width: 62%; margin-bottom: 4px;
-    filter: drop-shadow(0 1px 2px #000); }
+  #matchcard:has(#stageblk:not([hidden])) .name { grid-area: 1 / 1; align-self: end; justify-self: center; width: 62%; margin-bottom: 4px; }
   #matchcard:has(#stageblk:not([hidden])) .trk { grid-area: 2 / 1; margin-top: 4px; text-align: center; }
   /* (the top-centre stack, user 2026-11-01: the watchers, VS under them, the stage's name plate, the song under it) */
   #matchcard:has(#stageblk:not([hidden])) .plate { grid-area: 1 / 1; align-self: start; justify-self: center; z-index: 2; position: relative;
@@ -502,7 +501,7 @@
   #matchcard.pors:has(#stageblk:not([hidden])) .aura { display: block; position: absolute; inset: 0; width: 100%; height: 100%; z-index: 1; pointer-events: none; }
   #matchcard.aura-on.pors:has(#stageblk:not([hidden])) #players { background: none; }
   /* (each side's character: the select screen's name art, Japanese over romaji; the moon its icon, static) */
-  #players .ch canvas.cnm { height: 28px; width: auto; aspect-ratio: 3 / 1; image-rendering: auto; filter: drop-shadow(0 1px 2px #000); }
+  #players .ch canvas.cnm { height: 28px; width: auto; aspect-ratio: 3 / 1; image-rendering: auto; --bake: 0px 1px 2px #000000; }
   #matchcard.pors:has(#stageblk:not([hidden])) #players .ch canvas.cnm { grid-area: 2 / 2; height: 32px; }
   #matchcard.pors:has(#stageblk:not([hidden])) #players .pl:last-child .ch canvas.cnm { grid-area: 2 / 1; justify-self: end; }
   #matchcard.pors:has(#stageblk:not([hidden])) #players .ch.art .moon { align-self: center; }
@@ -578,8 +577,9 @@
   /* the next live match after this one ends (viewer.js nextCard): its countdown, Go now / Stay, the other live matches */
   #nextcard { position: absolute; left: 50%; bottom: 6%; transform: translateX(-50%); z-index: 7; width: min(460px, 90%);
     box-sizing: border-box; padding: 12px 14px; border-radius: 14px; background: linear-gradient(#17131fef, #0d0b16f4);
-    border: 1px solid #ffffff1f; box-shadow: 0 0 0 1px #00000080, 0 12px 40px #000d; color: #fff; font-size: 14px;
-    backdrop-filter: blur(6px); }
+    border: 1px solid #ffffff1f; box-shadow: 0 0 0 1px #00000080, 0 12px 40px #000d; color: #fff; font-size: 14px; }
+  /* (no backdrop-filter: a blur pass under it on every display frame over the moving game; its ~95% opaque fill showed
+     next to nothing through it) */
   #nextcard[hidden] { display: none; }
   #nextcard .nc-t { font-size: 11px; font-weight: 800; color: var(--accent); letter-spacing: .14em; text-transform: uppercase; text-align: center; }
   #nextcard .nc-m { margin: 6px 0 8px; text-align: center; color: #ddd; }
@@ -598,7 +598,7 @@
   #nextcard .nc-row .side { display: flex; align-items: center; gap: 4px; min-width: 0; }
   #nextcard .nc-row .side:nth-of-type(2) { flex-direction: row-reverse; text-align: right; }
   #nextcard .nc-row .lico { width: 28px; height: 28px; flex: none; margin: -3px 0; }
-  #nextcard .nc-row .lmoon { width: 12px; height: 12px; flex: none; filter: drop-shadow(0 0 1px #000); }
+  #nextcard .nc-row .lmoon { width: 12px; height: 12px; flex: none; --bake: 0px 0px 1px #000000; }
   #nextcard .nc-row .lnm { overflow: hidden; white-space: nowrap; min-width: 0; }  /* (a long name scrolls: viewer.js marquee) */
   #nextcard .nc-row .lvs { text-align: center; font-size: 10px; color: var(--faint); letter-spacing: .08em; }
   #nextcard .nc-row .lview { justify-self: end; display: inline-flex; align-items: center; gap: 3px; font-size: 11px; color: #ccc; }
@@ -786,7 +786,7 @@
   #plitems li.drag { opacity: .4; }  #plitems li.over { box-shadow: inset 0 2px 0 var(--accent); }
   /* keyboard help: over the picture (inside .stage, so fullscreen shows it too); phones: the whole screen */
   #help { position: absolute; inset: 0; z-index: 30; display: flex; align-items: center; justify-content: center; padding: 12px;
-          box-sizing: border-box; background: #07070cd0; backdrop-filter: blur(3px); cursor: default; }
+          box-sizing: border-box; background: #07070ce0; cursor: default; }  /* (no backdrop blur: a pass a frame over the game) */
   #help[hidden] { display: none; }
   body.mob #help { position: fixed; z-index: 120; }
   #help .hcard { position: relative; width: min(760px, 100%); max-height: 100%; overflow-y: auto; box-sizing: border-box;
@@ -1035,8 +1035,9 @@
   </div>
 </div>
 </div>
-<script src="mbaa.js?v=c2032eb59ac2"></script>
+<script src="mbaa.js?v=165ce10edef0"></script>
 <script src="bgm_stream.js?v=cad5cabd6328"></script>
-<script src="viewer.js?v=12515888d32b"></script>
+<script src="viewer.js?v=67fe95986c11"></script>
+<script src="render_stats.js?v=fd9e3e2ae049"></script>
 </body>
 </html>

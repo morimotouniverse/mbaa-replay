@@ -41,7 +41,9 @@ async function versioned(r, url) {
 
 async function networkFirst(r) {
   const c = await caches.open(SHELL);
-  const u = new URL(r.url), key = r.mode === 'navigate' ? u.origin + u.pathname : r;  // (a page under its path alone)
+  // (a page under its path alone; so is a worker's script: the engine worker's URL carries the page's query and its time
+  // origin, a new URL each load, and each was kept as its own copy)
+  const u = new URL(r.url), key = r.mode === 'navigate' || r.destination === 'worker' ? u.origin + u.pathname : r;
   try {
     // (revalidated every time: the host lets a browser reuse the page for 10 minutes, and a stale page would name
     // older page files and an older bundle manifest)
