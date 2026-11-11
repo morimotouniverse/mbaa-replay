@@ -280,8 +280,12 @@
   /* the issues board's link (necoTV#9: people posted bugs in chat with no one pinged) */
   .sitefoot { order: 99; margin: 14px 0 18px; text-align: center; font-size: 13px; opacity: .8; }
   .sitefoot a, #help .credit a { color: inherit; text-decoration: underline; }
-  /* (a phone held sideways: the page is the picture, nothing scrolls under it; the link stays in the shortcuts dialog) */
-  body.mob.land .sitefoot { display: none; }
+  /* (a phone: the page is a fixed full-screen layout, nothing scrolls under it, and the link landed over the top of the
+     picture and the menu's header; there it is a row at the end of the menu sheet (.sitelink) and in the shortcuts dialog) */
+  body.mob .sitefoot { display: none; }
+  .sitelink { display: none; }
+  body.mob .sitelink { display: block; margin-top: 10px; text-align: center; font-size: 13px; opacity: .85; }
+  .sitelink a { color: inherit; text-decoration: underline; }
   #xprog { position: absolute; z-index: 21; left: 50%; top: 50%; transform: translate(-50%, -50%); width: min(420px, 80%); padding: 14px 16px; border-radius: 8px;
     background: rgba(10, 14, 22, 0.92); color: #e8f2ff; font-size: 13px; text-align: center; box-shadow: 0 4px 24px rgba(0,0,0,0.5); }
   #xprog[hidden] { display: none; }
@@ -1039,6 +1043,7 @@
     </div>
     <ol id="plitems"></ol>
     <div class="row"><label class="filebtn" title="add one or more replays to the queue (or drop them on the page)"><i class="i i-open"></i>add replays<input id="rep" type="file" accept=".rep" multiple hidden></label><span class="hint">or drop .rep files</span></div>
+    <div class="sitelink"><a href="https://github.com/Armonte/necoTV/issues/new/choose" target="_blank" rel="noopener">Found a bug or want a feature? Report it here</a></div>
   </div>
 </div>
 </div>
