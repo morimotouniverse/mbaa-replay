@@ -4481,9 +4481,9 @@ function controls() {
 if (Q.get('perf') === 'hud') (() => {
   const el = document.createElement('pre');
   el.id = 'perfhud';
-  el.style.cssText = 'position:fixed;left:4px;top:4px;z-index:9999;margin:0;padding:6px 8px;background:#000c;color:#7f7;font:11px/1.35 ui-monospace,monospace;pointer-events:none;white-space:pre;border-radius:6px';
+  el.style.cssText = 'position:fixed;left:4px;top:4px;z-index:9999;margin:0;padding:6px 8px;background:#000c;color:#7f7;font:11px/1.35 ui-monospace,monospace;pointer-events:none;white-space:pre-wrap;overflow-wrap:anywhere;max-width:calc(100vw - 24px);border-radius:6px';
   document.body.append(el);
-  let gpu = '?';
+  let gpu = '?', wgLine = '', wgTick = 0;
   try { const g = document.createElement('canvas').getContext('webgl2'), x = g && g.getExtension('WEBGL_debug_renderer_info'); gpu = x ? g.getParameter(x.UNMASKED_RENDERER_WEBGL) : g ? g.getParameter(g.RENDERER) : 'none'; } catch (e) {}
   const raf = [], longs = [];
   let last = performance.now();
@@ -4499,7 +4499,10 @@ if (Q.get('perf') === 'hud') (() => {
     const missed = iv.filter(v => v > Math.max(med, 16.7) * 1.5).length;
     const s = session, M = s && s.M;
     let tk = [], heap = 0, f = -1;
-    if (M && M._viewer_tick_ms) {
+    // (the engine in its worker: the page has no heap of it; the frame from the worker's state. Was: read M.HEAPF64, not
+    // there, and threw at every update: the overlay stood still since the engine moved)
+    if (window.__mbaaEngine && __mbaaEngine.st) f = __mbaaEngine.st.frame;
+    if (M && M._viewer_tick_ms && M.HEAPF64) {
       const p = M._viewer_tick_ms() / 8, n = Math.min(128, M._viewer_tick_count() >>> 0);
       tk = Array.from(M.HEAPF64.subarray(p, p + n));
       heap = M.HEAP32.buffer.byteLength; f = M._viewer_frame();
@@ -4516,7 +4519,10 @@ if (Q.get('perf') === 'hud') (() => {
       `canvas ${cv ? cv.width + 'x' + cv.height : '-'} css ${cv ? cv.clientWidth + 'x' + cv.clientHeight : '-'} dpr ${devicePixelRatio}`,
       `comments ${dm} (native)  lowmem ${typeof LOWMEM !== 'undefined' && LOWMEM ? 1 : 0}`,
       `gpu ${gpu}`.slice(0, 60),
+      wgLine,
     ].join('\n');
+    // (the engine's renderer and its WebGPU errors, asked every 2 s: a phone's own report in one screenshot)
+    if (window.__mbaaEngine && __mbaaEngine.w && !(wgTick++ % 4)) __mbaaEngine.eval(`M => M.__wg ? 'webgpu L' + M.__wg.level + ' bc ' + (M.__wg.bc ? 1 : 0) + ' | ' + M.__wgBoot.info + ' | ' + M.__wgBoot.limits + '\\nwebgpu errors ' + (M.__wgBoot.errors || 0) + (M.__wgBoot.errMsgs.length ? ':\\n' + M.__wgBoot.errMsgs.map(m => m.slice(0, 400)).join('\\n') : '') : 'renderer webgl2'`).then(v => { wgLine = String(v); }, () => {});
   }, 500);
 })();
 // ?perf=1: the frame profiler (harness-design/stage3d_perf/PROFILING.md, layer 2). Opt-in: without the flag nothing below
