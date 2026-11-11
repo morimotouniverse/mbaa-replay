@@ -4463,9 +4463,12 @@ function controls() {
     else if ((k === 't' || k === 'T') && live) flip('names');
     else if (k === 'b' || k === 'B') flip('music');
     else if (k === '?') toggleHelp();
+    // (N: the effects row's mute, between B (music) and M (everything), live and replays alike (necoTV#7's follow-up: "a
+    // hotkey to mute the effects for full parity"); the queue's next / previous moved to Shift+N / Shift+P)
+    else if ((k === 'n' || k === 'N') && !e.shiftKey) document.getElementById('mixsfxm').click();
     else if ((k === 'n' || k === 'N') && !live) startItem(pl.i + 1);  // (the queue: replays only)
     else if ((k === 'o' || k === 'O') && window.mbaaCommentsToggle) window.mbaaCommentsToggle();  // (comments on the picture)
-    else if ((k === 'p' || k === 'P') && !live) startItem(pl.i - 1);
+    else if ((k === 'p' || k === 'P') && e.shiftKey && !live) startItem(pl.i - 1);
     else if (k === 'h' || k === 'H') flip('boxes');
     else if (k === 'i' || k === 'I') flip('inputs');
     else if (k === 'k' || k === 'K') flip('hitstun');

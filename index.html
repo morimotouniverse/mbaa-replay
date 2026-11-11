@@ -277,6 +277,11 @@
   #clippanel select { height: 28px; font-size: 12px; padding: 0 4px; background: var(--btn, #1c2230); color: inherit; border: 1px solid var(--line, #3a4050); border-radius: 4px; }
   body.mob #clippanel select { height: 36px; }
   .stage.exporting #canvas, .stage.exporting #overlay, .stage.exporting #engframe { visibility: hidden; }
+  /* the issues board's link (necoTV#9: people posted bugs in chat with no one pinged) */
+  .sitefoot { order: 99; margin: 14px 0 18px; text-align: center; font-size: 13px; opacity: .8; }
+  .sitefoot a, #help .credit a { color: inherit; text-decoration: underline; }
+  /* (a phone held sideways: the page is the picture, nothing scrolls under it; the link stays in the shortcuts dialog) */
+  body.mob.land .sitefoot { display: none; }
   #xprog { position: absolute; z-index: 21; left: 50%; top: 50%; transform: translate(-50%, -50%); width: min(420px, 80%); padding: 14px 16px; border-radius: 8px;
     background: rgba(10, 14, 22, 0.92); color: #e8f2ff; font-size: 13px; text-align: center; box-shadow: 0 4px 24px rgba(0,0,0,0.5); }
   #xprog[hidden] { display: none; }
@@ -866,7 +871,7 @@
           </table>
           <h4 class="replayonly">Queue</h4>
           <table class="replayonly">
-            <tr><td><kbd>N</kbd> <kbd>P</kbd></td><td>next / previous replay in the queue</td></tr>
+            <tr><td><kbd>Shift</kbd>+<kbd>N</kbd> <kbd>Shift</kbd>+<kbd>P</kbd></td><td>next / previous replay in the queue</td></tr>
             <tr><td>drag &#10303;</td><td>reorder; picked or dropped replays are added</td></tr>
           </table>
         </div>
@@ -880,6 +885,7 @@
             <tr><td><kbd>U</kbd></td><td>HUD (health, meter, timer)</td></tr>
             <tr class="liveonly"><td><kbd>T</kbd></td><td>players' names on the CHALLENGER / WINS banners</td></tr>
             <tr><td><kbd>B</kbd></td><td>music on / off (sound effects stay)</td></tr>
+            <tr><td><kbd>N</kbd></td><td>sound effects on / off (music stays)</td></tr>
             <tr class="chatonly"><td><kbd>O</kbd></td><td>chat comments on the picture on / off</td></tr>
             <tr><td><kbd>M</kbd></td><td>mute everything</td></tr>
             <tr><td><kbd>F</kbd></td><td>fullscreen</td></tr>
@@ -890,6 +896,7 @@
           <div class="legend"><span class="hbkey" style="--c:#30e030">hurt</span><span class="hbkey" style="--c:#ff2828">attack</span><span class="hbkey" style="--c:#ffe020">clash</span><span class="hbkey" style="--c:#40a0ff">shield</span><span class="hbkey" style="--c:#d8d8d8">collision</span><span class="hbkey" style="--c:#c878e6">special</span></div>
         </div>
       </div>
+      <div class="credit"><a href="https://github.com/Armonte/necoTV/issues/new/choose" target="_blank" rel="noopener">Report a bug or ask for a feature</a></div>
       <div class="credit">Every button's tooltip names its key. Icons: Kenney (kenney.nl, CC0)</div>
     </div>
   </div>
@@ -942,7 +949,7 @@
     <div id="setpop" hidden></div>
     <div id="mixpop" role="dialog" aria-label="sound levels" hidden>
       <div class="mixl" id="mixmusicl"><button type="button" class="mixm" id="mixmusicm" title="music on / off (B; sound effects stay)" aria-pressed="false"><i class="i i-sound"></i></button><span>music</span><input id="mixmusic" type="range" min="0" max="100" value="100" aria-label="music level"><b id="mixmusicv">100</b></div>
-      <div class="mixl" id="mixsfxl"><button type="button" class="mixm" id="mixsfxm" title="sound effects on / off (voices, hits, announcer; the music stays)" aria-pressed="false"><i class="i i-sound"></i></button><span>effects</span><input id="mixsfx" type="range" min="0" max="100" value="100" aria-label="sound effects level (voices, hits, announcer)"><b id="mixsfxv">100</b></div>
+      <div class="mixl" id="mixsfxl"><button type="button" class="mixm" id="mixsfxm" title="sound effects on / off (voices, hits, announcer; the music stays) (N)" aria-pressed="false"><i class="i i-sound"></i></button><span>effects</span><input id="mixsfx" type="range" min="0" max="100" value="100" aria-label="sound effects level (voices, hits, announcer)"><b id="mixsfxv">100</b></div>
       <div class="mixrow"><button type="button" id="mixreset" title="both on, both back to 100">reset</button></div>
     </div>
   </div>
@@ -1025,8 +1032,8 @@
       <span class="grp">
         <button id="plshare" title="Copy a link to this playlist" hidden><i class="i i-share"></i></button>
         <button class="txt" id="plsort" title="Sort by the date each replay was recorded (oldest first)" hidden>by date</button>
-        <button id="plprev" title="Previous replay in the queue (P)" disabled><i class="i i-prev"></i></button>
-        <button id="plnext" title="Next replay in the queue (N)" disabled><i class="i i-next"></i></button>
+        <button id="plprev" title="Previous replay in the queue (Shift+P)" disabled><i class="i i-prev"></i></button>
+        <button id="plnext" title="Next replay in the queue (Shift+N)" disabled><i class="i i-next"></i></button>
         <button id="plclear" title="Clear the queue (keeps the replay that is playing)" hidden><i class="i i-x"></i></button>
       </span>
     </div>
@@ -1035,9 +1042,10 @@
   </div>
 </div>
 </div>
+<p class="sitefoot"><a href="https://github.com/Armonte/necoTV/issues/new/choose" target="_blank" rel="noopener">Found a bug or want a feature? Report it here</a></p>
 <script src="mbaa.js?v=56df94c4c856"></script>
 <script src="bgm_stream.js?v=cad5cabd6328"></script>
-<script src="viewer.js?v=e231eb943239"></script>
+<script src="viewer.js?v=988d0c848120"></script>
 <script src="render_stats.js?v=fd9e3e2ae049"></script>
 </body>
 </html>
