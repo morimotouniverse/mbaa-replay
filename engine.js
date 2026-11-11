@@ -2553,7 +2553,9 @@ function liveBegin(s) {  // play(): after viewer_play
     // (every second outside a battle: the result menu, a character select, a load, where the next game's setup comes)
     // (2 s: each viewer's requests are the feed's 1/s plus this; the list is not rate limited, but every request is a
     // Worker request)
-    const listEvery = over || s.M.HEAP32[0x54EEE8 >> 2] !== 1 ? 2000 : 5000;
+    // (the stream quiet for 1.5 s in a battle, where inputs come every frame: the list is read at the 2 s pace too, so
+    // a host's own end notice (entry.end) is seen at once)
+    const listEvery = over || quietFor > 1500 || s.M.HEAP32[0x54EEE8 >> 2] !== 1 ? 2000 : 5000;
     // (watching back: once its picture has reached the stream's newest frame too, the end is looked for there. Was: only
     // following, so a viewer watching back never read the list and never saw the match end: match_end_follow_check)
     if ((over || dry || s.liveFollow || ahead < 15) && performance.now() - (L.listAt || -1e9) > listEvery) {
@@ -2575,11 +2577,16 @@ function liveBegin(s) {  // play(): after viewer_play
         // 5 s, or the match missing from it for 30 s (the bridge's capture closes 30 s after the host goes silent; not
         // while the feed was just down: a restarted bridge re-joins its hosts). Was: one read missing it with the
         // stream quiet showed the card (and its countdown left the match), whatever the reason
-        const endSign = !mine || liveGone(mine);
+        // (entry.end: the host itself said the session is over (CCCaster's SessionEnd, on a host with the extension's
+        // second patch: 1 the other player disconnected, 2 the host closed). Nothing to wait for or to count: the card
+        // as soon as the picture has played what the stream holds)
+        const hostEnd = mine && mine.end ? mine.end : 0;
+        if (hostEnd) L.hostEnd = hostEnd;
+        const endSign = !mine || liveGone(mine) || !!hostEnd;
         if (!endSign) { L.endAt = null; L.endReads = 0; }
         else { if (L.endAt == null) L.endAt = t; L.endReads = (L.endReads || 0) + 1; }
-        const streamOver = over || (ahead < 15 && quietFor > 6000);
-        const ended = streamOver && endSign && (!!now && !mine ||
+        const streamOver = over || (ahead < 15 && (quietFor > 6000 || !!hostEnd));
+        const ended = streamOver && endSign && (!!now && !mine || !!hostEnd ||
           (mine ? L.endReads >= 3 && t - L.endAt > 5000 : !liveNet.recent() && t - L.endAt > 30000));
         if (endSign && !L.endSaid) {
           L.endSaid = true;
@@ -2608,7 +2615,7 @@ function liveBegin(s) {  // play(): after viewer_play
           // (the next one: the card's countdown with jump to live on, else the card to pick from; or its wait for one)
           status('the match has ended');
           slogAdd('live', 'the match has ended: the next-match card');
-          nextCardShow(s, l, 'Match over');
+          nextCardShow(s, l, hostEnd === 1 ? 'Match over: the opponent disconnected' : hostEnd === 2 ? 'Match over: the host left' : 'Match over');
           nextCard.why = null;
           return;
         }
@@ -2721,8 +2728,12 @@ function liveBegin(s) {  // play(): after viewer_play
       // (nor in the last win pose once the players' retry menu choice is in: the game plays the pose out, the win quote
       // and the menu without the stream. Its few frames left read as a low buffer and held the pose ~3 s while the next
       // game's frames built 2 s up: the freeze on the WINNER banner, artifacts/xz_check/live_winscreen after_css_gpu)
+      // (a hold builds the buffer back up to 2 s; with no more stream coming (the host said the session is over, or
+      // nothing for 6 s) it never would: the frames left are played out, and the end is then seen (ahead < 15). Was:
+      // a match that ended while the page was building its buffer back up waited there for good, no card)
+      const noMore = !!L.hostEnd || quietFor > 6000;
       const hold = !call(s, 'viewer_spectate_in_retry') && !quietSkip && !call(s, 'viewer_spectate_match_end') &&
-        (ahead < 15 || starved || (s.liveHeld && ahead < 120));
+        (ahead < 15 || starved || (s.liveHeld && ahead < 120 && !noMore));
       s.liveHeld = hold;
       call(s, 'viewer_pause', hold || ui.paused || s.seeking ? 1 : 0);
       // up to the jump (or without it): CCCaster's spectateFastFwd, more than 60 frames (2 x NUM_INPUTS) over the kept
@@ -3800,7 +3811,14 @@ const engCmd = async e => {
     } else if (d.cmd === 'ovLists') {
       if (d.reset) { engOv.emo = [null]; engOv.run = [null]; engOv.runW.clear(); engOv.sans = d.sans; engOv.serif = d.serif; }
       if (d.flags && d.flags.src && !engOv.fonts++) engFont('MbaaFlags', d.flags.src, d.flags.range ? { unicodeRange: d.flags.range } : {});
-      for (const x of d.emo || []) engOv.emo[x.id] = x;
+      for (const x of d.emo || []) {
+        if (x.pix) x.pix = x.pix.map(b => {  // (frame mode: pixels, see viewer.js __ovLists)
+          if (!b.px) return b;
+          const c = new OffscreenCanvas(b.width, b.height); c.getContext('2d').putImageData(new ImageData(b.px, b.width, b.height), 0, 0);
+          return c;
+        });
+        engOv.emo[x.id] = x;
+      }
       for (const x of d.run || []) engOv.run[x.id] = x;
       if (session && session.M) engOvInstall(session.M);
     } else if (d.cmd === 'ovMeasure') {  // (tests: the renderer's own measure of code points, against the page's)

@@ -7179,6 +7179,12 @@ window.__mbaaLab = { set: c => labApply(c), info: () => labInfo() };
             E.flags = { src: r.style.getPropertyValue('src'), range: r.style.getPropertyValue('unicode-range') }; } catch (e) {}
           m.flags = E.flags;
         }
+        // (frame mode: an ImageBitmap never reaches the frame's process (Firefox drops the whole message), so the
+        // emotes go as pixels there; the worker draws them from canvases)
+        if (XFRAME) for (const e of m.emo || []) if (e.pix) e.pix = e.pix.map(b => {
+          const c = new OffscreenCanvas(b.width, b.height), g = c.getContext('2d'); g.drawImage(b, 0, 0);
+          return { width: b.width, height: b.height, px: g.getImageData(0, 0, b.width, b.height).data };
+        });
         E.w.postMessage({ cmd: 'ovLists', ...m });
       },
       _viewer_box_count: () => (E.st && E.st.boxes ? E.st.boxes.length / 5 : 0), _viewer_boxes: () => BOXES,
