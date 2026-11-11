@@ -393,6 +393,7 @@ const CHARA = { 0: 'Sion', 1: 'Arcueid', 2: 'Ciel', 3: 'Akiha', 4: 'Hisui & Koha
   72: 'B. Aoko', 73: 'B. White Len', 85: 'B. Kohaku & Mech' };
 function matchTitle(rep) {
   if (rep.length < 0x5C) return 'MBAACC replay';
+  if (rep[0x18] === 0x55 && rep[0x19] === 0x0C) return 'Character select';  // (a live session started at the select: no setup yet)
   const dv = new DataView(rep.buffer, rep.byteOffset, rep.byteLength);
   const side = o => { const m = MOON_LABEL[dv.getInt32(o + 8, true)]; return (m ? m + ' ' : '') + (CHARA[dv.getInt32(o + 4, true)] || `#${dv.getInt32(o + 4, true)}`); };
   return `${side(0x3C)} vs ${side(0x4C)}`;
@@ -1522,7 +1523,7 @@ async function startLive(id, match = null, entry = null) {
   if (liveWant !== id) return;
   if (j && j.entry) {
     info = j.entry; ext = j.ext;
-    if (!info.css) {
+    if (!info.css || info.sel) {  // (sel: its first character select can be joined and watched: the bridge's selOf)
       boot = j.boot;
       const map = pre && pre.game === j.game && j.from > j.game ? new Map(pre.recs) : new Map();
       liveRecsPut(map, j.rec);
@@ -1537,7 +1538,7 @@ async function startLive(id, match = null, entry = null) {
     if (fresh || entry) info = { ...entry };
     if (!fresh) {
       // (a stale entry: its game's tape, records and files are asked for meanwhile; the list's game decides)
-      if (info && !info.css) liveStartReqs(id, info);
+      if (info && (!info.css || info.sel)) liveStartReqs(id, info);
       try { all = await listP; info = all.find(m => m.id === id); } catch (e) { status(`live feed unreachable: ${e.message}`); return liveRetry(id, match); }
       if (liveWant !== id) return;
       if (info && entry && (info.game !== entry.game || info.css)) liveReqs = null;  // (another game by now)
@@ -1571,7 +1572,7 @@ async function startLive(id, match = null, entry = null) {
   // (on its first character select: no game to play yet; waits on the list until the first game loads)
   // (liveCss: the match key on its character select, for chat's channel: the session still on screen is the host's match
   // before, and its key showed that match's old chat, user 2026-11-03)
-  if (info.css) {
+  if (info.css && !info.sel) {
     liveCss = { id, match: info.match || null };
     status('on character select: the match starts with its first game');
     // (counted as its viewer meanwhile: the bridge counts the tabs asking for a match's records, and a tab waiting on a
@@ -1627,7 +1628,7 @@ let liveReqs = null;
 const PRESS_LEAVE_MS = 3000;
 let liveJoinPress = null;  // {id, game, at, p, used}
 function livePress(m) {
-  if (m.css || liveIdle(m) || (session && session.liveSrc && session.liveSrc.id === m.id)) return;
+  if ((m.css && !m.sel) || liveIdle(m) || (session && session.liveSrc && session.liveSrc.id === m.id)) return;
   const now = performance.now();
   if (liveJoinPress && liveJoinPress.id === m.id && liveJoinPress.game === m.game && now - liveJoinPress.at < SNAP_PRE_MS) return;
   if (liveReqs && liveReqs.id === m.id && liveReqs.game === m.game && now - liveReqs.at < SNAP_PRE_MS) return;
@@ -5066,6 +5067,9 @@ async function start(file, quiet = false, liveId = null) {
   // BGM (small) with the match. liveCssBg holds the game at the result screen if they are not in yet
   const cssBg = want && liveSrc ? [...liveCssFiles(man)].filter(p => !/^bgm\//.test(p)) : null;
   if (want && liveSrc) for (const p of liveCssFiles(man)) if (/^bgm\//.test(p)) want.add(p);
+  // (a session that starts at the host's character select (the bridge's selRep tape: year word 0x0C55; necoTV#8): the
+  // select screen's files are the match's files, in before the first frame)
+  if (want && liveSrc && rep[0x18] === 0x55 && rep[0x19] === 0x0C) for (const p of liveCssFiles(man)) want.add(p);
   if (want && liveResumeK) for (const p of liveResumeK.want) want.add(p);  // (back to a kept match: every file it had in)
   if (want) {
     status(`stage ${keys.stage}, P1 ${keys.p1[0]}:${keys.p1[1]} vs P2 ${keys.p2[0]}:${keys.p2[1]}: fetching`);
