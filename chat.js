@@ -3537,7 +3537,7 @@ onmessage = ({ data: m }) => {
 
   // ---- the names list: who is in the channel shown (display names as the lines show them; away / idle; no hosts) ----
   const membBtn = $('.cmembtn'), membEl = $('.cmemb');
-  let membOpen = !!store.get('mbaa-chat-members', false);
+  let membOpen = !!store.get('mbaa-chat-members', false), membCol = new Map();  // (membCol: each listed name's colour as drawn)
   membBtn.onclick = () => { membOpen = !membOpen; store.set('mbaa-chat-members', membOpen); membersShow(); membBtn.blur(); };
   const SERVICES = new Set(['histserv', 'chanserv', 'nickserv']);
   function membersShow() {
@@ -3555,7 +3555,9 @@ onmessage = ({ data: m }) => {
       const aw = irc.away.get(key(n));
       // (the name's colour and account from their newest line here, else in any channel: a name with no line in this channel
       // was drawn plain, and styles (glow / gradient / shadow) were never applied in the list, user 2026-11-03)
-      let col = null, acct = key(n) === key(irc.nick) ? irc.account : null;
+      // (your own: the colour you have set, said anything yet or not: necoTV#10)
+      const me = key(n) === key(irc.nick);
+      let col = me ? prof.color : null, acct = me ? irc.account : null;
       for (const cc of [c, ...[...chans.values()].filter(x => x !== c)]) {
         for (let i = cc.lines.length - 1; i >= 0; i--) { const l = cc.lines[i]; if (l.irc && key(l.irc) === key(n)) { col = col || l.color; acct = acct || l.acct; break; } }
         if (col && acct) break;
@@ -3563,6 +3565,7 @@ onmessage = ({ data: m }) => {
       return { n, name: disp(nameOf(n, c)), aw, idle: aw != null && /^idle$/i.test(aw), bot: key(n) === key(BOT), op: c.ops.has(key(n)), pre: rankPre(c, n), me: key(n) === key(irc.nick),
                ty: c.typing.has(key(n)), col, st: acct ? styleOf(acct) : null };
     });
+    membCol = new Map(rows.map(r => [key(r.n), r.col]));
     // (here first, then away; in each: by rank -- ~ owner, & admin, @ mod (an op with no prefix counts as one), % half-op,
     // the bot, then everyone else (+ voice too) -- then by name, case- and accent-blind, the prefix not part of it;
     // "you" sorts in your own rank, user 2026-11-02)
@@ -5285,6 +5288,9 @@ onmessage = ({ data: m }) => {
         addLine(target, { nick: shownNick(m.nick, t.account, clean(t['+mbaa/name'] || '')), irc: m.nick, acct: t.account || null, reply, text: clean(text), action, hist, self: m.nick === irc.nick, msgid: t.msgid,
                           time: t.time ? new Date(t.time) : new Date(), color: COLOR_RE.test(t['+mbaa/color'] || '') ? t['+mbaa/color'] : null,
                           chara: validChara(chara) ? chara : -1, moon, cmd: nicoCmds(t['+mbaa/cmd']).join(' '), at });
+        // (the people list takes a name's colour from their lines: drawn again when a line brings one it does not show.
+        // Was: only at the next join / away / typing change, a second or two later: necoTV#10)
+        if (membOpen && COLOR_RE.test(t['+mbaa/color'] || '') && membCol.get(key(m.nick)) !== t['+mbaa/color']) membersShow();
         return;
       }
       case 'FAIL': {
