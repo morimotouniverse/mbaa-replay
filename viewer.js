@@ -5337,7 +5337,9 @@ function clipTick(s, f) {
 // Clear. The handles and the panel's text change only when the clip does (drawMarks -> clipUi), never per frame.
 const CLIP_LEN = 1800;  // 30 s
 let clipPanel = false, clipPanelKey = '', clipDrag = null;
-const clipFirst = s => Math.max(1, s.tl.kfs.length ? s.tl.kfs[0].frame : 1);  // (the earliest frame a seek reaches)
+// (kf0: the first keyframe's frame, from the engine worker with each frame's state. Was: s.tl.kfs[0].frame, but the
+// page has only the keyframes' count, so the Clip button threw on every replay: necoTV#11)
+const clipFirst = s => Math.max(1, s.tl.kf0 || 1);  // (the earliest frame a seek reaches)
 const clipLast = s => s.liveSrc ? Math.max(s.tl.simMax, s.M._viewer_frame()) : tlMax(s.tl);
 const clipIsLive = s => !!(s && s.liveSrc) || document.body.classList.contains('live');
 function clipNow() {
@@ -6289,12 +6291,18 @@ async function fastExport(s, c, vcfg, acfg) {
 // The logged sound events rendered offline the way audioHooks plays them live: one voice per sound set (Play restarts
 // it, Stop cuts it, volume / pan in DirectSound units), the BGM stream from where it was at the pre-roll start.
 async function renderExportAudio(s, ev, pre, c) {
-  const M = s.M, oc = new OfflineAudioContext(2, Math.ceil((c.b - pre) / 60 * EXPORT_SR), EXPORT_SR);
+  // (the game's sound files: the engine in its worker has them, the page reads its own copies (soundM). Was: s.M, the
+  // page's stand-in for the worker's module, which has no files: every clip was saved without the game's sounds,
+  // necoTV#11)
+  const FS = (s.remote ? s.SM : s.M).FS, oc = new OfflineAudioContext(2, Math.ceil((c.b - pre) / 60 * EXPORT_SR), EXPORT_SR);
   const at = k => Math.max(0, (k - pre) / 60);
-  const chainOf = () => {
+  // (the mixer as the page plays it: the music level, the effects level and mute)
+  const musicOut = oc.createGain(), sfxOut = oc.createGain();
+  musicOut.gain.value = musicLevel(); sfxOut.gain.value = sfxLevel(); musicOut.connect(oc.destination); sfxOut.connect(oc.destination);
+  const chainOf = out => {
     const g = oc.createGain(); g.channelCount = 2; g.channelCountMode = 'explicit'; g.channelInterpretation = 'speakers';
     const sp = oc.createChannelSplitter(2), mg = oc.createChannelMerger(2), l = oc.createGain(), r = oc.createGain();
-    g.connect(sp); sp.connect(l, 0); sp.connect(r, 1); l.connect(mg, 0, 0); r.connect(mg, 0, 1); mg.connect(oc.destination);
+    g.connect(sp); sp.connect(l, 0); sp.connect(r, 1); l.connect(mg, 0, 0); r.connect(mg, 0, 1); mg.connect(out);
     return { g, l, r, src: null };
   };
   const setVp = (v, vol, pan, t) => {
@@ -6308,12 +6316,12 @@ async function renderExportAudio(s, ev, pre, c) {
     const al = annLine(path), key = al ? al.key : path;
     keyOf.set(path, key);
     if (decoded.has(key)) continue;
-    let bytes = al ? al.bytes : null; if (!bytes) try { bytes = M.FS.readFile(path); } catch (e) {}
+    let bytes = al ? al.bytes : null; if (!bytes) try { bytes = FS.readFile(path); } catch (e) {}
     decoded.set(key, bytes ? oc.decodeAudioData(bytes.slice().buffer).catch(() => null) : Promise.resolve(null));
   }
   const bufs = new Map(await Promise.all([...decoded].map(async ([p, d]) => [p, await d])));
-  const voices = new Map(), bgmV = chainOf(), exportBgm = new Map();
-  const voice = ch => { let v = voices.get(ch); if (!v) voices.set(ch, v = chainOf()); return v; };
+  const voices = new Map(), bgmV = chainOf(musicOut), exportBgm = new Map();
+  const voice = ch => { let v = voices.get(ch); if (!v) voices.set(ch, v = chainOf(sfxOut)); return v; };
   const bgmStart = async (path, loop, loopPos, t, offset) => {
     cutAt(bgmV, t);
     const p = path.replace(/^\/game\//, '');

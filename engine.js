@@ -3266,7 +3266,7 @@ function liveCssBg(s, paths) {
 let loopOn = false;
 // viewer.js:5339
 let clipPanel = false, clipPanelKey = '', clipDrag = null;
-// viewer.js:5528
+// viewer.js:5530
 function liveTapes(s) {
   const L = s.liveSrc;
   if (!L || !s.M) return;
@@ -3291,17 +3291,17 @@ function liveTapes(s) {
   const can = liveClipCan();
   if (can !== L.clipCan) { L.clipCan = can; clipPanelKey = ''; marksKey = ''; }
 }
-// viewer.js:5794
+// viewer.js:5796
 let clipLt = null;  // {name, bytes} or null
-// viewer.js:6826
+// viewer.js:6834
 let labCfg = null, labOn = null;
-// viewer.js:6827
+// viewer.js:6835
 function labApply(c) {
   labCfg = c || null;
   self.__mbaaLabSet = c && c.set ? c.set : null;
   labAttach();
 }
-// viewer.js:6832
+// viewer.js:6840
 function labAttach() {
   const m = session && session.M;
   if (labOn && labOn !== m) { try { delete labOn.__labSync; labOn.__labVoid = 0; labOn.mbaaRadioDefer = labOn.__labDefer; delete labOn.__labDefer; } catch (e) {} labOn = null; }
@@ -3313,7 +3313,7 @@ function labAttach() {
     m.__labVoid = labCfg.void ? 1 : 0; labOn = m;
   } else if (labOn === m) { delete m.__labSync; m.__labVoid = 0; m.mbaaRadioDefer = m.__labDefer; delete m.__labDefer; labOn = null; }
 }
-// viewer.js:6845
+// viewer.js:6853
 function labInfo() {
   const m = session && session.M, objs = [];
   if (m && m.HEAPU8 && !m.__remote) {
@@ -3381,7 +3381,7 @@ function engStateNow() {
     rsi: M._viewer_radio_stage_in ? M._viewer_radio_stage_in() : 0, rsp: M._viewer_radio_stage_phase ? M._viewer_radio_stage_phase() : 0,
     rsid: M._viewer_radio_stage_id ? M._viewer_radio_stage_id() : 0,
     tl: t ? { simMax: t.simMax, end: t.end, est: t.est, intro: t.intro, round: t.round, scene: t.scene, want: t.want,
-              running: !!t.running, marks: t.marks.length, kfs: t.kfs.length, bytes: t.bytes } : null,
+              running: !!t.running, marks: t.marks.length, kfs: t.kfs.length, kf0: t.kfs.length ? t.kfs[0].frame : 0, bytes: t.bytes } : null,
     peek: engPeekNow(M),
     live: s.liveSrc ? { follow: !!s.liveFollow, synced: !!s.liveSynced, cardLive: !!s.cardLive, streakKnown: !!s.streakKnown, next: !!s.liveSrc.next,
                         held: !!s.liveHeld, ff: !!s.liveFF, game: M.ccall('viewer_spectate_game', 'number', [], []), ahead: M.ccall('viewer_spectate_buffered', 'number', [], []),
