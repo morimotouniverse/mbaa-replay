@@ -39,7 +39,12 @@ const Q = new URLSearchParams(location.search);
 // this page's; a local test page uses the other loopback name); none set: Firefox draws WebGL2 on the page's canvas.
 const XFRAME_SITE = 'https://replay.2dfm.org';
 const XFRAME_BASE = location.hostname === '127.0.0.1' ? `http://localhost:${location.port}` : location.hostname === 'localhost' ? `http://127.0.0.1:${location.port}` : XFRAME_SITE;
-const XFRAME = !!XFRAME_BASE && /Firefox\//.test(navigator.userAgent) && !/Android/.test(navigator.userAgent) && !!navigator.gpu && Q.get('gpu') !== 'webgl2' && Q.get('xframe') !== '0';  // (xframe=0: a test switch, with gpu=webgpu the bug itself)
+// WebGL2 draws for everyone; WebGPU is experimental: on with the settings' "WebGPU (experimental)" (mbaaWebgpu, the page
+// reloads), or a test's ?gpu= (wgpu.js has the rule). (user 2026-11-11)
+let webgpuOn = false;
+try { webgpuOn = localStorage.getItem('mbaaWebgpu') === '1'; } catch (e) {}
+const GPU_Q = Q.get('gpu') || (webgpuOn && navigator.gpu ? 'core' : '');
+const XFRAME = !!XFRAME_BASE && /Firefox\//.test(navigator.userAgent) && !/Android/.test(navigator.userAgent) && !!navigator.gpu && !!GPU_Q && GPU_Q !== 'webgl2' && Q.get('xframe') !== '0';  // (xframe=0: a test switch, with gpu=webgpu the bug itself)
 // a page's first-load steps (performance.now(), the first time each is reached): window.__mbaaBoot (the join-time checks,
 // artifacts/xz_check/perf_plan/snapjoin goal D)
 const bootMarks = window.__mbaaBoot = {};
@@ -6792,6 +6797,9 @@ async function main() {
   if (clipJ) clipChatLoad(clipJ, +(Q.get('t') || 0));
   liveJumpInit();
   fsOfferInit();
+  { const el = document.getElementById('webgpu');
+    if (el) { el.checked = webgpuOn; if (!navigator.gpu) el.parentElement.style.display = 'none';
+      el.onchange = () => { try { localStorage.setItem('mbaaWebgpu', el.checked ? '1' : '0'); } catch (e) {} location.reload(); }; } }
   { const el = document.getElementById('song55');  // (songSub)
     if (el) { el.checked = songOn; el.onchange = () => { songOn = el.checked; try { localStorage.setItem('mbaa-song55', songOn ? '1' : '0'); } catch (e) {}
       el.blur(); if (session && session.bgmSync && session.M) session.bgmSync(session.M._viewer_frame()); }; } }
@@ -6879,7 +6887,7 @@ window.__mbaaLab = { set: c => labApply(c), info: () => labInfo() };
     const off = XFRAME ? null : freshCanvas();
     // (the page's query on the worker's own address: the module reads its options (gpu=, capture=, nos3tc=...) from
     // location.search, which in a worker is the worker script's)
-    const wq = (location.search ? `${location.search}&` : '?') + `ev=${wasmV()}&to=${performance.timeOrigin}`;
+    const wq = (location.search ? `${location.search}&` : '?') + (Q.get('gpu') || !GPU_Q ? '' : `gpu=${GPU_Q}&`) + `ev=${wasmV()}&to=${performance.timeOrigin}`;
     if (XFRAME) {
       // (the frame over the canvas's box, under the overlay; it starts the worker and hands it this port: E.w is the port)
       const gc = document.getElementById('canvas'), fr = document.createElement('iframe'), ch = new MessageChannel();
