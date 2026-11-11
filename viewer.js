@@ -393,7 +393,6 @@ const CHARA = { 0: 'Sion', 1: 'Arcueid', 2: 'Ciel', 3: 'Akiha', 4: 'Hisui & Koha
   72: 'B. Aoko', 73: 'B. White Len', 85: 'B. Kohaku & Mech' };
 function matchTitle(rep) {
   if (rep.length < 0x5C) return 'MBAACC replay';
-  if (rep[0x18] === 0x55 && rep[0x19] === 0x0C) return 'Character select';  // (a live session started at the select: no setup yet)
   const dv = new DataView(rep.buffer, rep.byteOffset, rep.byteLength);
   const side = o => { const m = MOON_LABEL[dv.getInt32(o + 8, true)]; return (m ? m + ' ' : '') + (CHARA[dv.getInt32(o + 4, true)] || `#${dv.getInt32(o + 4, true)}`); };
   return `${side(0x3C)} vs ${side(0x4C)}`;
@@ -1592,7 +1591,16 @@ async function startLive(id, match = null, entry = null) {
   // (the same match: the host's next match on the same id has its own streaks)
   if (!info.streak && prev && prev.M && liveOurs(info, prev.liveSrc) && prev.streakKnown && prev.M.HEAP32[0x54EEE8 >> 2] !== 1)
     info.streak = STREAK.map(a => prev.M.HEAP32[a >> 2]);
-  if (!boot) {
+  // (a character select the page joins (entry.sel: the bridge holds it from its first frame; necoTV#8): no tape, no
+  // snapshot: its records, and the engine started at the select)
+  const sel = info.css && info.sel ? { name: `LIVE ${info.names.map(n => n.trim()).join(' vs ')}`, last: info.sel.last || null } : null;
+  if (sel) {
+    if (!first) {
+      const q = liveReqs && liveReqs.id === id && liveReqs.game === info.game && performance.now() - liveReqs.at < SNAP_PRE_MS ? liveReqs : liveStartReqs(id, info);
+      liveReqs = null; first = q.first;
+    }
+    liveExtSet(id, ext);
+  } else if (!boot) {
     const q = liveReqs && liveReqs.id === id && liveReqs.game === info.game && performance.now() - liveReqs.at < SNAP_PRE_MS ? liveReqs : liveStartReqs(id, info);
     liveReqs = null;
     snapQ = q.snap;
@@ -1610,9 +1618,11 @@ async function startLive(id, match = null, entry = null) {
   bootMark('bootRep');
   if (liveWant !== id) return;
   // (the live match being left for another: kept warm for a switch back)
-  if (prev && prev.liveSrc && prev.liveSrc.id !== id) liveKeepTake(prev);
-  liveSrc = { id, info, since: info.game, first, fresh: true, snapP: snapQ || liveSnapFetch(id, info) };
+  // (not a session that started at a character select: it has no tape to come back to; a switch back joins it fresh)
+  if (prev && prev.liveSrc && prev.liveSrc.id !== id && !prev.select) liveKeepTake(prev);
+  liveSrc = { id, info, since: info.game, first, fresh: true, snapP: sel ? null : snapQ || liveSnapFetch(id, info) };
   window.__mbaaRepUrl = null;
+  if (sel) { await start(null, session && session.M ? 'switch' : false, id, sel); return; }
   // (a switch from a match on screen: quiet, the old picture held until the new match's first frame is drawn and
   // crossfaded into it, not the opening movie; a first load: the movie)
   await start(new File([boot], `LIVE ${info.names.map(n => n.trim()).join(' vs ')}`), session && session.M ? 'switch' : false, id);
@@ -1648,9 +1658,10 @@ function livePress(m) {
 }
 function liveStartReqs(id, info) {
   const rec = `${LIVE}/live/${id}/rec?from=${info.game}&since=${info.game}&v=${VIEWER}` + (info.match ? `&match=${encodeURIComponent(info.match)}` : '');
-  const q = liveReqs = { id, game: info.game, at: performance.now(), boot: liveFetch(`${LIVE}/live/${id}/boot.rep?game=${info.game}`).catch(() => null),
+  const noTape = !!(info.css && info.sel);  // (a select the page joins: records only)
+  const q = liveReqs = { id, game: info.game, at: performance.now(), boot: noTape ? Promise.resolve(null) : liveFetch(`${LIVE}/live/${id}/boot.rep?game=${info.game}`).catch(() => null),
     first: liveFetch(rec).then(async r => r.ok ? { bytes: new Uint8Array(await r.arrayBuffer()), ext: r.headers.get('X-Live-Ext') } : null).catch(() => null),
-    snap: liveSnapFetch(id, info) };
+    snap: noTape ? null : liveSnapFetch(id, info) };
   liveFiles(info);
   return q;
 }
@@ -5044,7 +5055,9 @@ function xfFade(me) {
   requestAnimationFrame(() => { if (xf === me) c.style.opacity = '0'; });
   setTimeout(() => { if (xf !== me) return; xf = null; c.hidden = true; c.width = c.height = 1; }, XF_STAGE_MS + 60);
 }
-async function start(file, quiet = false, liveId = null) {
+// select: a live session that starts at a character select (startLive: the bridge's entry.sel), {name, last: each player's
+// last pick or null}: no tape; the engine goes to the select itself (the worker's play: viewer_select_start)
+async function start(file, quiet = false, liveId = null, select = null) {
   nextCardHide();  // (a new session: any next-match card was the old one's)
   if (!liveId) { liveKeptDrop('a replay opened'); liveResumeK = null; }
   // (the last game's picture, faded into the next's; quiet 'switch', another live match picked (startLive): once the
@@ -5059,20 +5072,23 @@ async function start(file, quiet = false, liveId = null) {
   if (musicPick && !(liveId && musicLiveId === liveId)) musicSet('');
   xfStagePending = xfYieldPending = false;  // (the session's start has its own fade)
   if (ensureAudio()) actx.resume();  // (after a drop or file pick: the page has had its gesture)
-  const rep = new Uint8Array(await file.arrayBuffer());
-  let keys, want;
-  try { repKeys(rep); repStageFix(rep); keys = repKeys(rep); want = wantFor(rep); } catch (e) { loading(false); status('error: ' + e.message); return; }
+  const rep = select ? new Uint8Array(0) : new Uint8Array(await file.arrayBuffer());
+  const name = select ? select.name : file.name;
+  let keys = null, want;
+  if (select) {
+    // (the boot's files and the select screen's, in before the first frame: the select is this session's first scene)
+    want = man.plan ? new Set([...man.plan.boot, ...man.plan.common, ...liveCssFiles(man)]) : null;
+  } else {
+    try { repKeys(rep); repStageFix(rep); keys = repKeys(rep); want = wantFor(rep); } catch (e) { loading(false); status('error: ' + e.message); return; }
+  }
   // live: the select screen's files (every character's portraits and palettes, ~80 MB: they were 80% of a first live
   // join's download, 10-30 s before the first frame) come in the background once the match plays; the retry menu's
   // BGM (small) with the match. liveCssBg holds the game at the result screen if they are not in yet
   const cssBg = want && liveSrc ? [...liveCssFiles(man)].filter(p => !/^bgm\//.test(p)) : null;
   if (want && liveSrc) for (const p of liveCssFiles(man)) if (/^bgm\//.test(p)) want.add(p);
-  // (a session that starts at the host's character select (the bridge's selRep tape: year word 0x0C55; necoTV#8): the
-  // select screen's files are the match's files, in before the first frame)
-  if (want && liveSrc && rep[0x18] === 0x55 && rep[0x19] === 0x0C) for (const p of liveCssFiles(man)) want.add(p);
   if (want && liveResumeK) for (const p of liveResumeK.want) want.add(p);  // (back to a kept match: every file it had in)
   if (want) {
-    status(`stage ${keys.stage}, P1 ${keys.p1[0]}:${keys.p1[1]} vs P2 ${keys.p2[0]}:${keys.p2[1]}: fetching`);
+    status(keys ? `stage ${keys.stage}, P1 ${keys.p1[0]}:${keys.p1[1]} vs P2 ${keys.p2[0]}:${keys.p2[1]}: fetching` : 'character select: fetching');
     bootMark('filesStart');
     await fetchAll(man, want, 'match assets');
     bootMark('files');
@@ -5080,11 +5096,11 @@ async function start(file, quiet = false, liveId = null) {
   }
   if (liveId) swMark('files', true, liveId);
   window.__mbaaKeys = keys;
-  const [, when] = repLabel(file.name);
-  document.getElementById('title').textContent = matchTitle(rep) + (when ? ` \u00b7 ${when}` : '');
+  const [, when] = repLabel(name);
+  document.getElementById('title').textContent = select ? 'Character select' : matchTitle(rep) + (when ? ` \u00b7 ${when}` : '');
   const next = pl.items[pl.i + 1];
   if (CAPTURE) await movieLoad();
-  await play(rep, file.name, 0, want, liveId);
+  await play(rep, name, 0, want, liveId, select ? { last: select.last || null } : null);
   if (want && next) prefetch(next, want);
   else if (want) cachePrune(new Set([...want, ...(cssBg || [])]));  // the last match: the previous one's files go
   if (cssBg && session && session.liveSrc) liveCssBg(session, cssBg);
@@ -7224,14 +7240,14 @@ window.__mbaaLab = { set: c => labApply(c), info: () => labInfo() };
     if (can !== L.clipCan) { L.clipCan = can; clipPanelKey = ''; marksKey = ''; }
   }
   let liveSeq = 0;
-  play = async function enginePlay(rep, name, catchUp = 0, want = null, liveId = null) {
+  play = async function enginePlay(rep, name, catchUp = 0, want = null, liveId = null, select = null) {
     { const b = document.getElementById('ffbadge'); if (b) b.hidden = true; }
     await engStart();
     const w = want || new Set(cache.keys());
     sendFiles([...w], 0);
     radioSent = ''; radioStageSync();
     movieHook();  // (a capture run's movie, fetched before the play: before the play command)
-    const s = { name, rep, remote: true, want: w, live: true, mute: false, gen: 0, M: remoteM(), tl: null, SM: soundM() };
+    const s = { name, rep, select, remote: true, want: w, live: true, mute: false, gen: 0, M: remoteM(), tl: null, SM: soundM() };
     // a live start (startLive, liveSwitch): the source to the worker, whose liveBegin runs the poll; its first records and
     // snapshot sent on as they come; the page's session keeps the source's bookkeeping (records, tapes: clips, chat)
     let live = null;
@@ -7255,7 +7271,7 @@ window.__mbaaLab = { set: c => labApply(c), info: () => labInfo() };
     window.__mbaa = { Module: s.M, man };
     E.st = null;
     pageSync();
-    await cmd('play', { rep: rep.slice(), name, catchUp, want: [...w], live }).catch(() => {});
+    await cmd('play', { rep: rep.slice(), name, catchUp, want: [...w], live, select }).catch(() => {});
   };
   requestSeek = T => (session && session.remote ? cmd('seek', { T }) : Promise.resolve());
   stepBy = (n, pause = true) => { if (pause && !ui.paused) { ui.paused = true; document.querySelector('#pause .i').className = 'i i-play'; } return cmd('step', { n, pause }); };

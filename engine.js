@@ -269,7 +269,7 @@ function slogWatch(s) {
     w.sent = true; slogAdd('stall', `no frame for ${Math.round((now - w.fAt) / 1000)} s at frame ${f}`); slogSend(s, 'stall');
   }
 }
-// viewer.js:411
+// viewer.js:410
 function repKeys(rep) {
   const v = new DataView(rep.buffer, rep.byteOffset, rep.byteLength), i = o => v.getInt32(o, true);
   const magic = new TextDecoder().decode(rep.slice(0, 14));
@@ -301,10 +301,10 @@ function repEstimate(rep) {
     return sum + 1200 + 450 * n;
   } catch (e) { return 0; }
 }
-// viewer.js:417
+// viewer.js:416
 const fmt = (t, c, m) => t.replace(/\{(\w):02d\}/g, (_, k) => String(k === 'c' ? c : m).padStart(2, '0'))
                           .replace(/\{(\w)\}/g, (_, k) => String(k === 'c' ? c : m));
-// viewer.js:419
+// viewer.js:418
 function planFiles(man, keys) {
   const p = man.plan, out = new Set([...p.boot, ...p.common]);
   if (keys.stage !== null) {
@@ -321,7 +321,7 @@ function planFiles(man, keys) {
   }
   return withSiblings(man, out);
 }
-// viewer.js:436
+// viewer.js:435
 function withSiblings(man, paths) {
   const out = new Set();
   for (const f of paths) {
@@ -335,7 +335,7 @@ function withSiblings(man, paths) {
   }
   return out;
 }
-// viewer.js:451
+// viewer.js:450
 const cache = new Map();  // game path -> Uint8Array
 function mkdirs(FS, path) {
   let cur = '';
@@ -391,13 +391,13 @@ function fsPut(FS, path, d) {
   const st = FS.open(path, 'w');
   try { FS.write(st, d, 0, d.length, 0, true); } finally { FS.close(st); }
 }
-// viewer.js:517
+// viewer.js:516
 let actx, master, outGain, musicGain, sfxGain;
-// viewer.js:803
+// viewer.js:802
 const bgmDecoded = new Map(), bgmParsedMap = new Map();
-// viewer.js:804
+// viewer.js:803
 let bgmStreamReady = false;
-// viewer.js:832
+// viewer.js:831
 function bgmDecode(p) {
   if (!bgmDecoded.has(p)) {
     const d = cache.get(p);
@@ -406,13 +406,13 @@ function bgmDecode(p) {
   }
   return bgmDecoded.get(p);
 }
-// viewer.js:856
+// viewer.js:855
 let session = null;
-// viewer.js:857
+// viewer.js:856
 const pl = { items: [], i: -1 };  // playlist: {name, file, url?} (see startItem)
-// viewer.js:858
+// viewer.js:857
 let man = null;
-// viewer.js:859
+// viewer.js:858
 const misses = new Set();  // bundle files the game looked up that the page had not fetched
 // a WebGPU instance's device lost (the GPU process restarted, a driver reset, device.destroy()): as a lost GL context, the
 // session started again on a new instance (its own device) at the same frame. The page path and the engine worker both
@@ -438,13 +438,13 @@ async function glRecover() {
   const want = withSiblings(man, new Set([...(s.want || []), ...(s.freed || []), ...(s.M.mbaaBootOpened || [])]));
   await fetchAll(man, want, 'restoring the picture');
   if (s.liveSrc) return startLive(s.liveSrc.id, s.liveSrc.info.match);
-  return play(s.rep, s.name, curFrame(), s.want ? new Set([...s.want, ...want]) : null);
+  return play(s.rep, s.name, curFrame(), s.want ? new Set([...s.want, ...want]) : null, null, s.select || null);
 }
-// viewer.js:1041
+// viewer.js:1040
 const frameBus = new Set();
-// viewer.js:1042
+// viewer.js:1041
 let frameBusAt = -1e9;
-// viewer.js:1043
+// viewer.js:1042
 function frameBusRun(now) {
   frameBusAt = now;
   for (const f of frameBus) { try { f(now); } catch (e) { console.warn('frame:', e); } }
@@ -503,7 +503,7 @@ function restoreBoot(s) {
   liveKeptStale(M);  // (a kept live match's textures survive the reset: liveKeepTake)
   M._viewer_tex_store_reset();  // the last match's sealed textures (the boot ones stay)
 }
-// viewer.js:1128
+// viewer.js:1127
 const PREWARM = !HASH && !CAPTURE && Q.get('reuse') !== '0' && !Q.get('files');
 let warmP = null;
 function engineWarm() {
@@ -628,13 +628,16 @@ function fillSession(s, want, had) {
   if (!HASH && !bgmStreamReady) for (const p of s.want) if (/^bgm\/.*\.opus$/.test(p) && cache.has(p)) bgmDecode(p);
   return s;
 }
-// viewer.js:1129
+// viewer.js:1128
 const call = (s, f, ...a) => s.M.ccall(f, 'number', a.map(() => 'number'), a);
 // play from the start; with catchUp = k, step to frame k first (no pacing) and continue from there
-async function play(rep, name, catchUp = 0, want = null, liveId = null) {
+// select: a live session that starts at a character select, {last: each player's last pick {chara, moon, color} or
+// null}: no tape is loaded; the engine goes to the select itself (viewer_select_start; the page's startLive, entry.sel)
+async function play(rep, name, catchUp = 0, want = null, liveId = null, select = null) {
   { const b = document.getElementById('ffbadge'); if (b) b.hidden = true; } catchUpShow(null);  // (a new session: its own state)
   misses.clear();
   const s = await newSession(rep, name, want);
+  s.select = select;
   swMark('session');
   try { call(s, 'viewer_rate', 1); } catch (e) {}  // (a reused module keeps the last session's live pacing rate)
   // stage animations on, except for native comparisons (?stageAnim=0, hash runs): the oracle's settings have them off
@@ -654,14 +657,17 @@ async function play(rep, name, catchUp = 0, want = null, liveId = null) {
     s.M.mbaaBootOpened = new Set(s.opened);  // read before the snapshot: a reused instance's later matches never open them
   }
   bootMark('bootSnap');
-  if (!call(s, 'viewer_load')) { window.__mbaaStarted = -1; loading(false); status('start failed (see console)'); return; }
+  if (!select && !call(s, 'viewer_load')) { window.__mbaaStarted = -1; loading(false); status('start failed (see console)'); return; }
   // a live clip's replay: the live session's forcing (clipLtFor), before the first frame
   s.lt = clipLt && clipLt.name === name && !liveSrc ? clipLt.bytes : null;
   if (s.lt && !s.M.ccall('viewer_lt_set', 'number', ['array', 'number'], [s.lt, s.lt.length])) { console.warn('clip: live forcing unreadable'); s.lt = null; }
   if (!s.lt) s.M.ccall('viewer_lt_clear', null, [], []);
   else console.log(`clip: replay played with its live forcing (${s.lt.length} bytes)`);
   if (HASH || CU_HASH) s.M.ccall('viewer_hash_enable', null, [], []);
-  call(s, 'viewer_play', 0);
+  if (select) {
+    const L = select.last, a = p => (L ? [L.chara[p], L.color[p], L.moon[p]] : [-1, 0, 0]);
+    s.M._viewer_select_start(...a(0), ...a(1));
+  } else call(s, 'viewer_play', 0);
   swMark('play'); swMark('load');
   // (a live start: start()'s liveId, not the page's ?live=: a chat page joins a match in place (pushState), and with the
   // URL's parameters as loaded it played the boot tape as a replay, the players idle until a reload; user 2026-11-04)
@@ -715,7 +721,7 @@ async function refetchAndReplay(s, frame) {
   console.warn(`asset plan missed ${want.size} files at frame ${frame}:`, [...want]);
   window.mbaaPlanMisses = (window.mbaaPlanMisses || []).concat([...want]);
   await fetchAll(man, want, 'fetching missed files');
-  return play(s.rep, s.name, frame, new Set([...s.want, ...want]));
+  return play(s.rep, s.name, frame, new Set([...s.want, ...want]), null, s.select || null);
 }
 function watch(s) {
   s.watching = true;
@@ -749,7 +755,7 @@ async function hashRun(s) {
       const extra = withSiblings(man, misses);
       await fetchAll(man, extra, 'fetching missed files');
       window.mbaaPlanMisses = (window.mbaaPlanMisses || []).concat([...misses]);
-      return play(s.rep, s.name, 0, new Set([...s.want, ...extra]));
+      return play(s.rep, s.name, 0, new Set([...s.want, ...extra]), null, s.select || null);
     }
     status(`state hash ${h.frames} frames`);
     await new Promise(r => setTimeout(r, 0));
@@ -758,11 +764,11 @@ async function hashRun(s) {
   h.done = true;
   hashDone(s.name, h);
 }
-// viewer.js:1148
+// viewer.js:1147
 const ui = { paused: false, speed: 1, boxes: false, inputs: false, skipIntro: false, hud: true, music: true, hitstun: true };
-// viewer.js:1155
+// viewer.js:1154
 const HS_STYLE = Q.get('hitstunStyle');  // (the bar's look while it is designed: 0 ETM, 1 ETM+, 2 UNI, 3 UNI + bounce diamonds)
-// viewer.js:1156
+// viewer.js:1155
 const hitstunApply = s => {  // (an engine without it: nothing)
   if (s.M._viewer_hitstun_style && HS_STYLE != null) call(s, 'viewer_hitstun_style', +HS_STYLE);
   if (s.M._viewer_hitstun_bar) call(s, 'viewer_hitstun_bar', ui.hitstun ? 1 : 0);
@@ -1468,7 +1474,7 @@ async function seekTo(s, T) {
   overlayDirty = true;
   if (!s.endShown) status(ui.paused ? 'paused' : 'playing');
 }
-// viewer.js:1189
+// viewer.js:1188
 const SCENE_VS = 8, SCENE_WIN = 5;  // the VS screen and the win screen (g_CurrentSceneId 0x54EEE8)
 async function skipIntro(s) {
   const t = s.tl, M = s.M;
@@ -1494,29 +1500,29 @@ async function skipIntro(s) {
 }
 const LIVE_BEHIND = 240;  // frames kept buffered (4 s)
 const LIVE_WIN = 8;  // polls (~8 s) the catch-up decisions look back over (a round end's burst and pause: ~5 s)
-// viewer.js:1208
+// viewer.js:1207
 let liveSrc = null;  // {id, info, since}
-// viewer.js:1218
+// viewer.js:1217
 const wClock = { w: null, n: 0, cb: new Map() };
-// viewer.js:1219
+// viewer.js:1218
 const wClear = t => { if (t < 0) wClock.cb.delete(-t); else clearTimeout(t); };
-// viewer.js:1232
+// viewer.js:1231
 const liveNet = { fails: 0, troubleAt: -1e9, notice: '',
   delay: () => liveNet.fails ? Math.min(1000 * 2 ** (liveNet.fails - 1), 5000) : 1000,
   recent: () => performance.now() - liveNet.troubleAt < 60000 };
-// viewer.js:1267
+// viewer.js:1266
 const annDefault = { files: null, p: null, src: '' };
-// viewer.js:1366
+// viewer.js:1365
 let liveWant = null, liveCss = null;
-// viewer.js:1376
+// viewer.js:1375
 let liveResume = null;
-// viewer.js:1395
+// viewer.js:1394
 const liveOurs = (m, L) => !!m && !!L && m.id === L.id && (!m.match || !(L.info && L.info.match) || m.match === L.info.match);
-// viewer.js:1399
+// viewer.js:1398
 const LIVE_IDLE = 300, liveIdle = m => m.age > LIVE_IDLE, liveGone = m => m.silent > 8 || liveIdle(m);
-// viewer.js:1404
+// viewer.js:1403
 let sw = null;
-// viewer.js:1454
+// viewer.js:1453
 let liveListLast = null;  // {at, l}: the newest list read (an entry from it is fresh for LIVE_FRESH ms)
 // ---- the server snapshot join (artifacts/xz_check/perf_plan/snapjoin): the bridge's snapshot runner (tools/web/cc_snap.mjs)
 // keeps a typed snapshot of each live game every ~1.5 s (web/host/snapshot.cpp: PC's MBAACC typed deep-join format + the
@@ -1765,15 +1771,15 @@ function cuDone(s, f0, t0, drawn) {
   if (s.cssBgGo) s.cssBgGo();
   console.log(`live: caught up ${r.frames} frames in ${Math.round(ms)} ms (${Math.round(r.fps)} frames/s, ${drawn} drawn)`);
 }
-// viewer.js:1888
+// viewer.js:1899
 const VIEWER = Array.from(crypto.getRandomValues(new Uint8Array(12)), b => 'abcdefghijklmnopqrstuvwxyz0123456789'[b % 36]).join('');
-// viewer.js:2474
+// viewer.js:2485
 let stagePanel = null, stageKey = '', radio = null, oldRadio = null, radioGame = 'aacc';
-// viewer.js:2625
+// viewer.js:2636
 let xfStagePending = false;  // (a pick's stage swap to crossfade: radioStageSync)
-// viewer.js:2626
+// viewer.js:2637
 let xfYieldPending = false;  // (a pick's or a clear's swap with a live extension's page-drawn stage, to fade: radioStageSync)
-// viewer.js:2675
+// viewer.js:2686
 let radioStageFollow = true;
 // The stage: the pick's stage file into MEMFS (sharing the fetched buffer; a stage file MBAACC also ships is bg/bgNN.dat,
 // whose MEMFS copy may be the 1-byte probe placeholder) and sent to the game, which swaps stages between frames. Sent
@@ -1792,7 +1798,7 @@ function radioPut(s, p) {
   return true;
 }
 let radioOwnFetch = null;
-// viewer.js:2778
+// viewer.js:2789
 function radioStageFiles(id) {
   const p = man.plan;
   if (!p || !p.stage) return [];
@@ -1821,9 +1827,9 @@ function radioFilesIn(s, id) {
   for (const p of files) radioPut(s, p);
   return true;
 }
-// viewer.js:2787
+// viewer.js:2798
 const stageFollows = () => radioStageFollow || !!(radio && radio.chip);
-// viewer.js:2788
+// viewer.js:2799
 const radioPickHasStage = () => !!(radio && stageFollows() && !HASH && (radio.dat || (radio.stages && radio.stages.length)));
 function radioStageSync(s) {
   const M = s && s.M;
@@ -1874,7 +1880,7 @@ function radioStageSync(s) {
   if (st) st.lights.forEach(([pos, power], i) => M._viewer_radio_stage_light(i, pos, power));
   M.ccall('viewer_radio_stage_want', null, ['string', 'number', 'number'], [st ? st.dat : '', want, st ? st.lights.length : 0]);
 }
-// viewer.js:3206
+// viewer.js:3217
 function liveKeep(L, b) {
   const dv = new DataView(b.buffer, b.byteOffset, b.byteLength);
   for (let o = 0; o + 244 <= b.length;) {
@@ -1890,7 +1896,7 @@ function liveFeed(s, b) {
   call(s, 'viewer_spectate_feed', p, b.length);
   s.M._free(p);
 }
-// viewer.js:3221
+// viewer.js:3232
 function liveCssFiles(man) {
   const out = new Set();
   for (const p of Object.keys(man.files))
@@ -1898,7 +1904,7 @@ function liveCssFiles(man) {
         /^story\/battle\/[^/]+_table\.txt$/.test(p)) out.add(p);
   return withSiblings(man, out);
 }
-// viewer.js:3233
+// viewer.js:3244
 const CSS_SCENE = 20, CSS_OBJ = 0x773158, CSS_SLOT = 0x74D8E8, BATTLE_SLOT = 0x74D838, STAGE_ID = 0x74FD98;
 function liveCssWatch(s) {
   const H = s.M.HEAP32, g = a => H[a >> 2];
@@ -1987,15 +1993,15 @@ const bootSetup = rep => {  // boot.rep's header (cc_live.mjs bootRep): the stag
   const dv = new DataView(rep.buffer, rep.byteOffset, rep.byteLength), i = o => dv.getInt32(o, true);
   return { stage: i(0x28), chara: [i(0x40), i(0x50)], moon: [i(0x44), i(0x54)], color: [i(0x48), i(0x58)] };
 };
-// viewer.js:3239
+// viewer.js:3250
 const stageOk = id => id === 0 || !man || !man.files || !!man.files[`bg/bg${String(id).padStart(2, '0')}.dat`];
-// viewer.js:3240
+// viewer.js:3251
 function stageStandIn(id) {
   const ok = Object.keys(man.files).map(f => /^bg\/bg(\d\d)\.dat$/.exec(f)).filter(Boolean).map(m => +m[1])
     .filter(n => n > 0 && n !== 57 && n !== 58).sort((a, b) => a - b);  // (not the two giant stages: wider)
   return ok.length ? ok[id % ok.length] : 1;
 }
-// viewer.js:3245
+// viewer.js:3256
 function repStageFix(rep) {  // a .rep / boot tape's header stage (0x28), in place
   const dv = new DataView(rep.buffer, rep.byteOffset, rep.byteLength), id = dv.getInt32(0x28, true);
   if (stageOk(id)) return;
@@ -2102,12 +2108,12 @@ async function liveLateCheck(s, game) {
   console.log(`live: game ${game}'s setup came after our load: ${same ? 'the same' : 'different: switching'}`);
   if (!same) liveSwitch(s, p);
 }
-// viewer.js:3269
+// viewer.js:3280
 const STREAK = [0x76FC14, 0x770EB4];  // g_P1ConsecutiveWinStreak, g_P2ConsecutiveWinStreak (the player records', +0x4A0)
 const asciiName = n => /^[\x20-\x7e]*$/.test(n);
-// viewer.js:3271
+// viewer.js:3282
 const TUNE = Q.get('tune') === '1';
-// viewer.js:3272
+// viewer.js:3283
 const bannerTune = { nameGap: -1, nameSize: 16, nameDy: 0, winsGap: -1, winsSize: 11, winsDy: -11, maxPx: 216, scrollSpeed: 40,
   lapGap: 24, streak: -1, pageFont: 13, testP1: '', testP2: '' };
 function liveBanner(s) {
@@ -2243,11 +2249,11 @@ function liveRefeed(s) {  // restore(): after the keyframe is back
   for (const x of parts) all.set(x, o), o += x.length;
   liveFeed(s, all);
 }
-// viewer.js:3342
+// viewer.js:3353
 const KEEP_MS = +(Q.get('keepms') || 300000);
-// viewer.js:3343
+// viewer.js:3354
 let liveKept = null, liveResumeK = null, liveClickAt = null;
-// viewer.js:3346
+// viewer.js:3357
 const texKey = (a, i) => a[i] + ':' + a[i + 1] + ':' + a[i + 2];
 // the store entries a kept keyframe names: counted in M.mbaaTexHold, and in the timeline's reference map (store eviction
 // skips them; timelineInit seeds a new session's map from the hold)
@@ -2278,7 +2284,7 @@ function liveKeptDrop(why) {
   console.log(`live: the kept match is dropped (${why})`);
   if (session && session.tl && session.M === K.M) storeGc(session.tl);
 }
-// viewer.js:3348
+// viewer.js:3359
 function liveKeptStat(K) {
   const S = K.M.mbaaTexStore, seen = new Set(), cur = session && session.want;
   let tex = 0, texOnly = 0, files = 0, recs = 0;
@@ -2357,7 +2363,7 @@ async function liveKeptPoll(K) {
   } catch (e) {}
   if (liveKept === K) K.timer = wTimeout(() => liveKeptPoll(K), 1000);
 }
-// viewer.js:3368
+// viewer.js:3379
 function liveBackTake(K, prev, click) {
   liveKept = null; wClear(K.timer);  // (its texture hold stays until the restore takes it over: liveResumeApply)
   const B = window.__mbaaSwitchBack = { click, start: performance.now(), awayS: (Date.now() - K.at) / 1000, kept: liveKeptStat(K) };
@@ -2409,7 +2415,7 @@ function liveResumeApply(s) {
                 `${Math.round(B.caught - (B.click ?? B.start))} ms from the click`);
   }, 0);
 }
-// viewer.js:3387
+// viewer.js:3398
 function liveStateNow() {
   const s = session;
   if (!s || !s.liveSrc || !s.M) return null;
@@ -2418,7 +2424,7 @@ function liveStateNow() {
            wt: s.M.HEAP32[0x55D1D4 >> 2],  // (g_WorldTimer: the game's own frame; a session's frame numbers are its own)
            kfs: s.tl ? s.tl.kfs.length : 0, tlMB: s.tl ? Math.round(s.tl.bytes / 1e5) / 10 : 0, heapMB: Math.round(s.M.HEAPU8.length / 1e5) / 10 };
 }
-// viewer.js:3395
+// viewer.js:3406
 async function stateRowsTake(k, n) {
   const s = session;
   if (!s) return null;
@@ -2757,11 +2763,11 @@ function liveBegin(s) {  // play(): after viewer_play
   };
   poll();
 }
-// viewer.js:3487
+// viewer.js:3498
 const nextCard = { s: null, id: null, at: 0, timer: 0, raf: 0, stay: null, why: null };
-// viewer.js:3488
+// viewer.js:3499
 const liveName = m => m.matchup || (m.names || []).map(n => (n || '').trim()).join(' vs ');
-// viewer.js:3791
+// viewer.js:3802
 const curFrame = () => session ? (session.tl && session.tl.want !== null ? session.tl.want : session.M._viewer_frame()) : 0;
 function stepBy(n, pause = true) {
   if (!session || !session.tl) return Promise.resolve();
@@ -2774,26 +2780,26 @@ function stepBy(n, pause = true) {
   }
   return requestSeek(curFrame() + n);
 }
-// viewer.js:3866
+// viewer.js:3877
 const FB_CAP = 1024, FB_PER = 20, FB_N = 2 * FB_PER + 7, FB_CELLS = 75, FB_MEM = 400, FB_INTERVAL = 20;
-// viewer.js:3869
+// viewer.js:3880
 const FBC = { INACT: 1, JUMP: 2, HITSTUN: 3, BLOCK: 4, ACTIVE: 5, FREE: 6, ADV: 7, NEUTRAL: 8, FREEZE: 9, THROWN: 11,
               HITSTOP: 12, SHIELD: 13, THROW: 14 };
-// viewer.js:3873
+// viewer.js:3884
 const fb = { on: false, s: null, raw: null, tag: null, last: -1, procF: -1, rebuild: false, dirty: false, m: null, cv: null, place: true };
-// viewer.js:3874
+// viewer.js:3885
 function fbMachine() {
   const P = () => ({ main: new Uint8Array(FB_MEM), sub: new Uint8Array(FB_MEM), air: new Uint8Array(FB_MEM), proj: new Uint8Array(FB_MEM),
                      lastBusy: 0, lastActive: 0, lastProj: 0, firstActive: 0, firstCounter: 0, gotFirst: false, total: 0 });
   return { p: [P(), P()], counter: 0, interval: 0, intervalMax: FB_CELLS, isReset: false, doReset: false, doAdv: false,
            shared: 0, lastFc: 0, lastTrue: -1, clock: 0, inEx: false, freeAt: [-1, -1], adv: 0, advCell: -1, any: false };
 }
-// viewer.js:3880
+// viewer.js:3891
 function fbResetBars(m) {
   m.isReset = true; m.counter = 0; m.advCell = -1; m.interval = 0; m.doReset = false; m.intervalMax = FB_CELLS;
   for (const P of m.p) { P.main.fill(0); P.sub.fill(0); P.air.fill(0); P.proj.fill(0); }
 }
-// viewer.js:3885
+// viewer.js:3896
 function fbStep(m, R, o) {
   const g = o + 2 * FB_PER, X = [o, o + FB_PER];
   if (R[g + 3] !== 1) return;  // (not in a battle)
@@ -2838,7 +2844,7 @@ function fbStep(m, R, o) {
   }
   m.lastFc = fc; m.lastTrue = trueF;
 }
-// viewer.js:3930
+// viewer.js:3941
 function fbCell(m, P, R, x, g) {
   const first = () => { if (!P.gotFirst) { P.firstActive = P.firstCounter; P.gotFirst = true; } };
   let c;
@@ -2862,7 +2868,7 @@ function fbCell(m, P, R, x, g) {
   const k = m.counter % FB_MEM;
   P.main[k] = c; P.sub[k] = R[x + 12]; P.air[k] = R[x + 9] === 1 ? (R[x + 11] ? 2 : 1) : 0; P.proj[k] = R[x + 14] ? 1 : 0;
 }
-// viewer.js:3953
+// viewer.js:3964
 function fbClear(s) {
   fb.s = s; fb.last = -1; fb.procF = -1; fb.rebuild = false; fb.m = fbMachine(); fb.dirty = true;
   if (!fb.raw) { fb.raw = new Int32Array(FB_CAP * FB_N); fb.tag = new Int32Array(FB_CAP); }
@@ -2876,7 +2882,7 @@ function fbSample(s, f) {
   const p = M._viewer_framebar_sample() >> 2;
   fbPut(s, f, M.HEAP32.subarray(p, p + FB_N));
 }
-// viewer.js:3959
+// viewer.js:3970
 function fbPut(s, f, R) {
   if (fb.s !== s) fbClear(s);
   const i = f % FB_CAP;
@@ -2894,11 +2900,11 @@ function fbSeekBack(T) {
   for (let f = Math.max(0, T - FB_BACK); f < T; f++) if (fb.tag[f % FB_CAP] !== f) return FB_BACK;
   return 0;
 }
-// viewer.js:4058
+// viewer.js:4069
 let overlayDirty = true, lastDrawnFrame = -1;
-// viewer.js:4151
+// viewer.js:4162
 let seekDragging = false, marksKey = '';
-// viewer.js:4553
+// viewer.js:4564
 function perfProfiler(host) {
   const WAIT = Q.get('perfwait') || 'battle', GPU_MODE = /^(fence|off)$/.test(Q.get('perfgpu') || '') ? Q.get('perfgpu') : 'sync';
   const GPU_N = Math.max(5, +(Q.get('perfgpuN') || 30));
@@ -3171,7 +3177,7 @@ function perfProfiler(host) {
   if (WAIT !== 'manual') host.panel(WAIT === '0' ? 'perf: waiting for the game' : 'perf: waiting for a battle', P);
   return P;
 }
-// viewer.js:4884
+// viewer.js:4895
 function wantFor(rep) {
   if (!man.plan) return null;
   let want = planFiles(man, repKeys(rep));
@@ -3179,18 +3185,18 @@ function wantFor(rep) {
   if (Q.get('planDrop')) { const re = new RegExp(Q.get('planDrop')); want = new Set([...want].filter(f => !re.test(f))); }
   return want;
 }
-// viewer.js:4895
+// viewer.js:4906
 const MOVIE = 'dat/dat_m_vs.vsmv';
-// viewer.js:4900
+// viewer.js:4911
 let movieBytes = null, movieH264 = null, movieLoading = null, movieHook = null;
-// viewer.js:4936
+// viewer.js:4947
 function movieConfig(b) {
   if (!b.length) return { codec: 'avc1.640020', codedWidth: 640, codedHeight: 480 };
   const dv = new DataView(b.buffer, b.byteOffset, b.byteLength), u = i => dv.getUint32(i, true), dl = u(24), cl = u(28);
   return { codec: new TextDecoder().decode(b.subarray(32, 32 + cl)), codedWidth: u(8), codedHeight: u(12),
            description: b.slice(32 + cl, 32 + cl + dl), optimizeForLatency: true };
 }
-// viewer.js:4946
+// viewer.js:4957
 function movieVideo(b) {
   const dv = new DataView(b.buffer, b.byteOffset, b.byteLength), u = i => dv.getUint32(i, true);
   const cfg = movieConfig(b), n = u(16), key = u(20), tab = 32 + u(28) + u(24), off = i => u(tab + 4 * i);
@@ -3228,7 +3234,7 @@ function movieVideo(b) {
     },
   };
 }
-// viewer.js:5012
+// viewer.js:5023
 let xf = null, xfRuns = 0;
 // (live) the select screen's files in the background; until they are in MEMFS the game is held on reaching the result
 // screen (scene 5) or the retry menu, where the next select may follow (a match lasts minutes: in practice never held)
@@ -3245,11 +3251,11 @@ function liveCssBg(s, paths) {
     .catch(e => { console.warn('live: select screen files:', e); if (session === s) { s.cssBgP = null; s.cssBgHeld = false; liveHoldApply(s); } });
   if (s.livePic) s.cssBgGo(); else setTimeout(s.cssBgGo, 20000);
 }
-// viewer.js:5226
+// viewer.js:5242
 let loopOn = false;
-// viewer.js:5323
+// viewer.js:5339
 let clipPanel = false, clipPanelKey = '', clipDrag = null;
-// viewer.js:5512
+// viewer.js:5528
 function liveTapes(s) {
   const L = s.liveSrc;
   if (!L || !s.M) return;
@@ -3274,17 +3280,17 @@ function liveTapes(s) {
   const can = liveClipCan();
   if (can !== L.clipCan) { L.clipCan = can; clipPanelKey = ''; marksKey = ''; }
 }
-// viewer.js:5778
+// viewer.js:5794
 let clipLt = null;  // {name, bytes} or null
-// viewer.js:6810
+// viewer.js:6826
 let labCfg = null, labOn = null;
-// viewer.js:6811
+// viewer.js:6827
 function labApply(c) {
   labCfg = c || null;
   self.__mbaaLabSet = c && c.set ? c.set : null;
   labAttach();
 }
-// viewer.js:6816
+// viewer.js:6832
 function labAttach() {
   const m = session && session.M;
   if (labOn && labOn !== m) { try { delete labOn.__labSync; labOn.__labVoid = 0; labOn.mbaaRadioDefer = labOn.__labDefer; delete labOn.__labDefer; } catch (e) {} labOn = null; }
@@ -3296,7 +3302,7 @@ function labAttach() {
     m.__labVoid = labCfg.void ? 1 : 0; labOn = m;
   } else if (labOn === m) { delete m.__labSync; m.__labVoid = 0; m.mbaaRadioDefer = m.__labDefer; delete m.__labDefer; labOn = null; }
 }
-// viewer.js:6829
+// viewer.js:6845
 function labInfo() {
   const m = session && session.M, objs = [];
   if (m && m.HEAPU8 && !m.__remote) {
@@ -3674,7 +3680,7 @@ const engCmd = async e => {
                     first: v.first ? engLiveTake(`first:${v.seq}`) : null, snapP: v.snap ? engLiveTake(`snap:${v.seq}`) : null };
         liveResume = v.resume || null; liveClickAt = v.click ?? null; liveWant = v.id;
       }
-      await play(d.rep, d.name, d.catchUp || 0, d.want ? new Set(d.want) : null, v ? v.id : null);
+      await play(d.rep, d.name, d.catchUp || 0, d.want ? new Set(d.want) : null, v ? v.id : null, d.select || null);
       engPost({ ev: 'played', id: d.id, started: self.__mbaaStarted });
     } else if (d.cmd === 'liveFirst' || d.cmd === 'liveSnap') {
       // (ENG_NOW: it can come before its play, which waits in the queue behind a running command; the entry stays until
