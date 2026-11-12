@@ -1524,9 +1524,9 @@ const LIVE_IDLE = 300, liveIdle = m => m.age > LIVE_IDLE, liveGone = m => m.sile
 let sw = null;
 // viewer.js:1458
 let liveListLast = null;  // {at, l}: the newest list read (an entry from it is fresh for LIVE_FRESH ms)
-// ---- the server snapshot join (artifacts/xz_check/perf_plan/snapjoin): the bridge's snapshot runner (tools/web/cc_snap.mjs)
-// keeps a typed snapshot of each live game every ~1.5 s (web/host/snapshot.cpp: PC's MBAACC typed deep-join format + the
-// web sections). A join loads it at its battle's first frames instead of re-simulating the game up to the live point, then
+// ---- the server snapshot join (artifacts/xz_check/perf_plan/snapjoin): the bridge's native sim server (tools/server_sim/sim_server.cpp)
+// makes a snapshot of a live game when a join asks (web/host/snapshot.cpp: the delta against the game's start of PC's
+// MBAACC typed deep-join format + the web sections). A join loads it at its battle's first frames instead of re-simulating the game up to the live point, then
 // catches up only the seconds after it. The one way in to a battle under way (2026-11-07, no fallbacks: the join that
 // re-simulated the whole game is gone): no snapshot yet (a bridge just restarted: its runner makes one within seconds)
 // is waited for, asked again each second; a refused load or one whose state hash differs starts the match again (a
