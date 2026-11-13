@@ -44,6 +44,31 @@ const XFRAME_BASE = location.hostname === '127.0.0.1' ? `http://localhost:${loca
 let webgpuOn = false;
 try { webgpuOn = localStorage.getItem('mbaaWebgpu') === '1'; } catch (e) {}
 const GPU_Q = Q.get('gpu') || (webgpuOn && navigator.gpu ? 'core' : '');
+// Jill's mod (her hand-drawn portraits: the bundle manifest's 'jill' map, tools/web/bundle_mods.py), merged over the
+// files when on: the settings' "Jill mod" (mbaaJill, the page reloads), or a link's ?jill=1 / ?jill=0 for that view only
+// (user 2026-11-12: links copied with it on carry jill=1). Never in capture / hash runs (CE-parity pictures)
+let jillSaved = false;
+try { jillSaved = localStorage.getItem('mbaaJill') === '1'; } catch (e) {}
+const JILL = Q.get('capture') !== '1' && Q.get('hash') !== '1' && (Q.get('jill') === '1' || (Q.get('jill') !== '0' && jillSaved));
+const jillLink = u => { if (JILL) u.searchParams.set('jill', '1'); return u; };  // (a link this page copies or shares)
+// The site owner can turn Jill on for a live match's every viewer (the secret panel: j=1 in the match's extension value,
+// user 2026-11-12). Switched without a reload: the match card at once, the game's files from its next session (the art
+// a game has loaded stays until it loads it again)
+let jillForced = false, jillOn = false;
+function jillApply() {
+  const on = JILL || jillForced;
+  if (!man || !man.jill || on === jillOn) return;
+  jillOn = on;
+  const files = {}, E = window.__mbaaEngine;
+  for (const k in man.jill) {
+    files[k] = man.files[k] = on ? man.jill[k] : man.jillStock[k];
+    cacheDrop(k); if (E) E.sent.delete(k);
+    const u = porUrls.get(k); if (u) { porUrls.delete(k); if (typeof u === 'string' && u.startsWith('blob:')) URL.revokeObjectURL(u); }
+  }
+  if (E && E.w) E.w.postMessage({ cmd: 'manFiles', files });
+  document.querySelectorAll('#matchcard .por:not(.xfghost)').forEach((el, p) => { if (el.dataset.c !== undefined && el.dataset.c !== '') porShow(p, +el.dataset.c); });
+}
+function jillExt(v) { const f = /[?&]j=1(&|$)/.test(v || ''); if (f !== jillForced) { jillForced = f; jillApply(); } }
 const XFRAME = !!XFRAME_BASE && /Firefox\//.test(navigator.userAgent) && !/Android/.test(navigator.userAgent) && !!navigator.gpu && !!GPU_Q && GPU_Q !== 'webgl2' && Q.get('xframe') !== '0';  // (xframe=0: a test switch, with gpu=webgpu the bug itself)
 // a page's first-load steps (performance.now(), the first time each is reached): window.__mbaaBoot (the join-time checks,
 // artifacts/xz_check/perf_plan/snapjoin goal D)
@@ -867,7 +892,7 @@ const misses = new Set();  // bundle files the game looked up that the page had 
 // (the chat bot keeps the pins: pin / unpin, sent to all as +mbaa/pins). Links always name the public site.
 // (the game picture's own browser menu stays off: every canvas freshCanvas makes; the CSP forbids an inline handler)
 const ctxPublic = () => /^(127\.0\.0\.1|localhost)$/.test(location.hostname) ? location.origin + location.pathname : 'https://watch.meltyblood.org/';
-const ctxMatchUrl = m => `${ctxPublic()}?live=${m.id}`;
+const ctxMatchUrl = m => `${ctxPublic()}?live=${m.id}${JILL ? '&jill=1' : ''}`;
 const ctxPinKey = m => (m && (m.match || m.id)) || '';
 const ctxChat = () => window.mbaaChat || null;
 async function ctxCopy(text, what) {
@@ -1163,6 +1188,9 @@ const hitstunApply = s => {  // (an engine without it: nothing)
 };
 try { ui.hud = localStorage.getItem('mbaaHud') !== '0'; ui.music = localStorage.getItem('mbaaMusic') !== '0'; } catch (e) {}
 try { ui.skipIntro = localStorage.getItem('mbaaSkipIntro') === '1'; } catch (e) {}
+// replay speed: remembered across replays (necoTV#12: each replay is a new page, where the browser kept the dropdown's
+// 4x while the game started at 1x); a live match always starts at 1x
+try { const v = +localStorage.getItem('mbaaSpeed'); if (!Q.get('live') && [1, 2, 4].includes(v)) ui.speed = v; } catch (e) {}
 // the frame bar (ETM's, framebarSet): off unless this browser turned it on; ?framebar=0/1 overrides
 try { ui.framebar = localStorage.getItem('mbaaFramebar') === '1'; } catch (e) { ui.framebar = false; }
 if (Q.get('framebar') === '0' || Q.get('framebar') === '1') ui.framebar = Q.get('framebar') === '1';
@@ -1268,12 +1296,22 @@ const liveExt = { id: null, v: '', off: null, seq: 0, music: null, musicN: 0, st
 // after the first match starts (never in the way of its first frame); until it is in, a line is the game's own. An
 // extension's set (liveExtApi.announcer) replaces it while set, and Neco is back when that one clears. ?ann=game: the
 // game's own announcer (a parity check against CE)
-const annDefault = { files: null, p: null, src: '' };
-function annDefaultLoad() {
-  if (annDefault.p || HASH || Q.get('ann') === 'game') return;
-  const url = (document.querySelector('meta[name="mbaa-announcer"]') || {}).content || 'announcer/neco.bin';
-  annDefault.src = url;
-  annDefault.p = fetch(url).then(r => { if (!r.ok) throw new Error(`HTTP ${r.status}`); return r.arrayBuffer(); }).then(buf => {
+const ANN_VOICES = ['neco', 'akiha', 'aoko', 'arc', 'ciel', 'hermes', 'hisui', 'kohaku', 'mb', 'mbr', 'miyako', 'satsuki', 'sion', 'wlen'];
+// the viewer's choice (user 2026-11-12: a settings dropdown, Neco the default, 'random': a voice per match): ?ann= for this
+// view, else the saved one (mbaaAnnouncer)
+function annSetting() {
+  const ok = v => v === 'game' || v === 'random' || ANN_VOICES.includes(v);
+  const q = Q.get('ann'); if (ok(q)) return q;
+  try { const v = localStorage.getItem('mbaaAnnouncer'); if (ok(v)) return v; } catch (e) {}
+  return 'neco';
+}
+const annDefault = { files: null, p: null, src: '', voice: null };
+const annPacks = new Map();  // voice -> Promise<Map(SE id -> bytes)> (each fetched once)
+function annPack(voice) {
+  if (annPacks.has(voice)) return annPacks.get(voice);
+  // (deploy_pages.sh writes the packs' version into the meta: announcer/{v}.bin?v=<hash>)
+  const url = ((document.querySelector('meta[name="mbaa-announcer"]') || {}).content || 'announcer/{v}.bin').replace('{v}', voice);
+  const p = fetch(url).then(r => { if (!r.ok) throw new Error(`HTTP ${r.status}`); return r.arrayBuffer(); }).then(buf => {
     const d = new Uint8Array(buf), v = new DataView(buf);
     if (String.fromCharCode(...d.subarray(0, 4)) !== 'ANN1') throw new Error('not an ANN1 pack');
     const n = v.getUint32(4, true), files = new Map();
@@ -1283,8 +1321,23 @@ function annDefaultLoad() {
       if (off + len > d.length) throw new Error('short pack');
       files.set(id, d.subarray(off, off + len)); off += len;
     }
-    annDefault.files = files;
-  }).catch(e => console.warn('announcer pack:', e));
+    return files;
+  });
+  p.catch(e => { console.warn('announcer pack', voice, e); annPacks.delete(voice); });
+  annPacks.set(voice, p);
+  return p;
+}
+// called as each match starts (the engine's ev, 0.5 s in) and when the setting changes; 'random' picks another voice
+// each time. Until a pack is in, a line is the game's own
+function annDefaultLoad() {
+  if (HASH) return;
+  const set = annSetting();
+  let voice = set === 'game' ? null : set;
+  if (set === 'random') { const o = ANN_VOICES.filter(v => v !== annDefault.voice); voice = o[Math.floor(Math.random() * o.length)]; }
+  if (voice === annDefault.voice && annDefault.p) return;
+  annDefault.voice = voice; annDefault.files = null; annDefault.src = voice || '';
+  if (!voice) { annDefault.p = null; return; }
+  annDefault.p = annPack(voice).then(files => { if (annDefault.voice === voice) annDefault.files = files; }).catch(() => {});
 }
 // which announcer serves this sound: {key (the decode cache's), bytes, src: 'ext' | 'neco'} | null (the game's own file).
 // An extension's set is whole while set: a line it has no file for stays the game's (never Neco's in another's set)
@@ -1294,7 +1347,7 @@ function annLine(path) {
   const id = +m[1], A = liveExt.ann;
   if (A) { const b = A.files.get(id); return b ? { key: `ann${A.n}:${m[1]}`, bytes: b, src: 'ext' } : null; }
   const b = annDefault.files && annDefault.files.get(id);
-  return b ? { key: `neco:${m[1]}`, bytes: b, src: 'neco' } : null;
+  return b ? { key: `site:${annDefault.voice}:${m[1]}`, bytes: b, src: 'site' } : null;
 }
 // abi: the renderer the stage module is built against (2: the native renderer, WebGL2 / WebGPU; the D3D9-emulation pages
 // had none). A module of another ABI is not run: the page keeps MBAA's own stage until the pair matches again (a deploy
@@ -1346,6 +1399,7 @@ const liveExtApi = {
 window.__mbaaExt = liveExtApi;
 async function liveExtSet(id, v) {
   try { v = decodeURIComponent(v || ''); } catch (e) { v = ''; }
+  jillExt(v);
   if (v === liveExt.v && (id === liveExt.id || !v)) return;
   const seq = ++liveExt.seq;
   liveExt.v = v; liveExt.id = v ? id : null;
@@ -2218,9 +2272,26 @@ const porUrls = new Map();
 // Dialled on the real card with ?portune=1 (its "Copy JSON" output is pasted here as it is).
 // Neco-Arc (20) and Neco-Arc Chaos (25): their splashes stand the figure in the image's lower half (head at row ~254 / 262
 // of 512, the rest at ~40-150), so on the plain rule the head sat at the picture's foot or under it: raised (necoTV #5)
-const POR_ADJ = { 20: { y: -55 }, 25: { y: -57 } };
+const POR_ADJ = {  // (the user's dial, 2026-11-12)
+  0: { y: -2.5 }, 7: { y: 11.5 }, 8: { y: -6 }, 9: { y: 16.5 }, 10: { y: 25 }, 12: { y: 2.5 }, 15: { y: 7.5 }, 18: { y: -8.5 },
+  20: { y: -40 }, 22: { y: 7.5 }, 23: { y: -8.5 }, 25: { y: -41 }, 30: { y: 7.5 }, 31: { y: 6.5 }, 32: { y: 11.5 }, 33: { y: 2.5 },
+  35: { x: -9.5 }, 51: { y: 4, x: -5 },
+};
+// Jill's portraits (JILL: her drawings frame each figure differently): their own table, dialled with ?portune=1&jill=1
+const POR_ADJ_JILL = {  // (the user's dial, 2026-11-12)
+  0: { y: 4, s: 0.79 }, 1: { y: 12.5, s: 0.71 }, 2: { y: 21.5, s: 0.66, x: -5.5 }, 3: { y: 4, s: 0.78, x: -3.5 },
+  4: { y: 10, s: 0.73, x: -9.5 }, 5: { s: 0.79, x: -8 }, 6: { y: 2.5, s: 0.79, x: -5.5 },
+  7: { y: 11.5, s: 0.74, x: -7 }, 8: { y: -6, s: 0.84, x: -3.5 }, 9: { y: 10, s: 0.73, x: -5.5 },
+  10: { y: 19, s: 0.66, x: -4.5 }, 11: { s: 0.81, x: -5.5 }, 12: { y: 4, s: 0.79, x: -6 }, 13: { s: 0.79 },
+  14: { s: 0.83 }, 15: { y: 6.5, s: 0.76, x: -3.5 }, 17: { y: -6, s: 0.84, x: -5.5 }, 18: { y: -11, s: 0.89 },
+  19: { y: -6, s: 0.88, x: -3 }, 20: { y: -26 }, 22: { s: 0.83 }, 23: { y: -1, s: 0.84, x: -5 },
+  25: { y: -28.5 }, 28: { s: 0.81 }, 29: { y: 11.5, s: 0.74 }, 30: { y: 4, s: 0.78 }, 31: { y: 10, s: 0.74 },
+  32: { y: 12.5, s: 0.71 }, 33: { y: 12.5, s: 0.71 }, 34: { y: 4, s: 0.78 }, 35: { y: 7.5, s: 0.73, x: -8 },
+  51: { y: 11.5, s: 0.71 },
+};
+const porAdj = () => (porTune ? porTune.adj : jillOn ? POR_ADJ_JILL : POR_ADJ);  // (jillOn: also when the match forces Jill)
 function porApply(el, path) {
-  const id = path ? +path.match(/csel_c(\d+)\.png$/)[1] : -1, a = (porTune ? porTune.adj : POR_ADJ)[id] || {};
+  const id = path ? +path.match(/csel_c(\d+)\.png$/)[1] : -1, a = porAdj()[id] || {};
   el.style.setProperty('--por-y', +a.y || 0); el.style.setProperty('--por-s', a.s > 0 ? +a.s : 1); el.style.setProperty('--por-x', +a.x || 0);
 }
 function porPath(c) {
@@ -2230,7 +2301,10 @@ function porPath(c) {
   return base >= 0 && man && man.files[at(base)] ? at(base) : null;
 }
 async function porShow(p, c) {
-  if (porTune) c = porTuneChar(p);  // (tuning: the panel's pick, whatever is playing)
+  if (porTune && porTune.follow) {  // (tuning, following the match: the panel edits the side's character on screen)
+    porTune.live[p] = c;
+    if (p === porTune.side && c >= 0 && porTune.c !== c) { porTune.c = c; if (porTune.ui) porTune.ui.sync(); }
+  } else if (porTune) c = porTuneChar(p);  // (a pick in the panel: shown whatever is playing)
   const el = document.querySelectorAll('#matchcard .por:not(.xfghost)')[p], path = porPath(c);
   if (!el) return;
   el.dataset.c = c;
@@ -2247,14 +2321,15 @@ async function porShow(p, c) {
 // A floating panel: the character (and the side it stands on), the opponent (the same one, another, none), y / s / x
 // sliders, prev / next, arrow-key nudges, an eye-line guide. Kept in this browser (localStorage) while tuning; "Copy JSON"
 // / "Download" give the whole table, pasted into POR_ADJ as it is. With no match playing the card shows a stage picture.
-const PORTUNE_KEY = 'mbaa.portune.v1';
+const PORTUNE_KEY = JILL ? 'mbaa.portune.jill.v1' : 'mbaa.portune.v1';  // (Jill's table apart)
 const porTune = Q.get('portune') ? (() => {
   let saved = null;
   try { saved = JSON.parse(localStorage.getItem(PORTUNE_KEY) || 'null'); } catch (e) {}
-  const adj = JSON.parse(JSON.stringify(POR_ADJ));
+  const adj = JSON.parse(JSON.stringify(JILL ? POR_ADJ_JILL : POR_ADJ));
   if (saved && saved.adj) Object.assign(adj, saved.adj);
   return { adj, c: saved && saved.c >= 0 ? saved.c : 0, side: saved && saved.side ? 1 : 0, opp: saved && saved.opp !== undefined ? saved.opp : 'same',
-           guide: saved ? !!saved.guide : true, guideY: saved && saved.guideY !== undefined ? saved.guideY : 30, roster: [], stageDone: false };
+           guide: saved ? !!saved.guide : true, guideY: saved && saved.guideY !== undefined ? saved.guideY : 30, roster: [], stageDone: false,
+           follow: true, live: [-1, -1] };  // (follow: the card shows the match playing until a pick in the panel; live: its characters)
 })() : null;
 function porTuneChar(p) {
   const t = porTune;
@@ -2275,7 +2350,9 @@ function porTuneJson() {
     return `  "${id}": { "y": ${+a.y || 0}, "s": ${a.s > 0 ? +a.s : 1}, "x": ${+a.x || 0} }${i < ids.length - 1 ? ',' : ''}`; }).join('\n') + '\n}';
 }
 async function porTuneStage(box) {
-  if (porTune.stageDone) return;
+  // (a match is on its way (a replay or live link): the card waits for it, nothing fetched for a preview meanwhile)
+  if (porTune.stageDone || (porTune.follow && (Q.get('live') || Q.get('r') || Q.get('rep') || Q.get('l')))) return;
+  porTune.follow = false;  // (no match: the panel's pick)
   porTune.stageDone = true;
   const id = Object.keys(stagePanel.stages).find(k => stagePanel.stages[k].art.includes('view'));
   if (id === undefined) return;
@@ -2293,7 +2370,8 @@ async function porTuneStage(box) {
 }
 function porTuneShow() {
   if (!porTune.ui) return;
-  porShow(0, 0); porShow(1, 0);  // (porShow takes the panel's picks)
+  const t = porTune;
+  porShow(0, t.follow ? t.live[0] : 0); porShow(1, t.follow ? t.live[1] : 0);  // (porShow takes the panel's picks, or the match's)
   porTune.ui.sync();
   porTuneSave();
 }
@@ -2305,7 +2383,7 @@ function porTuneInit() {
   if (!t.roster.length) return false;
   if (!t.roster.includes(t.c)) t.c = t.roster[0];
   const css = document.createElement('style');
-  css.textContent = `#portune { position: fixed; z-index: 10000; top: 8px; right: 8px; width: 300px; max-width: calc(100vw - 16px);
+  css.textContent = `/* (left: the match card is on the right) */ #portune { position: fixed; z-index: 10000; top: 8px; left: 8px; width: 300px; max-width: calc(100vw - 16px);
       max-height: calc(100vh - 16px); overflow: auto; box-sizing: border-box; padding: 8px 10px; border-radius: 8px;
       background: #15151ef0; color: #eee; font: 12px/1.35 system-ui, sans-serif; box-shadow: 0 4px 18px #000a; }
     #portune.min > :not(.hd) { display: none; }
@@ -2325,7 +2403,7 @@ function porTuneInit() {
   document.head.append(css);
   const box = document.createElement('div');
   box.id = 'portune';
-  box.innerHTML = `<div class="hd"><span>Portrait tuning</span><button data-a="min" title="fold the panel">–</button></div>
+  box.innerHTML = `<div class="hd"><span>Portrait tuning${JILL ? ' (Jill)' : ''}</span><button data-a="min" title="fold the panel">–</button></div>
     <div class="row"><label>character</label><button data-a="prev" title="previous (PageUp)">◀</button><select data-k="c"></select><button data-a="next" title="next (PageDown)">▶</button></div>
     <div class="row"><label>side</label><button data-side="0">P1</button><button data-side="1">P2</button></div>
     <div class="row"><label>opponent</label><select data-k="opp"></select></div>
@@ -2365,10 +2443,10 @@ function porTuneInit() {
     guide.hidden = !t.guide; guide.style.top = t.guideY + '%';
     if (document.activeElement !== q('textarea')) q('textarea').value = porTuneJson();
   } };
-  const step = d => { const i = t.roster.indexOf(t.c); t.c = t.roster[(i + d + t.roster.length) % t.roster.length]; porTuneShow(); };
-  q('select[data-k=c]').onchange = e => { t.c = +e.target.value; porTuneShow(); };
-  q('select[data-k=opp]').onchange = e => { t.opp = e.target.value; porTuneShow(); };
-  qa('[data-side]').forEach(b => b.onclick = () => { t.side = +b.dataset.side; porTuneShow(); });
+  const step = d => { const i = t.roster.indexOf(t.c); t.follow = false; t.c = t.roster[(i + d + t.roster.length) % t.roster.length]; porTuneShow(); };
+  q('select[data-k=c]').onchange = e => { t.follow = false; t.c = +e.target.value; porTuneShow(); };
+  q('select[data-k=opp]').onchange = e => { t.follow = false; t.opp = e.target.value; porTuneShow(); };
+  qa('[data-side]').forEach(b => b.onclick = () => { t.side = +b.dataset.side; if (t.follow && t.live[t.side] >= 0) t.c = t.live[t.side]; porTuneShow(); });
   for (const k of ['y', 's', 'x']) for (const e of qa(`input[data-k=${k}]`)) e.oninput = () => set(k, parseFloat(e.value));
   for (const e of qa('input[data-k=guideY]')) e.oninput = () => { const v = parseFloat(e.value); if (Number.isFinite(v)) { t.guideY = v; porTuneShow(); } };
   q('input[data-k=guide]').onchange = e => { t.guide = e.target.checked; porTuneShow(); };
@@ -2382,7 +2460,7 @@ function porTuneInit() {
     if (a === 'prev') step(-1); else if (a === 'next') step(1);
     else if (a === 'min') box.classList.toggle('min');
     else if (a === 'reset') { delete t.adj[t.c]; porTuneShow(); msg(`${CHARA[t.c]}: back to the default`); }
-    else if (a === 'copy') { const j = porTuneJson(); q('textarea').value = j; msg(await copy(j) ? 'copied: paste it into POR_ADJ' : 'select the text and copy it'); }
+    else if (a === 'copy') { const j = porTuneJson(); q('textarea').value = j; msg(await copy(j) ? `copied: paste it into ${JILL ? 'POR_ADJ_JILL' : 'POR_ADJ'}` : 'select the text and copy it'); }
     else if (a === 'dl') {
       const u = URL.createObjectURL(new Blob([porTuneJson() + '\n'], { type: 'application/json' })), l = document.createElement('a');
       l.href = u; l.download = 'por_adj.json'; document.body.append(l); l.click(); l.remove(); setTimeout(() => URL.revokeObjectURL(u), 5000);
@@ -3665,7 +3743,7 @@ async function copyPlaylist() {
     const j = await r.json();
     if (!r.ok) throw new Error(j.error || `HTTP ${r.status}`);
     const u = new URL(location.origin + location.pathname);
-    u.searchParams.set('l', j.id);
+    u.searchParams.set('l', j.id); jillLink(u);
     status('adding the link\'s preview picture…');
     await shareThumb(j.id, 0, shots);
     text = u.toString();
@@ -3768,7 +3846,7 @@ async function copyTimestamp(at = true) {
       if (s.clip && loopOn) u.searchParams.set('loop', '1');
     }
     if (u.searchParams.get('r')) await shareThumb(u.searchParams.get('r'), at ? t : 0, shots);
-    text = u.toString();
+    text = jillLink(u).toString();
   } catch (e) {
     console.warn('share upload failed:', e);
     text = `${s.name.replace(/^.*\//, '')} @ ${fmtTime(f)} (frame ${f})`;
@@ -4402,14 +4480,19 @@ function controls() {
     if (si.checked && inIntro(session)) skipIntro(session);  // (switched on during the intro: skip this one too)
   };
   btn('back1', () => stepBy(-1)); btn('fwd1', () => stepBy(1));
-  document.getElementById('speed').onchange = e => { ui.speed = +e.target.value; if (session) call(session, 'viewer_speed', ui.speed); e.target.blur(); };
+  const speedEl = document.getElementById('speed');
+  speedEl.value = String(ui.speed);  // (the page's own speed, not a value the browser restored into the dropdown)
+  speedEl.onchange = e => {
+    ui.speed = +e.target.value; uiApply(); e.target.blur();  // (the worker's copy of ui too: a new session starts from it)
+    if (!Q.get('live')) try { localStorage.setItem('mbaaSpeed', String(ui.speed)); } catch (e) {}
+  };
   const hudEl = document.getElementById('hud'), musicEl = document.getElementById('music');
   hudEl.checked = ui.hud; musicEl.checked = ui.music;
   hudEl.onchange = () => {
     ui.hud = hudEl.checked; hudEl.blur();
     try { localStorage.setItem('mbaaHud', ui.hud ? '1' : '0'); } catch (e) {}
     const s = session;
-    if (s) { call(s, 'viewer_hud', ui.hud ? 1 : 0); if (ui.paused && s.tl) requestSeek(curFrame()); }  // paused: draw the frame again
+    uiApply(); if (s && ui.paused && s.tl) requestSeek(curFrame());  // paused: draw the frame again
   };
   musicEl.onchange = () => {
     ui.music = musicEl.checked; musicEl.blur();
@@ -5705,6 +5788,7 @@ async function liveClipUpload(s, p, snap) {
     if (!p.moment) u.searchParams.set('e', e);
     if (j.c) u.searchParams.set('c', j.c);
     if (!p.moment) u.searchParams.set('loop', '1');
+    jillLink(u);
     p.link = u.toString(); p.t = t; p.e = e; p.id = j.r; p.cid = j.c;
     window.__mbaaLastLink = p.link;
     clipPanelKey = ''; marksKey = '';
@@ -6772,6 +6856,10 @@ async function main() {
     const r = await fetch(BUNDLE + 'manifest.bin' + (mv ? `?v=${mv}` : ''), { cache: mv ? 'default' : 'no-cache' });
     net.bytes += +(r.headers.get('content-length') || 0);
     man = JSON.parse(new TextDecoder().decode(await openObject(await r.arrayBuffer())));
+    if (man.jill) {  // (before the engine starts: it gets man whole)
+      man.jillStock = {}; for (const k in man.jill) man.jillStock[k] = man.files[k];
+      jillOn = JILL || jillForced; if (jillOn) Object.assign(man.files, man.jill);
+    }
     bootMark('manifest');
     stagePanelLoad().catch(e => console.warn('stage panel:', e));
     if (PREWARM) try { __mbaaEngine.start(); } catch (e) { console.error('engine start:', e); }  // (an engine failure never stops the page's start: the live list, chat)  // (the engine worker boots its instance while the page shows its list / the match's files come in)
@@ -6800,6 +6888,15 @@ async function main() {
   { const el = document.getElementById('webgpu');
     if (el) { el.checked = webgpuOn; if (!navigator.gpu) el.parentElement.style.display = 'none';
       el.onchange = () => { try { localStorage.setItem('mbaaWebgpu', el.checked ? '1' : '0'); } catch (e) {} location.reload(); }; } }
+  { const el = document.getElementById('jill');
+    if (el) { el.checked = JILL;
+      el.onchange = () => {
+        try { localStorage.setItem('mbaaJill', el.checked ? '1' : '0'); } catch (e) {}
+        const u = new URL(location.href); u.searchParams.delete('jill'); location.replace(u.href);  // (the saved choice from now on)
+      }; } }
+  { const el = document.getElementById('announcer');
+    if (el) { el.value = annSetting();
+      el.onchange = () => { try { localStorage.setItem('mbaaAnnouncer', el.value); } catch (e) {} el.blur(); annDefaultLoad(); }; } }
   { const el = document.getElementById('song55');  // (songSub)
     if (el) { el.checked = songOn; el.onchange = () => { songOn = el.checked; try { localStorage.setItem('mbaa-song55', songOn ? '1' : '0'); } catch (e) {}
       el.blur(); if (session && session.bgmSync && session.M) session.bgmSync(session.M._viewer_frame()); }; } }
@@ -7325,6 +7422,7 @@ window.__mbaaLab = { set: c => labApply(c), info: () => labInfo() };
   // a live extension (the secret stages) runs in the worker, where the game module is: the page keeps the bookkeeping
   liveExtSet = async function liveExtSetW(id, v) {
     try { v = decodeURIComponent(v || ''); } catch (e) { v = ''; }
+    jillExt(v);
     if (v === liveExt.v && (id === liveExt.id || !v)) return;
     const seq = ++liveExt.seq;
     liveExt.v = v; liveExt.id = v ? id : null;

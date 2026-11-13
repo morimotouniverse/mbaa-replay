@@ -20,9 +20,9 @@
 <meta name="twitter:title" content="necoTV · Melty Blood TV">
 <meta name="twitter:description" content="Live Melty Blood: Actress Again Current Code matches, chat and replays in your browser.">
 <meta name="twitter:image" content="https://watch.meltyblood.org/preview.png">
-<meta name="mbaa-manifest" content="2a2e2bac19a8">
+<meta name="mbaa-manifest" content="d8a9893dba44">
 <meta name="mbaa-chatjs" content="chat.js?v=7bb92484a387">
-<meta name="mbaa-announcer" content="announcer/neco.bin?v=932b15248e89">
+<meta name="mbaa-announcer" content="announcer/{v}.bin?v=01119c4c53f2">
 <link rel="manifest" href="site.webmanifest">
 <link rel="icon" href="favicon-48.png" sizes="48x48">
 <link rel="icon" href="icon-192.png" sizes="192x192">
@@ -1010,11 +1010,13 @@
       <label class="chip liveonly" title="Players' names on the CHALLENGER / WINS banners (T)"><input id="names" type="checkbox" checked>names</label>
       <label class="chip" title="Music; sound effects stay (B)"><input id="music" type="checkbox" checked>music</label>
       <label class="chip" title="Draw with WebGPU instead of WebGL2. Experimental: switch it off if the picture stutters, flickers or is wrong. The page reloads."><input id="webgpu" type="checkbox">WebGPU (experimental)</label>
+      <label class="chip" title="Jill's mod: her hand-drawn character portraits (select screen, cut-ins, win screen). Links you copy carry it. The page reloads."><input id="jill" type="checkbox">Jill mod</label>
+      <select id="announcer" title="Announcer: who calls the rounds"><option value="neco">announcer: Neco-Arc</option><option value="game">announcer: the game's own</option><option value="random">announcer: random each match</option><option value="akiha">announcer: Akiha</option><option value="aoko">announcer: Aoko</option><option value="arc">announcer: Arcueid</option><option value="ciel">announcer: Ciel</option><option value="hermes">announcer: Hermes</option><option value="hisui">announcer: Hisui</option><option value="kohaku">announcer: Kohaku</option><option value="miyako">announcer: Miyako</option><option value="satsuki">announcer: Satsuki</option><option value="sion">announcer: Sion</option><option value="wlen">announcer: White Len</option><option value="mb">announcer: MB</option><option value="mbr">announcer: MBR</option></select>
     </div>
     <div class="row mobonly" id="mlegend"><span class="lbl">hitboxes</span><span class="hbkey" style="--c:#30e030">hurt</span><span class="hbkey" style="--c:#ff2828">attack</span><span class="hbkey" style="--c:#ffe020">clash</span><span class="hbkey" style="--c:#40a0ff">shield</span><span class="hbkey" style="--c:#d8d8d8">collision</span><span class="hbkey" style="--c:#c878e6">special</span></div>
     <div class="row">
       <select id="scale" title="picture size: auto = largest whole multiple that fits"><option value="auto">size auto</option><option value="1">size 1x</option><option value="2">size 2x</option><option value="3">size 3x</option><option value="4">size 4x</option><option value="fit">size fit</option></select>
-      <select id="speed" title="Speed"><option value="1">1x</option><option value="2">2x</option><option value="4">4x</option></select>
+      <select id="speed" title="Speed" autocomplete="off"><option value="1">1x</option><option value="2">2x</option><option value="4">4x</option></select>
       <button id="mute" title="mute (M)"><i class="i i-sound"></i></button><input id="vol" type="range" min="0" max="100" value="50" aria-label="volume"><button id="mixb" title="Music and sound effects: a level and a mute each" aria-expanded="false" aria-controls="mixpop"><i class="i i-mix"></i></button>
     </div>
     <button id="sound" hidden>click for sound</button>
@@ -1051,7 +1053,7 @@
 <p class="sitefoot"><a href="https://github.com/Armonte/necoTV/issues/new/choose" target="_blank" rel="noopener">Found a bug or want a feature? Report it here</a></p>
 <script src="mbaa.js?v=30dfb30e7e65"></script>
 <script src="bgm_stream.js?v=cad5cabd6328"></script>
-<script src="viewer.js?v=780077a5ee34"></script>
+<script src="viewer.js?v=140cc6e574f7"></script>
 <script src="render_stats.js?v=fd9e3e2ae049"></script>
 </body>
 </html>
