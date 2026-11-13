@@ -20,7 +20,7 @@
 <meta name="twitter:title" content="necoTV · Melty Blood TV">
 <meta name="twitter:description" content="Live Melty Blood: Actress Again Current Code matches, chat and replays in your browser.">
 <meta name="twitter:image" content="https://watch.meltyblood.org/preview.png">
-<meta name="mbaa-manifest" content="d8a9893dba44">
+<meta name="mbaa-manifest" content="88218933b3a8">
 <meta name="mbaa-chatjs" content="chat.js?v=7bb92484a387">
 <meta name="mbaa-announcer" content="announcer/{v}.bin?v=01119c4c53f2">
 <link rel="manifest" href="site.webmanifest">
@@ -347,6 +347,8 @@
   #mixpop .mixl.off input[type=range]::-moz-range-thumb { background: #9a9aac; box-shadow: none; }
   #mixpop .mixl.off b, #mixpop .mixl.off span { color: #6a6a80; }
   #mixpop input[type=range] { flex: 1; min-width: 0; }
+  #mixpop .mixl select { flex: 1; min-width: 0; }
+  #mixpop #mixannl span { width: auto; }
   #mixpop b { width: 28px; text-align: right; font-weight: 600; font-variant-numeric: tabular-nums; }
   #mixpop .mixrow { display: flex; gap: 6px; }
   #mixpop .mixrow button { flex: 1; padding: 5px 8px; border-radius: 999px; border: 1px solid var(--line); background: #ffffff0d; color: inherit; font: inherit; cursor: pointer; }
@@ -954,6 +956,7 @@
     <div id="mixpop" role="dialog" aria-label="sound levels" hidden>
       <div class="mixl" id="mixmusicl"><button type="button" class="mixm" id="mixmusicm" title="music on / off (B; sound effects stay)" aria-pressed="false"><i class="i i-sound"></i></button><span>music</span><input id="mixmusic" type="range" min="0" max="100" value="100" aria-label="music level"><b id="mixmusicv">100</b></div>
       <div class="mixl" id="mixsfxl"><button type="button" class="mixm" id="mixsfxm" title="sound effects on / off (voices, hits, announcer; the music stays) (N)" aria-pressed="false"><i class="i i-sound"></i></button><span>effects</span><input id="mixsfx" type="range" min="0" max="100" value="100" aria-label="sound effects level (voices, hits, announcer)"><b id="mixsfxv">100</b></div>
+      <div class="mixl" id="mixannl"><span>announcer</span><select id="announcer" title="who calls the rounds"><option value="neco">Neco-Arc</option><option value="game">the game's own</option><option value="random">random each match</option><option value="akiha">Akiha</option><option value="aoko">Aoko</option><option value="arc">Arcueid</option><option value="ciel">Ciel</option><option value="hermes">Hermes</option><option value="hisui">Hisui</option><option value="kohaku">Kohaku</option><option value="miyako">Miyako</option><option value="satsuki">Satsuki</option><option value="sion">Sion</option><option value="wlen">White Len</option><option value="mb">MB</option><option value="mbr">MBR</option></select></div>
       <div class="mixrow"><button type="button" id="mixreset" title="both on, both back to 100">reset</button></div>
     </div>
   </div>
@@ -1011,7 +1014,6 @@
       <label class="chip" title="Music; sound effects stay (B)"><input id="music" type="checkbox" checked>music</label>
       <label class="chip" title="Draw with WebGPU instead of WebGL2. Experimental: switch it off if the picture stutters, flickers or is wrong. The page reloads."><input id="webgpu" type="checkbox">WebGPU (experimental)</label>
       <label class="chip" title="Jill's mod: her hand-drawn character portraits (select screen, cut-ins, win screen). Links you copy carry it. The page reloads."><input id="jill" type="checkbox">Jill mod</label>
-      <select id="announcer" title="Announcer: who calls the rounds"><option value="neco">announcer: Neco-Arc</option><option value="game">announcer: the game's own</option><option value="random">announcer: random each match</option><option value="akiha">announcer: Akiha</option><option value="aoko">announcer: Aoko</option><option value="arc">announcer: Arcueid</option><option value="ciel">announcer: Ciel</option><option value="hermes">announcer: Hermes</option><option value="hisui">announcer: Hisui</option><option value="kohaku">announcer: Kohaku</option><option value="miyako">announcer: Miyako</option><option value="satsuki">announcer: Satsuki</option><option value="sion">announcer: Sion</option><option value="wlen">announcer: White Len</option><option value="mb">announcer: MB</option><option value="mbr">announcer: MBR</option></select>
     </div>
     <div class="row mobonly" id="mlegend"><span class="lbl">hitboxes</span><span class="hbkey" style="--c:#30e030">hurt</span><span class="hbkey" style="--c:#ff2828">attack</span><span class="hbkey" style="--c:#ffe020">clash</span><span class="hbkey" style="--c:#40a0ff">shield</span><span class="hbkey" style="--c:#d8d8d8">collision</span><span class="hbkey" style="--c:#c878e6">special</span></div>
     <div class="row">
@@ -1051,9 +1053,9 @@
 </div>
 </div>
 <p class="sitefoot"><a href="https://github.com/Armonte/necoTV/issues/new/choose" target="_blank" rel="noopener">Found a bug or want a feature? Report it here</a></p>
-<script src="mbaa.js?v=30dfb30e7e65"></script>
+<script src="mbaa.js?v=8388c6bd51ab"></script>
 <script src="bgm_stream.js?v=cad5cabd6328"></script>
-<script src="viewer.js?v=140cc6e574f7"></script>
+<script src="viewer.js?v=a0988c6db473"></script>
 <script src="render_stats.js?v=fd9e3e2ae049"></script>
 </body>
 </html>

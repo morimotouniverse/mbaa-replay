@@ -45,15 +45,17 @@ let webgpuOn = false;
 try { webgpuOn = localStorage.getItem('mbaaWebgpu') === '1'; } catch (e) {}
 const GPU_Q = Q.get('gpu') || (webgpuOn && navigator.gpu ? 'core' : '');
 // Jill's mod (her hand-drawn portraits: the bundle manifest's 'jill' map, tools/web/bundle_mods.py), merged over the
-// files when on: the settings' "Jill mod" (mbaaJill, the page reloads), or a link's ?jill=1 / ?jill=0 for that view only
-// (user 2026-11-12: links copied with it on carry jill=1). Never in capture / hash runs (CE-parity pictures)
+// files when on: the settings' "Jill mod" (mbaaJill: switched in place, no reload, user 2026-11-12), or a link's ?jill=1 /
+// ?jill=0 for that view (until the setting is changed). Links copied with it on carry jill=1. Never in capture / hash
+// runs (CE-parity pictures)
 let jillSaved = false;
 try { jillSaved = localStorage.getItem('mbaaJill') === '1'; } catch (e) {}
-const JILL = Q.get('capture') !== '1' && Q.get('hash') !== '1' && (Q.get('jill') === '1' || (Q.get('jill') !== '0' && jillSaved));
+const JILL_OK = Q.get('capture') !== '1' && Q.get('hash') !== '1';
+let JILL = JILL_OK && (Q.get('jill') === '1' || (Q.get('jill') !== '0' && jillSaved));
 const jillLink = u => { if (JILL) u.searchParams.set('jill', '1'); return u; };  // (a link this page copies or shares)
 // The site owner can turn Jill on for a live match's every viewer (the secret panel: j=1 in the match's extension value,
-// user 2026-11-12). Switched without a reload: the match card at once, the game's files from its next session (the art
-// a game has loaded stays until it loads it again)
+// user 2026-11-12). Switched without a reload: the match card at once, the running game's art at once too (the engine
+// worker makes the textures of the switched files it has loaded again from their new bytes: engine_tail.js retex)
 let jillForced = false, jillOn = false;
 function jillApply() {
   const on = JILL || jillForced;
@@ -67,6 +69,26 @@ function jillApply() {
   }
   if (E && E.w) E.w.postMessage({ cmd: 'manFiles', files });
   document.querySelectorAll('#matchcard .por:not(.xfghost)').forEach((el, p) => { if (el.dataset.c !== undefined && el.dataset.c !== '') porShow(p, +el.dataset.c); });
+}
+// (the engine's ask after a switch: the switched files the running game has loaded, both versions, fetched by the
+// page's own fetch under their own names (cache keys apart from the game paths), sent to the engine (cmd retex))
+async function jillRetex(paths) {
+  const E = window.__mbaaEngine, on = jillOn, files = {}, want = new Set();
+  for (const p of paths) {
+    const nu = on ? man.jill[p] : man.jillStock[p], old = on ? man.jillStock[p] : man.jill[p];
+    if (!nu || !old) continue;
+    files['sw:o:' + p] = old; files['sw:n:' + p] = nu; want.add('sw:o:' + p); want.add('sw:n:' + p);
+  }
+  if (!want.size) return;
+  await fetchAll({ files }, want, '', true);
+  if (on !== jillOn) return;  // (switched again meanwhile: that switch's ask follows)
+  const items = [], xfer = [];
+  for (const p of paths) {
+    const old = cache.get('sw:o:' + p), nu = cache.get('sw:n:' + p);
+    cache.delete('sw:o:' + p); cache.delete('sw:n:' + p);
+    if (old && nu) { const n = nu.slice(); items.push({ p, old, nu: n }); xfer.push(n.buffer); }
+  }
+  if (items.length && E && E.w) E.w.postMessage({ cmd: 'retex', items }, xfer);
 }
 function jillExt(v) { const f = /[?&]j=1(&|$)/.test(v || ''); if (f !== jillForced) { jillForced = f; jillApply(); } }
 const XFRAME = !!XFRAME_BASE && /Firefox\//.test(navigator.userAgent) && !/Android/.test(navigator.userAgent) && !!navigator.gpu && !!GPU_Q && GPU_Q !== 'webgl2' && Q.get('xframe') !== '0';  // (xframe=0: a test switch, with gpu=webgpu the bug itself)
@@ -2095,8 +2117,11 @@ let cselA = null;
 async function cselArt() {
   if (cselA) return cselA;
   if (!man || !CSEL_FILES.every(p => man.files[p])) return null;
-  await fetchAll(man, CSEL_FILES, '', true);
-  const bm = await Promise.all(CSEL_FILES.map(p => { const d = cache.get(p); return d ? createImageBitmap(new Blob([d], { type: 'image/png' })) : null; }));
+  // (the stock sheets where the bundle keeps them (web/stock/, tools/web/bundle_mods.py PAGE_STOCK): the card keeps the
+  // Japanese-over-romaji look under the game's English translation)
+  const files = CSEL_FILES.map(p => (man.files['web/stock/' + p] ? 'web/stock/' + p : p));
+  await fetchAll(man, files, '', true);
+  const bm = await Promise.all(files.map(p => { const d = cache.get(p); return d ? createImageBitmap(new Blob([d], { type: 'image/png' })) : null; }));
   if (bm.some(b => !b)) return null;
   cselA = { jp: [bm[0], bm[1]], ro: [bm[2], bm[3]], ring: bm[4], parts: bm[5] };
   plKey = ''; playersShow(session);  // (the names drawn again, as art)
@@ -6890,9 +6915,11 @@ async function main() {
       el.onchange = () => { try { localStorage.setItem('mbaaWebgpu', el.checked ? '1' : '0'); } catch (e) {} location.reload(); }; } }
   { const el = document.getElementById('jill');
     if (el) { el.checked = JILL;
-      el.onchange = () => {
+      el.onchange = () => {  // (in place: card, game, links; the link's own jill= dropped, the saved choice from now on)
         try { localStorage.setItem('mbaaJill', el.checked ? '1' : '0'); } catch (e) {}
-        const u = new URL(location.href); u.searchParams.delete('jill'); location.replace(u.href);  // (the saved choice from now on)
+        JILL = JILL_OK && el.checked; el.blur();
+        if (Q.has('jill')) { Q.delete('jill'); const u = new URL(location.href); u.searchParams.delete('jill'); history.replaceState(history.state, '', u.href); }
+        jillApply();
       }; } }
   { const el = document.getElementById('announcer');
     if (el) { el.value = annSetting();
@@ -7071,6 +7098,7 @@ window.__mbaaLab = { set: c => labApply(c), info: () => labInfo() };
       case 'toggleLoop': toggleLoop(); break;
       case 'startItem': startItem(d.i); break;
       case 'needFiles': fetchAll(man, new Set(d.paths), d.label, d.quiet).then(() => sendFiles(d.paths, d.id, true)); break;
+      case 'swNeed': jillRetex(d.paths); break;  // (the switched files the running game has loaded: jillApply)
       case 'played': window.__mbaaStarted = d.started; break;
       case 'perf': perfMsg(d); break;
       case 'rs': {  // (the renderer's profiler ring: the records the worker sent, at their places in the page's copy)
