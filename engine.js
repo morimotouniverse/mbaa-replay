@@ -4,23 +4,28 @@
 // reaches, as messages to the page (events) or values the page gave at init.
 'use strict';
 self.window = self;
-// (one clock with the page: performance.now() here reads the page's (its time origin on the worker's address), so every
+// (one clock with the page: performance.now() here reads the page's (this thread's plus the measured offset below), so every
 // time the page hands the renderer (comment times on the wall clock, its pin, swell / gradient phases) and every
 // timestamp the engine posts mean the same moment on both sides; rAF times shifted with it)
 // (and while the page is hidden (cmd vis) the worker's animation frames wait, as a hidden page's do: the module's loop
 // and the state ticker stand still and the hidden page's clock (engine_tail.js engBgTick) is the only one; a browser that
 // still gave a hidden page's worker its frames drew and ticked twice)
+// The offset is MEASURED (page's performance.now() minus this thread's, by ping: viewer.js engClockSync, cmd clkPing /
+// clkSet), not taken from the two time origins: two processes' origins (desktop Firefox's engine frame is another
+// site's process) need not share a base, and drift apart after the PC sleeps; a page open across a sleep had live
+// comments start mid-picture (user 2026-11-13: "it appears in the middle of the screen and scrolls", a restart fixed it)
+let engClockD = 0;
+const engRawNow = performance.now.bind(performance);
 let engHidden = false, engPip = false, engRafRelease = () => {};
 {
-  const to = +new URLSearchParams(self.location.search).get('to');
-  const d = to > 0 ? performance.timeOrigin - to : 0, now = performance.now.bind(performance), raf = self.requestAnimationFrame.bind(self);
+  const now = engRawNow, raf = self.requestAnimationFrame.bind(self);
   const held = [];
-  performance.now = () => now() + d;
+  performance.now = () => now() + engClockD;
   // (after each animation-frame callback, the module's game tick among them: engAfterRaf, while the picture it drew is
   // still in the canvas (not preserved past the frame): exportRealtime's frames, engine_tail.js)
   const run = (f, t) => { if (engIncPend) engIncRun();
-    if (!engTL) { f(t + d); if (engAfterRaf) engAfterRaf(); return; }
-    const a = now(); f(t + d); const b = now(); if (engAfterRaf) engAfterRaf(); engTlRec(t + d, b - a, a - t, f.name || '?', now() - b); };
+    if (!engTL) { f(t + engClockD); if (engAfterRaf) engAfterRaf(); return; }
+    const a = now(); f(t + engClockD); const b = now(); if (engAfterRaf) engAfterRaf(); engTlRec(t + engClockD, b - a, a - t, f.name || '?', now() - b); };
   self.requestAnimationFrame = f => raf(t => { if (engHidden) { held.push(f); return; } run(f, t); });
   engRafRelease = () => { for (const f of held.splice(0)) raf(t => run(f, t)); };
 }
@@ -112,6 +117,10 @@ const freshCanvas = () => engOff;
 const hashDone = (name, h) => engPost({ ev: 'hashDone', name, h, misses: self.mbaaPlanMisses || null });
 // (given by the page at init)
 let LOWMEM = false, SW_KEEP = false;
+// this tab's id on the live feed: the page's own (init), never one of the worker's: the feed counts tabs by it, and a
+// second id of the same tab (the worker's record polls apart from the page's join) counted every tab twice for 20 s after
+// each join or switch (the viewer count doubled, then halved)
+let VIEWER = '';
 // (the asset plan's misses (refetchAndReplay, liveMissed, the hash run): the page's window.mbaaPlanMisses, kept in step)
 { let pm; Object.defineProperty(self, 'mbaaPlanMisses', { configurable: true, get: () => pm, set: v => { pm = v; engPost({ ev: 'planMisses', l: v ? [...v] : null }); } }); }
 const SPECTOR_P = null;
@@ -1772,8 +1781,6 @@ function cuDone(s, f0, t0, drawn) {
   if (s.cssBgGo) s.cssBgGo();
   console.log(`live: caught up ${r.frames} frames in ${Math.round(ms)} ms (${Math.round(r.fps)} frames/s, ${drawn} drawn)`);
 }
-// viewer.js:1980
-const VIEWER = Array.from(crypto.getRandomValues(new Uint8Array(12)), b => 'abcdefghijklmnopqrstuvwxyz0123456789'[b % 36]).join('');
 // viewer.js:2593
 let stagePanel = null, stageKey = '', radio = null, oldRadio = null, radioGame = 'aacc';
 // viewer.js:2744
@@ -1881,7 +1888,7 @@ function radioStageSync(s) {
   if (st) st.lights.forEach(([pos, power], i) => M._viewer_radio_stage_light(i, pos, power));
   M.ccall('viewer_radio_stage_want', null, ['string', 'number', 'number'], [st ? st.dat : '', want, st ? st.lights.length : 0]);
 }
-// viewer.js:3325
+// viewer.js:3329
 function liveKeep(L, b) {
   const dv = new DataView(b.buffer, b.byteOffset, b.byteLength);
   for (let o = 0; o + 244 <= b.length;) {
@@ -1897,7 +1904,7 @@ function liveFeed(s, b) {
   call(s, 'viewer_spectate_feed', p, b.length);
   s.M._free(p);
 }
-// viewer.js:3340
+// viewer.js:3344
 function liveCssFiles(man) {
   const out = new Set();
   for (const p of Object.keys(man.files))
@@ -1905,7 +1912,7 @@ function liveCssFiles(man) {
         /^story\/battle\/[^/]+_table\.txt$/.test(p)) out.add(p);
   return withSiblings(man, out);
 }
-// viewer.js:3352
+// viewer.js:3356
 const CSS_SCENE = 20, CSS_OBJ = 0x773158, CSS_SLOT = 0x74D8E8, BATTLE_SLOT = 0x74D838, STAGE_ID = 0x74FD98;
 function liveCssWatch(s) {
   const H = s.M.HEAP32, g = a => H[a >> 2];
@@ -1994,15 +2001,15 @@ const bootSetup = rep => {  // boot.rep's header (cc_live.mjs bootRep): the stag
   const dv = new DataView(rep.buffer, rep.byteOffset, rep.byteLength), i = o => dv.getInt32(o, true);
   return { stage: i(0x28), chara: [i(0x40), i(0x50)], moon: [i(0x44), i(0x54)], color: [i(0x48), i(0x58)] };
 };
-// viewer.js:3358
+// viewer.js:3362
 const stageOk = id => id === 0 || !man || !man.files || !!man.files[`bg/bg${String(id).padStart(2, '0')}.dat`];
-// viewer.js:3359
+// viewer.js:3363
 function stageStandIn(id) {
   const ok = Object.keys(man.files).map(f => /^bg\/bg(\d\d)\.dat$/.exec(f)).filter(Boolean).map(m => +m[1])
     .filter(n => n > 0 && n !== 57 && n !== 58).sort((a, b) => a - b);  // (not the two giant stages: wider)
   return ok.length ? ok[id % ok.length] : 1;
 }
-// viewer.js:3364
+// viewer.js:3368
 function repStageFix(rep) {  // a .rep / boot tape's header stage (0x28), in place
   const dv = new DataView(rep.buffer, rep.byteOffset, rep.byteLength), id = dv.getInt32(0x28, true);
   if (stageOk(id)) return;
@@ -2109,12 +2116,12 @@ async function liveLateCheck(s, game) {
   console.log(`live: game ${game}'s setup came after our load: ${same ? 'the same' : 'different: switching'}`);
   if (!same) liveSwitch(s, p);
 }
-// viewer.js:3388
+// viewer.js:3392
 const STREAK = [0x76FC14, 0x770EB4];  // g_P1ConsecutiveWinStreak, g_P2ConsecutiveWinStreak (the player records', +0x4A0)
 const asciiName = n => /^[\x20-\x7e]*$/.test(n);
-// viewer.js:3390
+// viewer.js:3394
 const TUNE = Q.get('tune') === '1';
-// viewer.js:3391
+// viewer.js:3395
 const bannerTune = { nameGap: -1, nameSize: 16, nameDy: 0, winsGap: -1, winsSize: 11, winsDy: -11, maxPx: 216, scrollSpeed: 40,
   lapGap: 24, streak: -1, pageFont: 13, testP1: '', testP2: '' };
 function liveBanner(s) {
@@ -2250,11 +2257,11 @@ function liveRefeed(s) {  // restore(): after the keyframe is back
   for (const x of parts) all.set(x, o), o += x.length;
   liveFeed(s, all);
 }
-// viewer.js:3461
-const KEEP_MS = +(Q.get('keepms') || 300000);
-// viewer.js:3462
-let liveKept = null, liveResumeK = null, liveClickAt = null;
 // viewer.js:3465
+const KEEP_MS = +(Q.get('keepms') || 300000);
+// viewer.js:3466
+let liveKept = null, liveResumeK = null, liveClickAt = null;
+// viewer.js:3469
 const texKey = (a, i) => a[i] + ':' + a[i + 1] + ':' + a[i + 2];
 // the store entries a kept keyframe names: counted in M.mbaaTexHold, and in the timeline's reference map (store eviction
 // skips them; timelineInit seeds a new session's map from the hold)
@@ -2285,7 +2292,7 @@ function liveKeptDrop(why) {
   console.log(`live: the kept match is dropped (${why})`);
   if (session && session.tl && session.M === K.M) storeGc(session.tl);
 }
-// viewer.js:3467
+// viewer.js:3471
 function liveKeptStat(K) {
   const S = K.M.mbaaTexStore, seen = new Set(), cur = session && session.want;
   let tex = 0, texOnly = 0, files = 0, recs = 0;
@@ -2364,7 +2371,7 @@ async function liveKeptPoll(K) {
   } catch (e) {}
   if (liveKept === K) K.timer = wTimeout(() => liveKeptPoll(K), 1000);
 }
-// viewer.js:3487
+// viewer.js:3491
 function liveBackTake(K, prev, click) {
   liveKept = null; wClear(K.timer);  // (its texture hold stays until the restore takes it over: liveResumeApply)
   const B = window.__mbaaSwitchBack = { click, start: performance.now(), awayS: (Date.now() - K.at) / 1000, kept: liveKeptStat(K) };
@@ -2416,7 +2423,7 @@ function liveResumeApply(s) {
                 `${Math.round(B.caught - (B.click ?? B.start))} ms from the click`);
   }, 0);
 }
-// viewer.js:3506
+// viewer.js:3510
 function liveStateNow() {
   const s = session;
   if (!s || !s.liveSrc || !s.M) return null;
@@ -2425,7 +2432,7 @@ function liveStateNow() {
            wt: s.M.HEAP32[0x55D1D4 >> 2],  // (g_WorldTimer: the game's own frame; a session's frame numbers are its own)
            kfs: s.tl ? s.tl.kfs.length : 0, tlMB: s.tl ? Math.round(s.tl.bytes / 1e5) / 10 : 0, heapMB: Math.round(s.M.HEAPU8.length / 1e5) / 10 };
 }
-// viewer.js:3514
+// viewer.js:3518
 async function stateRowsTake(k, n) {
   const s = session;
   if (!s) return null;
@@ -2775,11 +2782,11 @@ function liveBegin(s) {  // play(): after viewer_play
   };
   poll();
 }
-// viewer.js:3606
+// viewer.js:3610
 const nextCard = { s: null, id: null, at: 0, timer: 0, raf: 0, stay: null, why: null };
-// viewer.js:3607
+// viewer.js:3611
 const liveName = m => m.matchup || (m.names || []).map(n => (n || '').trim()).join(' vs ');
-// viewer.js:3910
+// viewer.js:3914
 const curFrame = () => session ? (session.tl && session.tl.want !== null ? session.tl.want : session.M._viewer_frame()) : 0;
 function stepBy(n, pause = true) {
   if (!session || !session.tl) return Promise.resolve();
@@ -2792,26 +2799,26 @@ function stepBy(n, pause = true) {
   }
   return requestSeek(curFrame() + n);
 }
-// viewer.js:3985
+// viewer.js:3989
 const FB_CAP = 1024, FB_PER = 20, FB_N = 2 * FB_PER + 7, FB_CELLS = 75, FB_MEM = 400, FB_INTERVAL = 20;
-// viewer.js:3988
+// viewer.js:3992
 const FBC = { INACT: 1, JUMP: 2, HITSTUN: 3, BLOCK: 4, ACTIVE: 5, FREE: 6, ADV: 7, NEUTRAL: 8, FREEZE: 9, THROWN: 11,
               HITSTOP: 12, SHIELD: 13, THROW: 14 };
-// viewer.js:3992
+// viewer.js:3996
 const fb = { on: false, s: null, raw: null, tag: null, last: -1, procF: -1, rebuild: false, dirty: false, m: null, cv: null, place: true };
-// viewer.js:3993
+// viewer.js:3997
 function fbMachine() {
   const P = () => ({ main: new Uint8Array(FB_MEM), sub: new Uint8Array(FB_MEM), air: new Uint8Array(FB_MEM), proj: new Uint8Array(FB_MEM),
                      lastBusy: 0, lastActive: 0, lastProj: 0, firstActive: 0, firstCounter: 0, gotFirst: false, total: 0 });
   return { p: [P(), P()], counter: 0, interval: 0, intervalMax: FB_CELLS, isReset: false, doReset: false, doAdv: false,
            shared: 0, lastFc: 0, lastTrue: -1, clock: 0, inEx: false, freeAt: [-1, -1], adv: 0, advCell: -1, any: false };
 }
-// viewer.js:3999
+// viewer.js:4003
 function fbResetBars(m) {
   m.isReset = true; m.counter = 0; m.advCell = -1; m.interval = 0; m.doReset = false; m.intervalMax = FB_CELLS;
   for (const P of m.p) { P.main.fill(0); P.sub.fill(0); P.air.fill(0); P.proj.fill(0); }
 }
-// viewer.js:4004
+// viewer.js:4008
 function fbStep(m, R, o) {
   const g = o + 2 * FB_PER, X = [o, o + FB_PER];
   if (R[g + 3] !== 1) return;  // (not in a battle)
@@ -2856,7 +2863,7 @@ function fbStep(m, R, o) {
   }
   m.lastFc = fc; m.lastTrue = trueF;
 }
-// viewer.js:4049
+// viewer.js:4053
 function fbCell(m, P, R, x, g) {
   const first = () => { if (!P.gotFirst) { P.firstActive = P.firstCounter; P.gotFirst = true; } };
   let c;
@@ -2880,7 +2887,7 @@ function fbCell(m, P, R, x, g) {
   const k = m.counter % FB_MEM;
   P.main[k] = c; P.sub[k] = R[x + 12]; P.air[k] = R[x + 9] === 1 ? (R[x + 11] ? 2 : 1) : 0; P.proj[k] = R[x + 14] ? 1 : 0;
 }
-// viewer.js:4072
+// viewer.js:4076
 function fbClear(s) {
   fb.s = s; fb.last = -1; fb.procF = -1; fb.rebuild = false; fb.m = fbMachine(); fb.dirty = true;
   if (!fb.raw) { fb.raw = new Int32Array(FB_CAP * FB_N); fb.tag = new Int32Array(FB_CAP); }
@@ -2894,7 +2901,7 @@ function fbSample(s, f) {
   const p = M._viewer_framebar_sample() >> 2;
   fbPut(s, f, M.HEAP32.subarray(p, p + FB_N));
 }
-// viewer.js:4078
+// viewer.js:4082
 function fbPut(s, f, R) {
   if (fb.s !== s) fbClear(s);
   const i = f % FB_CAP;
@@ -2912,11 +2919,11 @@ function fbSeekBack(T) {
   for (let f = Math.max(0, T - FB_BACK); f < T; f++) if (fb.tag[f % FB_CAP] !== f) return FB_BACK;
   return 0;
 }
-// viewer.js:4177
+// viewer.js:4181
 let overlayDirty = true, lastDrawnFrame = -1;
-// viewer.js:4270
+// viewer.js:4274
 let seekDragging = false, marksKey = '';
-// viewer.js:4677
+// viewer.js:4681
 function perfProfiler(host) {
   const WAIT = Q.get('perfwait') || 'battle', GPU_MODE = /^(fence|off)$/.test(Q.get('perfgpu') || '') ? Q.get('perfgpu') : 'sync';
   const GPU_N = Math.max(5, +(Q.get('perfgpuN') || 30));
@@ -3189,7 +3196,7 @@ function perfProfiler(host) {
   if (WAIT !== 'manual') host.panel(WAIT === '0' ? 'perf: waiting for the game' : 'perf: waiting for a battle', P);
   return P;
 }
-// viewer.js:5008
+// viewer.js:5012
 function wantFor(rep) {
   if (!man.plan) return null;
   let want = planFiles(man, repKeys(rep));
@@ -3197,18 +3204,18 @@ function wantFor(rep) {
   if (Q.get('planDrop')) { const re = new RegExp(Q.get('planDrop')); want = new Set([...want].filter(f => !re.test(f))); }
   return want;
 }
-// viewer.js:5019
+// viewer.js:5023
 const MOVIE = 'dat/dat_m_vs.vsmv';
-// viewer.js:5024
+// viewer.js:5028
 let movieBytes = null, movieH264 = null, movieLoading = null, movieHook = null;
-// viewer.js:5060
+// viewer.js:5064
 function movieConfig(b) {
   if (!b.length) return { codec: 'avc1.640020', codedWidth: 640, codedHeight: 480 };
   const dv = new DataView(b.buffer, b.byteOffset, b.byteLength), u = i => dv.getUint32(i, true), dl = u(24), cl = u(28);
   return { codec: new TextDecoder().decode(b.subarray(32, 32 + cl)), codedWidth: u(8), codedHeight: u(12),
            description: b.slice(32 + cl, 32 + cl + dl), optimizeForLatency: true };
 }
-// viewer.js:5070
+// viewer.js:5074
 function movieVideo(b) {
   const dv = new DataView(b.buffer, b.byteOffset, b.byteLength), u = i => dv.getUint32(i, true);
   const cfg = movieConfig(b), n = u(16), key = u(20), tab = 32 + u(28) + u(24), off = i => u(tab + 4 * i);
@@ -3246,7 +3253,7 @@ function movieVideo(b) {
     },
   };
 }
-// viewer.js:5136
+// viewer.js:5140
 let xf = null, xfRuns = 0;
 // (live) the select screen's files in the background; until they are in MEMFS the game is held on reaching the result
 // screen (scene 5) or the retry menu, where the next select may follow (a match lasts minutes: in practice never held)
@@ -3263,11 +3270,11 @@ function liveCssBg(s, paths) {
     .catch(e => { console.warn('live: select screen files:', e); if (session === s) { s.cssBgP = null; s.cssBgHeld = false; liveHoldApply(s); } });
   if (s.livePic) s.cssBgGo(); else setTimeout(s.cssBgGo, 20000);
 }
-// viewer.js:5355
+// viewer.js:5359
 let loopOn = false;
-// viewer.js:5452
+// viewer.js:5456
 let clipPanel = false, clipPanelKey = '', clipDrag = null;
-// viewer.js:5643
+// viewer.js:5647
 function liveTapes(s) {
   const L = s.liveSrc;
   if (!L || !s.M) return;
@@ -3292,17 +3299,17 @@ function liveTapes(s) {
   const can = liveClipCan();
   if (can !== L.clipCan) { L.clipCan = can; clipPanelKey = ''; marksKey = ''; }
 }
-// viewer.js:5910
+// viewer.js:5914
 let clipLt = null;  // {name, bytes} or null
-// viewer.js:6966
+// viewer.js:6970
 let labCfg = null, labOn = null;
-// viewer.js:6967
+// viewer.js:6971
 function labApply(c) {
   labCfg = c || null;
   self.__mbaaLabSet = c && c.set ? c.set : null;
   labAttach();
 }
-// viewer.js:6972
+// viewer.js:6976
 function labAttach() {
   const m = session && session.M;
   if (labOn && labOn !== m) { try { delete labOn.__labSync; labOn.__labVoid = 0; labOn.mbaaRadioDefer = labOn.__labDefer; delete labOn.__labDefer; } catch (e) {} labOn = null; }
@@ -3314,7 +3321,7 @@ function labAttach() {
     m.__labVoid = labCfg.void ? 1 : 0; labOn = m;
   } else if (labOn === m) { delete m.__labSync; m.__labVoid = 0; m.mbaaRadioDefer = m.__labDefer; delete m.__labDefer; labOn = null; }
 }
-// viewer.js:6985
+// viewer.js:6989
 function labInfo() {
   const m = session && session.M, objs = [];
   if (m && m.HEAPU8 && !m.__remote) {
@@ -3680,6 +3687,9 @@ self.onmessage = e => {
 };
 const engOnAny = e => { const t0 = engTL ? performance.now() : 0; try { engOnMsg(e); } finally { if (engTL) { engTlMsg += performance.now() - t0; const k = e.data.cmd + (e.data.f ? ':' + e.data.f : ''); engTlCmds[k] = (engTlCmds[k] || 0) + 1; } } };
 const engOnMsg = e => {
+  // (the clock offset's ping (engine_head.js engClockD): answered at once, off the queue)
+  if (e.data.cmd === 'clkPing') { engPost({ ev: 'clkPong', i: e.data.i, w: engRawNow() }); return; }
+  if (e.data.cmd === 'clkSet') { engClockD = e.data.d; return; }
   if (ENG_NOW.has(e.data.cmd)) { engCmd(e).catch(err => engPost({ ev: 'error', cmd: e.data.cmd, msg: String(err && err.stack || err) })); return; }
   engQ = engQ.then(async () => {
     engCur = e.data.cmd + (e.data.f ? ':' + e.data.f : '');
@@ -3692,7 +3702,7 @@ const engCmd = async e => {
     if (d.cmd === 'init') {
       engOff = d.off || engFrameOff; engCanvasHooks(engOff); engWasmV = d.wasmV || ''; LOWMEM = !!d.lowmem; SW_KEEP = !!d.swKeep; engLS = d.ls || {};
       importScripts('mbaa.js' + (engWasmV ? `?${engWasmV}` : ''));
-      man = d.man; Object.assign(ui, d.ui || {}); fb.on = !!d.fbOn; LIVE = d.live || ''; Object.assign(engPage, d.page || {});
+      man = d.man; VIEWER = d.viewer || ''; Object.assign(ui, d.ui || {}); fb.on = !!d.fbOn; LIVE = d.live || ''; Object.assign(engPage, d.page || {});
       engPost({ ev: 'ready' });
       engineWarm();  // (the boot ahead of the first match: play takes it, warmTake)
     } else if (d.cmd === 'pipShot') { engPipShot = true;

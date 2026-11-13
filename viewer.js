@@ -2965,6 +2965,10 @@ function xfadeSrc(img, src, revoke) {
   (img.decode ? img.decode() : Promise.resolve()).then(go, go);
   setTimeout(go, 1500);  // (a decode that never settles)
 }
+// a card picture's URL to free once it is off screen: a blob made for it (an extension's, a radio tile), never a stage's
+// cached art (stageArt: kept for the next time that stage shows; was freed when an extension's stage replaced it, and a
+// revert put the freed URL back: a broken picture under the extension's name, user 2026-11-13)
+const stageArtOwn = u => (u && u.startsWith('blob:') && ![...stageArt.values()].some(a => a && (a.view === u || a.name === u)) ? u : '');
 async function stageShow(s) {
   const box = document.getElementById('stageblk');
   if (porTune && stagePanel && !(s && s.M)) return porTuneStage(box);  // (tuning with no match: a stage picture anyway)
@@ -2990,7 +2994,7 @@ async function stageShow(s) {
     for (const k of ['view', 'name']) {
       const img = box.querySelector('.' + k), b = k === 'view' ? X.view : X.plate, old = img.dataset.src || '';
       img.dataset.src = b ? URL.createObjectURL(b) : '';
-      xfadeSrc(img, img.dataset.src, old); img.hidden = !b;
+      xfadeSrc(img, img.dataset.src, stageArtOwn(old)); img.hidden = !b;  // (the match's own art stays: a revert shows it again)
     }
     box.querySelector('.view').title = X.name; box.querySelector('.name').alt = X.name;
     if (box.hidden) requestAnimationFrame(() => marquee(document.getElementById('players')));
@@ -2999,17 +3003,17 @@ async function stageShow(s) {
   }
   if (!C && radio && stageFollows() && (radio.tile || radio.tileUrl)) {  // an older game's stage: its picture, its name for the plate
     const view = box.querySelector('.view'), name = box.querySelector('.name'), d = radio.tile && cache.get(radio.tile);
-    const old = view.dataset.src && view.dataset.src.startsWith('blob:') ? view.dataset.src : '';
+    const old = stageArtOwn(view.dataset.src);
     // (the stage's own render; a track with none shows its community tile)
     view.dataset.src = d ? URL.createObjectURL(new Blob([d], { type: 'image/jpeg' })) : radio.tileUrl || '';
     xfadeSrc(view, view.dataset.src, old); view.hidden = !view.dataset.src; view.title = radio.stageName || '';
-    if (name.dataset.src) URL.revokeObjectURL(name.dataset.src);
-    name.dataset.src = ''; name.removeAttribute('src'); name.hidden = true;
+    if (stageArtOwn(name.dataset.src)) URL.revokeObjectURL(name.dataset.src);
+    name.dataset.src = ''; name.removeAttribute('src'); name.hidden = true; name.alt = '';
     if (box.hidden) requestAnimationFrame(() => marquee(document.getElementById('players')));
     box.hidden = false;
     return;
   }
-  box.querySelector('.view').title = '';
+  box.querySelector('.view').title = ''; box.querySelector('.name').alt = '';  // (an extension's stage name, gone with it)
   const view = box.querySelector('.view');
   // (no art for the stage, or not loaded yet (a cold cache): the picture's place held by a plain panel, so the card's
   // layout, the splashes and the names are there at once; was: the block hidden, and the CSS hid the splashes with it)
@@ -3034,7 +3038,7 @@ async function stageShow(s) {
   for (const k of ['view', 'name']) {  // (cached URLs: kept, never revoked)
     const img = box.querySelector('.' + k), old = img.dataset.src || '';
     img.dataset.src = art[k] || '';
-    xfadeSrc(img, img.dataset.src, old.startsWith('blob:') && ![...stageArt.values()].some(a => a && (a.view === old || a.name === old)) ? old : '');
+    xfadeSrc(img, img.dataset.src, stageArtOwn(old));
     img.hidden = !art[k];
   }
   if (box.hidden) requestAnimationFrame(() => marquee(document.getElementById('players')));  // (the card's layout: measured again)
@@ -7011,7 +7015,7 @@ window.__mbaaLab = { set: c => labApply(c), info: () => labInfo() };
     const off = XFRAME ? null : freshCanvas();
     // (the page's query on the worker's own address: the module reads its options (gpu=, capture=, nos3tc=...) from
     // location.search, which in a worker is the worker script's)
-    const wq = (location.search ? `${location.search}&` : '?') + (Q.get('gpu') || !GPU_Q ? '' : `gpu=${GPU_Q}&`) + `ev=${wasmV()}&to=${performance.timeOrigin}`;
+    const wq = (location.search ? `${location.search}&` : '?') + (Q.get('gpu') || !GPU_Q ? '' : `gpu=${GPU_Q}&`) + `ev=${wasmV()}`;
     if (XFRAME) {
       // (the frame over the canvas's box, under the overlay; it starts the worker and hands it this port: E.w is the port)
       const gc = document.getElementById('canvas'), fr = document.createElement('iframe'), ch = new MessageChannel();
@@ -7035,7 +7039,7 @@ window.__mbaaLab = { set: c => labApply(c), info: () => labInfo() };
     E.upGo();
     const ls = {};
     try { for (const k of ['s3dq', 'xlight']) { const v = localStorage.getItem(k); if (v !== null) ls[k] = v; } } catch (e) {}
-    E.w.postMessage({ cmd: 'init', off, search: location.search, wasmV: wasmV(), man, ui: { ...ui }, lowmem: LOWMEM, swKeep: SW_KEEP, fbOn: fb.on, ls, live: LIVE, page: pageNow() }, off ? [off] : []);
+    E.w.postMessage({ cmd: 'init', off, search: location.search, wasmV: wasmV(), man, viewer: VIEWER, ui: { ...ui }, lowmem: LOWMEM, swKeep: SW_KEEP, fbOn: fb.on, ls, live: LIVE, page: pageNow() }, off ? [off] : []);
     if (document.visibilityState === 'hidden') visSend();  // (a page started hidden: its clock from the start)
     return E.ready;
   }
@@ -7051,6 +7055,18 @@ window.__mbaaLab = { set: c => labApply(c), info: () => labInfo() };
     const list = [], tr = [];
     for (const p of paths) { const d = cache.get(p); if (!d || (!asked && E.sent.has(p))) continue; const b = d.slice(); list.push([p, b]); tr.push(b.buffer); E.sent.add(p); }
     E.w.postMessage({ cmd: 'files', id, list }, tr);
+  }
+  // the worker's clock offset (engine_head.js engClockD): 8 pings, the shortest round trip's midpoint against the
+  // worker's time; set before the engine is ready, so nothing it times runs on a wrong offset
+  E.clk = new Map();
+  async function engClockSync() {
+    let best = null;
+    for (let i = 0; i < 8; i++) {
+      const p0 = performance.now(), w = await new Promise(r => { E.clk.set(i, r); E.w.postMessage({ cmd: 'clkPing', i }); });
+      const p1 = performance.now();
+      if (!best || p1 - p0 < best.rtt) best = { rtt: p1 - p0, d: (p0 + p1) / 2 - w };
+    }
+    E.clkD = best.d; E.w.postMessage({ cmd: 'clkSet', d: best.d });
   }
   function engMsg(d) {
     if (d.ev === 'pipImg') {
@@ -7086,7 +7102,8 @@ window.__mbaaLab = { set: c => labApply(c), info: () => labInfo() };
     }
     if (d.id && E.waits.has(d.id)) { E.waits.get(d.id)(d); E.waits.delete(d.id); }
     switch (d.ev) {
-      case 'ready': E.readyGo(); break;
+      case 'ready': engClockSync().then(E.readyGo); break;
+      case 'clkPong': { const f = E.clk.get(d.i); if (f) { E.clk.delete(d.i); f(d.w); } break; }
       case 'sfx': if (session && session.remote) sfxPlay(session, d.q); break;
       case 'fb': if (session && session.remote && fb.on) for (let j = 0; j < d.f.length; j++) fbPut(session, d.f[j], d.raw.subarray(j * FB_N, (j + 1) * FB_N)); break;
       case 'status': status(d.t); break;
