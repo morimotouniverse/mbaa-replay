@@ -1407,8 +1407,13 @@ const liveExtApi = {
   },
   stage(o, tok) {   // (a token as music's)
     if (!o && tok && (!liveExt.stage || liveExt.stage.n !== tok)) return null;
-    liveExt.stage = o ? { n: ++liveExt.stageN, name: String(o.name || ''), view: o.view instanceof Blob ? o.view : null,
-                          plate: o.plate instanceof Blob ? o.plate : null } : null;
+    liveExt.stage = o ? { n: ++liveExt.stageN, name: String(o.name || ''), view: o.view instanceof Blob ? o.view : null, plate: null } : null;
+    // (the plate cropped to its drawn pixels first, as the game's own (stageShow): the extension's plates come padded to
+    // 320 px, so they sat off centre and drew past the card's plate box; shown once cropped, never the padded one)
+    if (o && o.plate instanceof Blob) {
+      const X = liveExt.stage;
+      trimAlpha(o.plate).catch(() => o.plate).then(t => { if (liveExt.stage === X) { X.plate = t; stageKey = ''; stageShow(session).catch(() => {}); } });
+    }
     stageKey = '';
     stageShow(session).catch(() => {});
     radioExtTile();
@@ -2950,8 +2955,9 @@ function xfadeSrc(img, src, revoke) {
   if (!can) { if (src) img.src = src; else img.removeAttribute('src'); if (revoke) URL.revokeObjectURL(revoke); return; }
   const g = img.cloneNode(false);
   g.removeAttribute('id'); g.removeAttribute('title'); g.setAttribute('aria-hidden', 'true'); g.classList.add('xfghost');
-  if (getComputedStyle(img).position === 'static')
-    Object.assign(g.style, { position: 'absolute', left: `${img.offsetLeft}px`, top: `${img.offsetTop}px`, width: `${img.offsetWidth}px`, height: `${img.offsetHeight}px`, margin: '0' });
+  // (always laid over the image, at its box in their shared offset parent: a positioned image (the card's plate is
+  // position: relative) left the copy in the flow, a second plate under the new one until the fade ended, user 2026-11-14)
+  Object.assign(g.style, { position: 'absolute', left: `${img.offsetLeft}px`, top: `${img.offsetTop}px`, width: `${img.offsetWidth}px`, height: `${img.offsetHeight}px`, margin: '0' });
   g.style.pointerEvents = 'none';
   img.after(g);
   img.src = src;
@@ -5751,6 +5757,20 @@ async function liveClipLink(s, c = s.clip, moment = false) {
 // up to there (/lt/s<game>_f<battle start>_e<end>.rep + .lt; the game's memory unchanged, the game-end tape_keep still
 // gets everything), then the picture goes back where it was. -> {rep, lt, rec, end, snap: true} | null
 async function liveTapeNow(s, p) {
+  // (the engine in its worker: done there, where the session's frame and MEMFS are (engine_tail.js liveTapeNow))
+  if (s.remote && window.__mbaaEngine) {
+    const paused = ui.paused;
+    if (!paused) setPaused(true);
+    try {
+      const r = await window.__mbaaEngine.cmd('liveTapeNow', { b: p.b, game: p.game });
+      if (r.err) throw new Error(r.err);
+      if (r.fights) p.fights = r.fights;
+      if (!r.T) console.log(`live clip: no snapshot (${r.why})`);
+      return r.T || null;
+    } finally {
+      if (!paused && session === s) setPaused(false);
+    }
+  }
   const L = s.liveSrc, M = s.M, f0 = M._viewer_frame(), paused = ui.paused;
   const gameNow = () => { const g = call(s, 'viewer_spectate_game'); return g >= 0 ? g : L.firstGame; };
   if (!paused) setPaused(true);  // (the preview's loop (clipTick) would seek away meanwhile)
@@ -5803,7 +5823,7 @@ async function liveClipUpload(s, p, snap) {
     const chat = p.chat.map(x => ({ ...x, o: x.o + (p.a - off - t) })).filter(x => x.o >= 0 && x.o <= e - t);
     // the clip by the game's fight starts (k: the round's fight, da / db: frames after its start), which the link's page
     // turns into its own frames (clipFix): t / e above are the estimate the link carries
-    const fights = s.tl.fights.filter(f => f >= T.rec && f <= T.end), k = Math.max(0, fights.filter(f => f <= p.a).length - 1);
+    const fights = (p.fights || s.tl.fights).filter(f => f >= T.rec && f <= T.end), k = Math.max(0, fights.filter(f => f <= p.a).length - 1);
     const at = fights.length ? { k, da: p.a - fights[k], db: p.b - fights[k] } : null;
     // lt: the game's live forcing (liveTapes), which the link's page plays the replay with (clipLtFor)
     const body = { rep: b64(rep), lt: T.lt ? b64(T.lt) : null, t, e, at, names: (L.info.names || []).map(n => String(n || '').trim()), match: L.info.match || null, chat };
@@ -7214,7 +7234,16 @@ window.__mbaaLab = { set: c => labApply(c), info: () => labInfo() };
     }
   }
   // the session's module, seen from the page: reads from the posted state, every call sent over
-  const GET = { viewer_frame: () => (E.st ? E.st.frame : 0), viewer_ended: () => (E.st ? E.st.ended : 0) };
+  // (the module's getters the page reads, answered from the worker's frame state: anything else posted reads 0, and the
+  // live stream's buffered frames read 0 put every picture at the live edge: chat's line times (+mbaa/at) were the edge,
+  // not the picture, and a click on one landed late, user 2026-11-14 "doesnt send back 5 seconds"; the game 0 and no tape
+  // broke live clips)
+  const GET = { viewer_frame: () => (E.st ? E.st.frame : 0), viewer_ended: () => (E.st ? E.st.ended : 0),
+                viewer_spectate_buffered: () => (E.st && E.st.live ? E.st.live.ahead : 0),
+                viewer_spectate_game: () => (E.st && E.st.live ? E.st.live.game : -1) };
+  // (no viewer_live_tape_now here: it writes a snapshot replay to MEMFS (spectate_tape_snap), so a per-frame state field
+  // for it wrote one every frame of every live session, never deleted; live clips take theirs with the worker's
+  // liveTapeNow command)
   // (memory: the worker's mirror of the addresses the page reads; an address read for the first time is asked for and
   // reads 0 until the next frame's state; the overlay's boxes / inputs arrays stand at two pretend addresses)
   const BOXES = 0x40000000, INPUTS = 0x50000000;

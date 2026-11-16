@@ -1522,17 +1522,17 @@ const liveNet = { fails: 0, troubleAt: -1e9, notice: '',
   recent: () => performance.now() - liveNet.troubleAt < 60000 };
 // viewer.js:1330
 const annDefault = { files: null, p: null, src: '', voice: null };
-// viewer.js:1446
+// viewer.js:1451
 let liveWant = null, liveCss = null;
-// viewer.js:1456
+// viewer.js:1461
 let liveResume = null;
-// viewer.js:1475
+// viewer.js:1480
 const liveOurs = (m, L) => !!m && !!L && m.id === L.id && (!m.match || !(L.info && L.info.match) || m.match === L.info.match);
-// viewer.js:1479
-const LIVE_IDLE = 300, liveIdle = m => m.age > LIVE_IDLE, liveGone = m => m.silent > 8 || liveIdle(m);
 // viewer.js:1484
+const LIVE_IDLE = 300, liveIdle = m => m.age > LIVE_IDLE, liveGone = m => m.silent > 8 || liveIdle(m);
+// viewer.js:1489
 let sw = null;
-// viewer.js:1534
+// viewer.js:1539
 let liveListLast = null;  // {at, l}: the newest list read (an entry from it is fresh for LIVE_FRESH ms)
 // ---- the server snapshot join (artifacts/xz_check/perf_plan/snapjoin): the bridge's native sim server (tools/server_sim/sim_server.cpp)
 // makes a snapshot of a live game when a join asks (web/host/snapshot.cpp: the delta against the game's start of PC's
@@ -1781,13 +1781,13 @@ function cuDone(s, f0, t0, drawn) {
   if (s.cssBgGo) s.cssBgGo();
   console.log(`live: caught up ${r.frames} frames in ${Math.round(ms)} ms (${Math.round(r.fps)} frames/s, ${drawn} drawn)`);
 }
-// viewer.js:2593
+// viewer.js:2598
 let stagePanel = null, stageKey = '', radio = null, oldRadio = null, radioGame = 'aacc';
-// viewer.js:2744
+// viewer.js:2749
 let xfStagePending = false;  // (a pick's stage swap to crossfade: radioStageSync)
-// viewer.js:2745
+// viewer.js:2750
 let xfYieldPending = false;  // (a pick's or a clear's swap with a live extension's page-drawn stage, to fade: radioStageSync)
-// viewer.js:2794
+// viewer.js:2799
 let radioStageFollow = true;
 // The stage: the pick's stage file into MEMFS (sharing the fetched buffer; a stage file MBAACC also ships is bg/bgNN.dat,
 // whose MEMFS copy may be the 1-byte probe placeholder) and sent to the game, which swaps stages between frames. Sent
@@ -1806,7 +1806,7 @@ function radioPut(s, p) {
   return true;
 }
 let radioOwnFetch = null;
-// viewer.js:2897
+// viewer.js:2902
 function radioStageFiles(id) {
   const p = man.plan;
   if (!p || !p.stage) return [];
@@ -1835,9 +1835,9 @@ function radioFilesIn(s, id) {
   for (const p of files) radioPut(s, p);
   return true;
 }
-// viewer.js:2906
+// viewer.js:2911
 const stageFollows = () => radioStageFollow || !!(radio && radio.chip);
-// viewer.js:2907
+// viewer.js:2912
 const radioPickHasStage = () => !!(radio && stageFollows() && !HASH && (radio.dat || (radio.stages && radio.stages.length)));
 function radioStageSync(s) {
   const M = s && s.M;
@@ -1888,7 +1888,7 @@ function radioStageSync(s) {
   if (st) st.lights.forEach(([pos, power], i) => M._viewer_radio_stage_light(i, pos, power));
   M.ccall('viewer_radio_stage_want', null, ['string', 'number', 'number'], [st ? st.dat : '', want, st ? st.lights.length : 0]);
 }
-// viewer.js:3329
+// viewer.js:3335
 function liveKeep(L, b) {
   const dv = new DataView(b.buffer, b.byteOffset, b.byteLength);
   for (let o = 0; o + 244 <= b.length;) {
@@ -1904,7 +1904,7 @@ function liveFeed(s, b) {
   call(s, 'viewer_spectate_feed', p, b.length);
   s.M._free(p);
 }
-// viewer.js:3344
+// viewer.js:3350
 function liveCssFiles(man) {
   const out = new Set();
   for (const p of Object.keys(man.files))
@@ -1912,7 +1912,7 @@ function liveCssFiles(man) {
         /^story\/battle\/[^/]+_table\.txt$/.test(p)) out.add(p);
   return withSiblings(man, out);
 }
-// viewer.js:3356
+// viewer.js:3362
 const CSS_SCENE = 20, CSS_OBJ = 0x773158, CSS_SLOT = 0x74D8E8, BATTLE_SLOT = 0x74D838, STAGE_ID = 0x74FD98;
 function liveCssWatch(s) {
   const H = s.M.HEAP32, g = a => H[a >> 2];
@@ -2001,15 +2001,15 @@ const bootSetup = rep => {  // boot.rep's header (cc_live.mjs bootRep): the stag
   const dv = new DataView(rep.buffer, rep.byteOffset, rep.byteLength), i = o => dv.getInt32(o, true);
   return { stage: i(0x28), chara: [i(0x40), i(0x50)], moon: [i(0x44), i(0x54)], color: [i(0x48), i(0x58)] };
 };
-// viewer.js:3362
+// viewer.js:3368
 const stageOk = id => id === 0 || !man || !man.files || !!man.files[`bg/bg${String(id).padStart(2, '0')}.dat`];
-// viewer.js:3363
+// viewer.js:3369
 function stageStandIn(id) {
   const ok = Object.keys(man.files).map(f => /^bg\/bg(\d\d)\.dat$/.exec(f)).filter(Boolean).map(m => +m[1])
     .filter(n => n > 0 && n !== 57 && n !== 58).sort((a, b) => a - b);  // (not the two giant stages: wider)
   return ok.length ? ok[id % ok.length] : 1;
 }
-// viewer.js:3368
+// viewer.js:3374
 function repStageFix(rep) {  // a .rep / boot tape's header stage (0x28), in place
   const dv = new DataView(rep.buffer, rep.byteOffset, rep.byteLength), id = dv.getInt32(0x28, true);
   if (stageOk(id)) return;
@@ -2116,12 +2116,12 @@ async function liveLateCheck(s, game) {
   console.log(`live: game ${game}'s setup came after our load: ${same ? 'the same' : 'different: switching'}`);
   if (!same) liveSwitch(s, p);
 }
-// viewer.js:3392
+// viewer.js:3398
 const STREAK = [0x76FC14, 0x770EB4];  // g_P1ConsecutiveWinStreak, g_P2ConsecutiveWinStreak (the player records', +0x4A0)
 const asciiName = n => /^[\x20-\x7e]*$/.test(n);
-// viewer.js:3394
+// viewer.js:3400
 const TUNE = Q.get('tune') === '1';
-// viewer.js:3395
+// viewer.js:3401
 const bannerTune = { nameGap: -1, nameSize: 16, nameDy: 0, winsGap: -1, winsSize: 11, winsDy: -11, maxPx: 216, scrollSpeed: 40,
   lapGap: 24, streak: -1, pageFont: 13, testP1: '', testP2: '' };
 function liveBanner(s) {
@@ -2257,11 +2257,11 @@ function liveRefeed(s) {  // restore(): after the keyframe is back
   for (const x of parts) all.set(x, o), o += x.length;
   liveFeed(s, all);
 }
-// viewer.js:3465
+// viewer.js:3471
 const KEEP_MS = +(Q.get('keepms') || 300000);
-// viewer.js:3466
+// viewer.js:3472
 let liveKept = null, liveResumeK = null, liveClickAt = null;
-// viewer.js:3469
+// viewer.js:3475
 const texKey = (a, i) => a[i] + ':' + a[i + 1] + ':' + a[i + 2];
 // the store entries a kept keyframe names: counted in M.mbaaTexHold, and in the timeline's reference map (store eviction
 // skips them; timelineInit seeds a new session's map from the hold)
@@ -2292,7 +2292,7 @@ function liveKeptDrop(why) {
   console.log(`live: the kept match is dropped (${why})`);
   if (session && session.tl && session.M === K.M) storeGc(session.tl);
 }
-// viewer.js:3471
+// viewer.js:3477
 function liveKeptStat(K) {
   const S = K.M.mbaaTexStore, seen = new Set(), cur = session && session.want;
   let tex = 0, texOnly = 0, files = 0, recs = 0;
@@ -2371,7 +2371,7 @@ async function liveKeptPoll(K) {
   } catch (e) {}
   if (liveKept === K) K.timer = wTimeout(() => liveKeptPoll(K), 1000);
 }
-// viewer.js:3491
+// viewer.js:3497
 function liveBackTake(K, prev, click) {
   liveKept = null; wClear(K.timer);  // (its texture hold stays until the restore takes it over: liveResumeApply)
   const B = window.__mbaaSwitchBack = { click, start: performance.now(), awayS: (Date.now() - K.at) / 1000, kept: liveKeptStat(K) };
@@ -2423,7 +2423,7 @@ function liveResumeApply(s) {
                 `${Math.round(B.caught - (B.click ?? B.start))} ms from the click`);
   }, 0);
 }
-// viewer.js:3510
+// viewer.js:3516
 function liveStateNow() {
   const s = session;
   if (!s || !s.liveSrc || !s.M) return null;
@@ -2432,7 +2432,7 @@ function liveStateNow() {
            wt: s.M.HEAP32[0x55D1D4 >> 2],  // (g_WorldTimer: the game's own frame; a session's frame numbers are its own)
            kfs: s.tl ? s.tl.kfs.length : 0, tlMB: s.tl ? Math.round(s.tl.bytes / 1e5) / 10 : 0, heapMB: Math.round(s.M.HEAPU8.length / 1e5) / 10 };
 }
-// viewer.js:3518
+// viewer.js:3524
 async function stateRowsTake(k, n) {
   const s = session;
   if (!s) return null;
@@ -2782,11 +2782,11 @@ function liveBegin(s) {  // play(): after viewer_play
   };
   poll();
 }
-// viewer.js:3610
+// viewer.js:3616
 const nextCard = { s: null, id: null, at: 0, timer: 0, raf: 0, stay: null, why: null };
-// viewer.js:3611
+// viewer.js:3617
 const liveName = m => m.matchup || (m.names || []).map(n => (n || '').trim()).join(' vs ');
-// viewer.js:3914
+// viewer.js:3920
 const curFrame = () => session ? (session.tl && session.tl.want !== null ? session.tl.want : session.M._viewer_frame()) : 0;
 function stepBy(n, pause = true) {
   if (!session || !session.tl) return Promise.resolve();
@@ -2799,26 +2799,26 @@ function stepBy(n, pause = true) {
   }
   return requestSeek(curFrame() + n);
 }
-// viewer.js:3989
+// viewer.js:3995
 const FB_CAP = 1024, FB_PER = 20, FB_N = 2 * FB_PER + 7, FB_CELLS = 75, FB_MEM = 400, FB_INTERVAL = 20;
-// viewer.js:3992
+// viewer.js:3998
 const FBC = { INACT: 1, JUMP: 2, HITSTUN: 3, BLOCK: 4, ACTIVE: 5, FREE: 6, ADV: 7, NEUTRAL: 8, FREEZE: 9, THROWN: 11,
               HITSTOP: 12, SHIELD: 13, THROW: 14 };
-// viewer.js:3996
+// viewer.js:4002
 const fb = { on: false, s: null, raw: null, tag: null, last: -1, procF: -1, rebuild: false, dirty: false, m: null, cv: null, place: true };
-// viewer.js:3997
+// viewer.js:4003
 function fbMachine() {
   const P = () => ({ main: new Uint8Array(FB_MEM), sub: new Uint8Array(FB_MEM), air: new Uint8Array(FB_MEM), proj: new Uint8Array(FB_MEM),
                      lastBusy: 0, lastActive: 0, lastProj: 0, firstActive: 0, firstCounter: 0, gotFirst: false, total: 0 });
   return { p: [P(), P()], counter: 0, interval: 0, intervalMax: FB_CELLS, isReset: false, doReset: false, doAdv: false,
            shared: 0, lastFc: 0, lastTrue: -1, clock: 0, inEx: false, freeAt: [-1, -1], adv: 0, advCell: -1, any: false };
 }
-// viewer.js:4003
+// viewer.js:4009
 function fbResetBars(m) {
   m.isReset = true; m.counter = 0; m.advCell = -1; m.interval = 0; m.doReset = false; m.intervalMax = FB_CELLS;
   for (const P of m.p) { P.main.fill(0); P.sub.fill(0); P.air.fill(0); P.proj.fill(0); }
 }
-// viewer.js:4008
+// viewer.js:4014
 function fbStep(m, R, o) {
   const g = o + 2 * FB_PER, X = [o, o + FB_PER];
   if (R[g + 3] !== 1) return;  // (not in a battle)
@@ -2863,7 +2863,7 @@ function fbStep(m, R, o) {
   }
   m.lastFc = fc; m.lastTrue = trueF;
 }
-// viewer.js:4053
+// viewer.js:4059
 function fbCell(m, P, R, x, g) {
   const first = () => { if (!P.gotFirst) { P.firstActive = P.firstCounter; P.gotFirst = true; } };
   let c;
@@ -2887,7 +2887,7 @@ function fbCell(m, P, R, x, g) {
   const k = m.counter % FB_MEM;
   P.main[k] = c; P.sub[k] = R[x + 12]; P.air[k] = R[x + 9] === 1 ? (R[x + 11] ? 2 : 1) : 0; P.proj[k] = R[x + 14] ? 1 : 0;
 }
-// viewer.js:4076
+// viewer.js:4082
 function fbClear(s) {
   fb.s = s; fb.last = -1; fb.procF = -1; fb.rebuild = false; fb.m = fbMachine(); fb.dirty = true;
   if (!fb.raw) { fb.raw = new Int32Array(FB_CAP * FB_N); fb.tag = new Int32Array(FB_CAP); }
@@ -2901,7 +2901,7 @@ function fbSample(s, f) {
   const p = M._viewer_framebar_sample() >> 2;
   fbPut(s, f, M.HEAP32.subarray(p, p + FB_N));
 }
-// viewer.js:4082
+// viewer.js:4088
 function fbPut(s, f, R) {
   if (fb.s !== s) fbClear(s);
   const i = f % FB_CAP;
@@ -2919,11 +2919,11 @@ function fbSeekBack(T) {
   for (let f = Math.max(0, T - FB_BACK); f < T; f++) if (fb.tag[f % FB_CAP] !== f) return FB_BACK;
   return 0;
 }
-// viewer.js:4181
+// viewer.js:4187
 let overlayDirty = true, lastDrawnFrame = -1;
-// viewer.js:4274
+// viewer.js:4280
 let seekDragging = false, marksKey = '';
-// viewer.js:4681
+// viewer.js:4687
 function perfProfiler(host) {
   const WAIT = Q.get('perfwait') || 'battle', GPU_MODE = /^(fence|off)$/.test(Q.get('perfgpu') || '') ? Q.get('perfgpu') : 'sync';
   const GPU_N = Math.max(5, +(Q.get('perfgpuN') || 30));
@@ -3196,7 +3196,7 @@ function perfProfiler(host) {
   if (WAIT !== 'manual') host.panel(WAIT === '0' ? 'perf: waiting for the game' : 'perf: waiting for a battle', P);
   return P;
 }
-// viewer.js:5012
+// viewer.js:5018
 function wantFor(rep) {
   if (!man.plan) return null;
   let want = planFiles(man, repKeys(rep));
@@ -3204,18 +3204,18 @@ function wantFor(rep) {
   if (Q.get('planDrop')) { const re = new RegExp(Q.get('planDrop')); want = new Set([...want].filter(f => !re.test(f))); }
   return want;
 }
-// viewer.js:5023
+// viewer.js:5029
 const MOVIE = 'dat/dat_m_vs.vsmv';
-// viewer.js:5028
+// viewer.js:5034
 let movieBytes = null, movieH264 = null, movieLoading = null, movieHook = null;
-// viewer.js:5064
+// viewer.js:5070
 function movieConfig(b) {
   if (!b.length) return { codec: 'avc1.640020', codedWidth: 640, codedHeight: 480 };
   const dv = new DataView(b.buffer, b.byteOffset, b.byteLength), u = i => dv.getUint32(i, true), dl = u(24), cl = u(28);
   return { codec: new TextDecoder().decode(b.subarray(32, 32 + cl)), codedWidth: u(8), codedHeight: u(12),
            description: b.slice(32 + cl, 32 + cl + dl), optimizeForLatency: true };
 }
-// viewer.js:5074
+// viewer.js:5080
 function movieVideo(b) {
   const dv = new DataView(b.buffer, b.byteOffset, b.byteLength), u = i => dv.getUint32(i, true);
   const cfg = movieConfig(b), n = u(16), key = u(20), tab = 32 + u(28) + u(24), off = i => u(tab + 4 * i);
@@ -3253,7 +3253,7 @@ function movieVideo(b) {
     },
   };
 }
-// viewer.js:5140
+// viewer.js:5146
 let xf = null, xfRuns = 0;
 // (live) the select screen's files in the background; until they are in MEMFS the game is held on reaching the result
 // screen (scene 5) or the retry menu, where the next select may follow (a match lasts minutes: in practice never held)
@@ -3270,11 +3270,11 @@ function liveCssBg(s, paths) {
     .catch(e => { console.warn('live: select screen files:', e); if (session === s) { s.cssBgP = null; s.cssBgHeld = false; liveHoldApply(s); } });
   if (s.livePic) s.cssBgGo(); else setTimeout(s.cssBgGo, 20000);
 }
-// viewer.js:5359
+// viewer.js:5365
 let loopOn = false;
-// viewer.js:5456
+// viewer.js:5462
 let clipPanel = false, clipPanelKey = '', clipDrag = null;
-// viewer.js:5647
+// viewer.js:5653
 function liveTapes(s) {
   const L = s.liveSrc;
   if (!L || !s.M) return;
@@ -3299,17 +3299,17 @@ function liveTapes(s) {
   const can = liveClipCan();
   if (can !== L.clipCan) { L.clipCan = can; clipPanelKey = ''; marksKey = ''; }
 }
-// viewer.js:5914
+// viewer.js:5934
 let clipLt = null;  // {name, bytes} or null
-// viewer.js:6970
+// viewer.js:6990
 let labCfg = null, labOn = null;
-// viewer.js:6971
+// viewer.js:6991
 function labApply(c) {
   labCfg = c || null;
   self.__mbaaLabSet = c && c.set ? c.set : null;
   labAttach();
 }
-// viewer.js:6976
+// viewer.js:6996
 function labAttach() {
   const m = session && session.M;
   if (labOn && labOn !== m) { try { delete labOn.__labSync; labOn.__labVoid = 0; labOn.mbaaRadioDefer = labOn.__labDefer; delete labOn.__labDefer; } catch (e) {} labOn = null; }
@@ -3321,7 +3321,7 @@ function labAttach() {
     m.__labVoid = labCfg.void ? 1 : 0; labOn = m;
   } else if (labOn === m) { delete m.__labSync; m.__labVoid = 0; m.mbaaRadioDefer = m.__labDefer; delete m.__labDefer; labOn = null; }
 }
-// viewer.js:6989
+// viewer.js:7009
 function labInfo() {
   const m = session && session.M, objs = [];
   if (m && m.HEAPU8 && !m.__remote) {
@@ -3908,6 +3908,41 @@ const engCmd = async e => {
       const f = M._viewer_frame(), st = engStateNow();
       const vf = f !== k0 ? new VideoFrame(engOff, { timestamp: 0, alpha: 'discard' }) : null;
       engPost({ ev: 'ret', id: d.id, frame: f, vf, boxes: st.boxes, inputs: st.inputs, sfx: session.sfxQueue.splice(0) }, vf ? [vf] : []);
+    } else if (d.cmd === 'liveTapeNow') {
+      // (a live clip's game so far as a replay, viewer.js liveTapeNow: here, where the session and its MEMFS are. The
+      // page's own copy read a stale frame and a page-side MEMFS: every live Copy link said "no snapshot" and waited for
+      // the game's end (user 2026-11-15). The session seeks to the clip's out point (paused), spectate_tape_snap writes
+      // the tape, the picture goes back.) -> T {rep, lt, rec, end} (transferred) | null, why, the session's fight marks
+      const s = session, L = s && s.liveSrc;
+      let T = null, why = 'no live session';
+      if (L) {
+        const M = s.M, f0 = M._viewer_frame(), t0 = performance.now();
+        const gameNow = () => { const g = M.ccall('viewer_spectate_game', 'number', [], []); return g >= 0 ? g : L.firstGame; };
+        try {
+          if (f0 !== d.b) await requestSeek(d.b);
+          why = session !== s ? 'session gone' : M._viewer_frame() < d.b ? `at frame ${M._viewer_frame()}, not ${d.b}` : gameNow() !== d.game ? `in game ${gameNow()}, not ${d.game}` : '';
+          try { for (const n of M.FS.readdir('/lt')) if (/^s-?\d+_/.test(n)) M.FS.unlink(`/lt/${n}`); } catch (e) {}
+          if (!why && !M.ccall('viewer_live_tape_now', 'number', [], [])) why = 'not in a game being recorded';
+          if (!why) {
+            for (const n of M.FS.readdir('/lt')) {
+              const m = n.match(/^s(-?\d+)_f(\d+)_e(\d+)\.rep$/);
+              if (!m) continue;
+              const rep = M.FS.readFile(`/lt/${n}`), ltn = `/lt/${n.slice(0, -4)}.lt`;
+              let lt = null;
+              try { lt = M.FS.readFile(ltn); M.FS.unlink(ltn); } catch (e) {}
+              M.FS.unlink(`/lt/${n}`);
+              T = { rep, lt, rec: +m[2], end: +m[3], snap: true };
+            }
+            if (T && T.end < d.b) { why = `snapshot ends at ${T.end}, before ${d.b}`; T = null; }
+            else if (!T) why = 'no snapshot file';
+          }
+          console.log(`live clip: ${T ? `snapshot at frame ${M._viewer_frame()} (${T.rep.length} bytes, battle from ${T.rec}, end ${T.end})` : `no snapshot (${why})`}; seek from ${f0}: ${Math.round(performance.now() - t0)} ms`);
+        } finally {
+          if (session === s && M._viewer_frame() !== f0) await requestSeek(f0);
+        }
+      }
+      const fights = s && s.tl ? s.tl.fights.slice() : [];
+      engPost({ ev: 'ret', id: d.id, T, why, fights }, T ? [T.rep.buffer, ...(T.lt ? [T.lt.buffer] : [])] : []);
     } else if (d.cmd === 'call') {
       const r = session ? session.M.ccall(d.f, 'number', d.a.map(() => 'number'), d.a) : 0; if (d.id) engPost({ ev: 'ret', id: d.id, r });
     }
