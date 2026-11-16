@@ -503,6 +503,10 @@ const cache = new Map();  // game path -> Uint8Array
 // files being fetched (path -> promise): a second fetchAll asking for one waits for that fetch (a live switch starts its
 // match's files with the boot tape's request, and start() asks for them again)
 const inflight = new Map();
+// (a pack being fetched, for every fetchAll: pack hash -> {paths: the files its job decodes, p: their bytes by path}. Was
+// per call: the engine's warm-up (the boot files) and the first match's start (its files, the boot ones too) each fetched
+// the boot packs, two 4 MB downloads of one object on a cold first load (live_first_load_check 2026-11-16))
+const packInflight = new Map();
 const FILES_PROF = Q.get('filesprof') === '1';  // (the checks: window.__mbaaFiles, each object's fetch and decode times)
 async function fetchAll(man, paths, label, quiet = false) {
   const net0 = net.bytes;  // the counter shows what came over the network (objects are deflated; the game sees ~4x that)
@@ -518,10 +522,13 @@ async function fetchAll(man, paths, label, quiet = false) {
   // (?filesprof=1: [path, codec ('xz' | 'd' deflate, 'pk:' a pack's part), bytes in, bytes out, queued, fetched, done] per object)
   const prof = (p, z, nin, out, t0, t1, t2) => (window.__mbaaFiles || (window.__mbaaFiles = [])).push([p, z, nin, out.length, Math.round(t0), Math.round(t1), Math.round(t2)]);
   const viaPack = (h, p) => {
+    const g = packInflight.get(h);
+    if (g && g.paths.has(p) && g.p !== packOut.get(h)) return g.p.then(m => m && m.get(p));  // (another call's job has it)
     if (!packOut.has(h)) {
-      const ps = packParts.get(h) || [p], t0 = performance.now();
+      const ps = (packParts.get(h) || [p]).filter(q => !(g && g.paths.has(q))), t0 = performance.now();
       packOut.set(h, fileJob(h, ps.map(q => [man.files[q].pk[1], man.files[q].pk[2], man.files[q].z || null]))
         .then(bufs => { const t2 = performance.now(); if (FILES_PROF) ps.forEach((q, i) => prof(q, 'pk:' + (man.files[q].z || 'd'), man.files[q].pk[2], bufs[i], t0, t2 - (bufs.ms ? bufs.ms.parts[i] : 0), t2)); return new Map(ps.map((q, i) => [q, bufs[i]])); }).catch(() => null));
+      if (!g) { const e = { paths: new Set(ps), p: packOut.get(h) }; packInflight.set(h, e); e.p.finally(() => { if (packInflight.get(h) === e) packInflight.delete(h); }).catch(() => {}); }
     }
     return packOut.get(h).then(m => m && m.get(p));
   };
@@ -1671,7 +1678,10 @@ async function startLive(id, match = null, entry = null) {
   // list's and it was kept on this instance)
   const K = liveKept;
   if (K && K.id === id && K.match === (info.match || null)) {
-    if (K.game === info.game && prev && prev.M === K.M && Date.now() - K.at <= KEEP_MS) return liveResumeStart(K, prev);
+    // (the list's entry now, not the one from when the match was first joined: its snapshot is asked for by info.game,
+    // and a match kept games after its join asked for that first game's, a 404 for good: the switch back stood frozen on
+    // the other match's picture, "catching up", user 2026-11-15 "9 SECONDS ... SWITCHING STREAMS", live_switch_time 1116)
+    if (K.game === info.game && prev && prev.M === K.M && Date.now() - K.at <= KEEP_MS) { K.info = info; return liveResumeStart(K, prev); }
     liveKeptDrop(K.game !== info.game ? `its game moved on (${K.game} -> ${info.game})` : 'not resumable');
   }
   // (the same match: the host's next match on the same id has its own streaks)
