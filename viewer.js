@@ -5663,8 +5663,10 @@ function liveClipWhere(s) {
 function liveTapes(s) {
   const L = s.liveSrc;
   if (!L || !s.M) return;
+  // (the engine worker's session has no MEMFS here: its tapes come as they are kept (liveTapeTake); a clip of a game
+  // already kept is uploaded below all the same)
   let names = [];
-  try { names = s.M.FS.readdir('/lt'); } catch (e) { return; }
+  try { names = s.M.FS.readdir('/lt'); } catch (e) {}
   for (const n of names) {
     const m = n.match(/^g(-?\d+)_f(\d+)_e(\d+)\.rep$/);
     if (!m) continue;
@@ -5833,7 +5835,7 @@ async function liveClipUpload(s, p, snap) {
     const chat = p.chat.map(x => ({ ...x, o: x.o + (p.a - off - t) })).filter(x => x.o >= 0 && x.o <= e - t);
     // the clip by the game's fight starts (k: the round's fight, da / db: frames after its start), which the link's page
     // turns into its own frames (clipFix): t / e above are the estimate the link carries
-    const fights = (p.fights || s.tl.fights).filter(f => f >= T.rec && f <= T.end), k = Math.max(0, fights.filter(f => f <= p.a).length - 1);
+    const fights = (p.fights || (await tlFights()).fights).filter(f => f >= T.rec && f <= T.end), k = Math.max(0, fights.filter(f => f <= p.a).length - 1);
     const at = fights.length ? { k, da: p.a - fights[k], db: p.b - fights[k] } : null;
     // lt: the game's live forcing (liveTapes), which the link's page plays the replay with (clipLtFor)
     const body = { rep: b64(rep), lt: T.lt ? b64(T.lt) : null, t, e, at, names: (L.info.names || []).map(n => String(n || '').trim()), match: L.info.match || null, chat };
@@ -5948,6 +5950,12 @@ async function clipLtFor(jp, name) {
     if (j && typeof j.lt === 'string' && j.lt) clipLt = { name, bytes: Uint8Array.from(atob(j.lt), ch => ch.charCodeAt(0)) };
   } catch (e) { console.warn('clip:', e); }
 }
+// the timeline's fight starts (each round's first fight frame) as the engine worker has them, how far it is simulated, its
+// end (null: not yet): the page's view of the worker's timeline carries no fight list -> {fights, simMax, end}
+async function tlFights() {
+  const r = await window.__mbaaEngine.cmd('fights', {});
+  return { fights: r.fights || [], simMax: r.simMax | 0, end: r.end ?? null };
+}
 // the link's t / e are an estimate (the live session's frames less a fixed lag); the clip JSON has the clip by the
 // game's fight starts ({k, da, db}: tl.fights), exact: once this replay has played to that fight start, the clip (and
 // its chat) move there
@@ -5955,9 +5963,11 @@ async function clipFix(at) {
   let s = null;
   for (let i = 0; i < 600 && !(s && s.clip && s.tl && !s.seeking); i++) { await new Promise(r => setTimeout(r, 100)); s = session; }
   if (!s || !s.clip) return;
-  for (let i = 0; i < 40 && s.tl.fights.length <= at.k && s.tl.end === null && session === s; i++) await requestSeek(s.tl.simMax + 600);
-  if (session !== s || s.tl.fights.length <= at.k || !s.clip) return;
-  const F = s.tl.fights[at.k], a = Math.max(1, F + at.da), b = Math.max(a + 1, F + at.db), d = a - s.clip.a;
+  // (simulated on until the fight start is found, or the replay's end: the pre-scan's end comes long before)
+  let T = await tlFights();
+  for (let i = 0; i < 40 && T.fights.length <= at.k && (T.end === null || T.simMax < T.end) && session === s; i++) { await requestSeek(T.simMax + 600); T = await tlFights(); }
+  if (session !== s || T.fights.length <= at.k || !s.clip) return;
+  const F = T.fights[at.k], a = Math.max(1, F + at.da), b = Math.max(a + 1, F + at.db), d = a - s.clip.a;
   if (clipChat) for (const c of clipChat) c.f += d;
   s.clip.a = a; s.clip.b = b; marksKey = ''; overlayDirty = true;
   if (d) console.log(`clip: moved ${d} frames to the fight start's (round ${at.k})`);
@@ -6987,6 +6997,77 @@ async function main() {
     start(file);
   }
 }
+// ---- the Movie Maker's source monitor (?movie=1: this viewer in the editor's frame, web/shell/movie.js) ----
+// window.__mbaaMovie: the editor opens replays here (with a clip's stage / palettes / HUD), reads where the viewer is
+// (the in / out points the user scrubs to with this viewer's own timeline), and steps the engine through a clip
+// (the engine worker's movieStep: the picture, the frame bar sample, the players' origins and the sound calls of each
+// frame). Nothing here plays the stepped frames' sounds: the editor re-fires them on the movie's own clock.
+const MOVIE_HOST = Q.get('movie') === '1';
+if (MOVIE_HOST) {
+  document.documentElement.classList.add('moviehost');
+  const E = () => window.__mbaaEngine;
+  const ready = async (s, t0 = performance.now()) => {  // the session drawn and its timeline up
+    while (performance.now() - t0 < 60000) {
+      const e = E();
+      if (session && session !== s && session.tl && e && e.st && e.st.tl && !e.st.seeking && e.st.frame > 0) return session;
+      await new Promise(r => setTimeout(r, 50));
+    }
+    throw new Error('the replay did not start');
+  };
+  window.__mbaaMovie = {
+    // bytes: the .rep; o: {stage, color: [p1, p2], hud}; -> {frame, title, keys}
+    async open(bytes, name, o = {}) {
+      const rep = new Uint8Array(bytes), dv = new DataView(rep.buffer, rep.byteOffset, rep.byteLength);
+      repKeys(rep);
+      if (o.stage > 0) dv.setInt32(0x28, o.stage, true);
+      if (o.color) [0x48, 0x58].forEach((at, q) => { if (o.color[q] >= 0) dv.setInt32(at, o.color[q], true); });
+      if (o.hud !== undefined) { ui.hud = !!o.hud; const el = document.getElementById('hud'); if (el) el.checked = ui.hud; uiApply(); }
+      const old = session;
+      await start(new File([rep], name || 'clip.rep'));
+      const s = await ready(old);
+      return { frame: curFrame(), title: matchTitle(rep), keys: repKeys(rep), fights: (s.tl && s.tl.fights) || [], marks: (s.tl && s.tl.marks) || [] };
+    },
+    frame: () => curFrame(),
+    clip: () => (session && session.clip ? { ...session.clip } : null),
+    paused: () => ui.paused,
+    pause: p => setPaused(!!p),
+    async hud(on) { ui.hud = !!on; const el = document.getElementById('hud'); if (el) el.checked = ui.hud; uiApply(); },
+    async seek(f) { setPaused(true); await requestSeek(f); return curFrame(); },
+    async voidBg(on) { return E().cmd('movieVoid', { on: on ? 1 : 0 }); },
+    // n frames stepped; the last drawn (pic) -> {frame, vf: VideoFrame | null, fb: [[FB_N]], or: [[x, y, ...]], sfx}
+    async step(n = 1, pic = 1, voidBg = 0) {
+      setPaused(true);
+      const r = await E().cmd('movieStep', { n, pic, void: voidBg ? 1 : 0 });
+      return r;
+    },
+    // the boxes / inputs painted over a picture (as Save MP4 paints them) from a step's result
+    overlay(g, W, H, r, o) {
+      const keep = { b: ui.boxes, i: ui.inputs }, e = E();
+      ui.boxes = !!o.boxes; ui.inputs = !!o.inputs;
+      if (e) e.st = { ...e.st, frame: r.frame, boxes: r.boxes, inputs: r.inputs };
+      try { paintOverlay(g, W, H, W / 960); } finally { ui.boxes = keep.b; ui.inputs = keep.i; }
+    },
+    // a sound file's bytes as the page plays it (the announcer's line from the chosen set)
+    soundBytes(path) {
+      const al = annLine(path);
+      if (al && al.bytes) return { key: al.key, bytes: al.bytes.slice() };
+      try { const s = session; return { key: path, bytes: (s.remote ? s.SM : s.M).FS.readFile(path).slice() }; } catch (e) { return null; }
+    },
+    // a game file from the bundle (a BGM track for the song), fetched if not in yet
+    async gameFile(p) { if (!cache.has(p)) await fetchAll(man, [p], '', true); return cache.get(p) ? cache.get(p).slice() : null; },
+    async bgmList() { while (!man || !man.files) await new Promise(r => setTimeout(r, 200)); return Object.keys(man.files).filter(f => /^bgm\/.*\.(ogg|wav)$/i.test(f)).sort(); },
+    stages: () => !man || !man.files ? [] : Object.keys(man.files).map(f => /^bg\/bg(\d\d)\.dat$/.exec(f)).filter(Boolean).map(m => +m[1]).sort((a, b) => a - b),
+    stageNames: () => (typeof STAGE_NAMES === 'object' && STAGE_NAMES) || null,
+    chara: CHARA, moons: MOON_LABEL, sr: EXPORT_SR, abps: EXPORT_ABPS,
+    // AAC-LC of planar stereo pcm at EXPORT_SR (FFmpeg's encoder, as Save MP4 uses where the browser has none)
+    avcFix: (ch, meta) => avcFix(ch, meta),
+    aac: (L, R, add) => aacSoft({ getChannelData: c => (c ? R : L), length: L.length }, 0, add),
+  };
+  const st = document.createElement('style');
+  st.textContent = `.moviehost #chatcol, .moviehost #controls, .moviehost #nextcard, .moviehost #livenotice, .moviehost #help,
+    .moviehost .banner, .moviehost #cliph, .moviehost #clippanel, .moviehost #pipcover { display: none !important; }`;
+  document.head.append(st);
+}
 // ---- the engine in a worker (WORKER_PLAN.md; the only path since phase 5) ----
 // engine.js (web/shell/engine_core.js + the statements of this file it shares, tools/web/emit_engine.mjs) runs the module, session, timeline and seeking on its own
 // thread, drawing into #canvas as an OffscreenCanvas. The page keeps a session view: its M answers the page's reads
@@ -7474,7 +7555,16 @@ window.__mbaaLab = { set: c => labApply(c), info: () => labInfo() };
     window.__mbaa = { Module: s.M, man };
     E.st = null;
     pageSync();
-    await cmd('play', { rep: rep.slice(), name, catchUp, want: [...w], live, select }).catch(() => {});
+    // (lt: a live clip's live forcing for this replay (clipLtFor): the worker's play reads its own clipLt;
+    // url: a replay link's (window.__mbaaRepUrl): the worker's play seeks to its ?t=)
+    const lt = !live && clipLt && clipLt.name === name ? clipLt.bytes.slice() : null, url = window.__mbaaRepUrl || null;
+    await cmd('play', { rep: rep.slice(), name, catchUp, want: [...w], live, select, lt, url }).catch(() => {});
+    // a replay link's ?t= / ?e= (its first match): the clip, which plays to e and stops (clipTick), is the page's
+    const tq = +(Q.get('t') || 0), eq = +(Q.get('e') || 0);
+    if (eq > tq && tq > 0 && !catchUp && url && !live && !select && pl.i <= 0 && session === s) {
+      s.clip = { a: tq, b: eq, stop: true }; marksKey = '';
+      if (Q.get('loop') === '1' && !loopOn) toggleLoop();
+    }
   };
   requestSeek = T => (session && session.remote ? cmd('seek', { T }) : Promise.resolve());
   stepBy = (n, pause = true) => { if (pause && !ui.paused) { ui.paused = true; document.querySelector('#pause .i').className = 'i i-play'; } return cmd('step', { n, pause }); };

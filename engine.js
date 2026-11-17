@@ -712,14 +712,11 @@ async function play(rep, name, catchUp = 0, want = null, liveId = null, select =
   catchUpShow(null);
   if (PERF) call(s, 'viewer_perf', 1);
   uiApply(s);
+  // (a replay link's ?t=: window.__mbaaRepUrl is the page's, given with the play (engine_tail.js); its ?e= clip is the
+  // page's own (viewer.js enginePlay: clipTick, the marks, clipFix read the page's session)
   const tq = +(Q.get('t') || 0);
   if (tq > 0 && !catchUp && !PERF && s.tl && window.__mbaaRepUrl) { await requestSeek(tq); }
   else if ((ui.skipIntro || pl.items.length > 1) && !catchUp && !PERF && s.tl) await skipIntro(s);  // a playlist starts each match at round 1
-  const eq = +(Q.get('e') || 0);
-  if (eq > tq && tq > 0 && !catchUp && window.__mbaaRepUrl && pl.i <= 0) {
-    s.clip = { a: tq, b: eq, stop: true }; marksKey = '';
-    if (Q.get('loop') === '1' && !loopOn) toggleLoop();
-  }
   if (s !== session) return;
   call(s, 'viewer_run');
   bootMark('run');
@@ -3284,8 +3281,10 @@ let clipPanel = false, clipPanelKey = '', clipDrag = null;
 function liveTapes(s) {
   const L = s.liveSrc;
   if (!L || !s.M) return;
+  // (the engine worker's session has no MEMFS here: its tapes come as they are kept (liveTapeTake); a clip of a game
+  // already kept is uploaded below all the same)
   let names = [];
-  try { names = s.M.FS.readdir('/lt'); } catch (e) { return; }
+  try { names = s.M.FS.readdir('/lt'); } catch (e) {}
   for (const n of names) {
     const m = n.match(/^g(-?\d+)_f(\d+)_e(\d+)\.rep$/);
     if (!m) continue;
@@ -3305,17 +3304,17 @@ function liveTapes(s) {
   const can = liveClipCan();
   if (can !== L.clipCan) { L.clipCan = can; clipPanelKey = ''; marksKey = ''; }
 }
-// viewer.js:5944
+// viewer.js:5946
 let clipLt = null;  // {name, bytes} or null
-// viewer.js:7000
+// viewer.js:7081
 let labCfg = null, labOn = null;
-// viewer.js:7001
+// viewer.js:7082
 function labApply(c) {
   labCfg = c || null;
   self.__mbaaLabSet = c && c.set ? c.set : null;
   labAttach();
 }
-// viewer.js:7006
+// viewer.js:7087
 function labAttach() {
   const m = session && session.M;
   if (labOn && labOn !== m) { try { delete labOn.__labSync; labOn.__labVoid = 0; labOn.mbaaRadioDefer = labOn.__labDefer; delete labOn.__labDefer; } catch (e) {} labOn = null; }
@@ -3327,7 +3326,7 @@ function labAttach() {
     m.__labVoid = labCfg.void ? 1 : 0; labOn = m;
   } else if (labOn === m) { delete m.__labSync; m.__labVoid = 0; m.mbaaRadioDefer = m.__labDefer; delete m.__labDefer; labOn = null; }
 }
-// viewer.js:7019
+// viewer.js:7100
 function labInfo() {
   const m = session && session.M, objs = [];
   if (m && m.HEAPU8 && !m.__remote) {
@@ -3751,6 +3750,8 @@ const engCmd = async e => {
                     first: v.first ? engLiveTake(`first:${v.seq}`) : null, snapP: v.snap ? engLiveTake(`snap:${v.seq}`) : null };
         liveResume = v.resume || null; liveClickAt = v.click ?? null; liveWant = v.id;
       }
+      clipLt = d.lt ? { name: d.name, bytes: d.lt } : null;  // (a live clip's forcing, for this replay only: the page's clipLt)
+      self.__mbaaRepUrl = d.url || null;  // (a replay link's: its ?t= seek, play())
       await play(d.rep, d.name, d.catchUp || 0, d.want ? new Set(d.want) : null, v ? v.id : null, d.select || null);
       engPost({ ev: 'played', id: d.id, started: self.__mbaaStarted });
     } else if (d.cmd === 'liveFirst' || d.cmd === 'liveSnap') {
@@ -3914,6 +3915,36 @@ const engCmd = async e => {
       const f = M._viewer_frame(), st = engStateNow();
       const vf = f !== k0 ? new VideoFrame(engOff, { timestamp: 0, alpha: 'discard' }) : null;
       engPost({ ev: 'ret', id: d.id, frame: f, vf, boxes: st.boxes, inputs: st.inputs, sfx: session.sfxQueue.splice(0) }, vf ? [vf] : []);
+    } else if (d.cmd === 'movieStep') {
+      // (the Movie Maker's ingest / export, web/shell/movie.js: n frames stepped, the last one's picture as a VideoFrame
+      // (pic 0: none), and per stepped frame its frame bar sample (FB_N words, framebar.cpp) and the box list's origin
+      // points (kind 7: x, y in 640x480 screen pixels: the players' positions for the camera's follow); the sound calls)
+      const M = session.M, n = Math.max(1, d.n | 0), fbs = [], ors = [];
+      let f = M._viewer_frame(), vf = null;
+      if (M.__movieVoid !== (d.void | 0)) M.__labVoid = M.__movieVoid = d.void | 0;
+      if (M._viewer_boxes_enable) M._viewer_boxes_enable(1);
+      for (let i = 0; i < n; i++) {
+        const k0 = M._viewer_frame();
+        M.ccall('viewer_suppress', 'number', ['number'], [i < n - 1 ? 1 : 0]);
+        M.ccall('viewer_step', 'number', ['number'], [1]);
+        f = M._viewer_frame();
+        if (f === k0) break;
+        if (M._viewer_framebar_sample) { const p = M._viewer_framebar_sample() >> 2; fbs.push(Array.from(M.HEAP32.subarray(p, p + FB_N))); }
+        const bn = M._viewer_box_count ? M._viewer_box_count() : 0, bp = bn ? M._viewer_boxes() >> 2 : 0, o = [];
+        for (let j = 0; j < bn; j++) if (M.HEAP32[bp + j * 5] === 7) o.push(M.HEAP32[bp + j * 5 + 1], M.HEAP32[bp + j * 5 + 2]);
+        ors.push(o);
+      }
+      M.ccall('viewer_suppress', 'number', ['number'], [0]);
+      if (d.pic !== 0 && fbs.length) vf = new VideoFrame(engOff, { timestamp: 0, alpha: 'discard' });
+      const st = engStateNow();
+      engPost({ ev: 'ret', id: d.id, frame: f, vf, fb: fbs, or: ors, boxes: st.boxes, inputs: st.inputs, sfx: session.sfxQueue.splice(0) }, vf ? [vf] : []);
+    } else if (d.cmd === 'movieVoid') {
+      const M = session && session.M;
+      if (M) M.__labVoid = M.__movieVoid = d.on | 0;
+      engPost({ ev: 'ret', id: d.id });
+    } else if (d.cmd === 'fights') {  // (the timeline's fight starts, which the page's view of it does not carry: clipFix, live clip links)
+      const t = session && session.tl;
+      engPost({ ev: 'ret', id: d.id, fights: t ? t.fights.slice() : [], simMax: t ? t.simMax | 0 : 0, end: t && t.end != null ? t.end : null });
     } else if (d.cmd === 'liveTapeNow') {
       // (a live clip's game so far as a replay, viewer.js liveTapeNow: here, where the session and its MEMFS are. The
       // page's own copy read a stale frame and a page-side MEMFS: every live Copy link said "no snapshot" and waited for
