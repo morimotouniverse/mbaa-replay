@@ -3306,15 +3306,15 @@ function liveTapes(s) {
 }
 // viewer.js:5946
 let clipLt = null;  // {name, bytes} or null
-// viewer.js:7081
+// viewer.js:7227
 let labCfg = null, labOn = null;
-// viewer.js:7082
+// viewer.js:7228
 function labApply(c) {
   labCfg = c || null;
   self.__mbaaLabSet = c && c.set ? c.set : null;
   labAttach();
 }
-// viewer.js:7087
+// viewer.js:7233
 function labAttach() {
   const m = session && session.M;
   if (labOn && labOn !== m) { try { delete labOn.__labSync; labOn.__labVoid = 0; labOn.mbaaRadioDefer = labOn.__labDefer; delete labOn.__labDefer; } catch (e) {} labOn = null; }
@@ -3326,7 +3326,7 @@ function labAttach() {
     m.__labVoid = labCfg.void ? 1 : 0; labOn = m;
   } else if (labOn === m) { delete m.__labSync; m.__labVoid = 0; m.mbaaRadioDefer = m.__labDefer; delete m.__labDefer; labOn = null; }
 }
-// viewer.js:7100
+// viewer.js:7246
 function labInfo() {
   const m = session && session.M, objs = [];
   if (m && m.HEAPU8 && !m.__remote) {
@@ -3923,6 +3923,10 @@ const engCmd = async e => {
       let f = M._viewer_frame(), vf = null;
       if (M.__movieVoid !== (d.void | 0)) M.__labVoid = M.__movieVoid = d.void | 0;
       if (M._viewer_boxes_enable) M._viewer_boxes_enable(1);
+      // (lay {s: scale 1..4, m: mask (1 stage, 2 characters, 4 effects, 8 HUD, 16 all), pm: premultiplied}: the last
+      // frame's layers too, web/host/render/movie_layers.hpp; layOk 0: this renderer has none (WebGPU). No lay: off)
+      const lay = d.lay && d.lay.s > 0 && d.lay.m > 0 ? d.lay : null;
+      const layOk = M._viewer_movie_layers ? M._viewer_movie_layers(lay ? lay.s | 0 : 0, lay ? lay.m | 0 : 0) : 0;
       for (let i = 0; i < n; i++) {
         const k0 = M._viewer_frame();
         M.ccall('viewer_suppress', 'number', ['number'], [i < n - 1 ? 1 : 0]);
@@ -3936,8 +3940,24 @@ const engCmd = async e => {
       }
       M.ccall('viewer_suppress', 'number', ['number'], [0]);
       if (d.pic !== 0 && fbs.length) vf = new VideoFrame(engOff, { timestamp: 0, alpha: 'discard' });
-      const st = engStateNow();
-      engPost({ ev: 'ret', id: d.id, frame: f, vf, fb: fbs, or: ors, boxes: st.boxes, inputs: st.inputs, sfx: session.sfxQueue.splice(0) }, vf ? [vf] : []);
+      const st = engStateNow(), tr = vf ? [vf] : [];
+      let layers = null, layAny = 0;
+      if (lay && layOk && fbs.length) {  // (each layer's RGBA bytes, rows top-down, transferred: [stage, chars, fx, hud, all])
+        const w = M._viewer_movie_layer_w(), h = M._viewer_movie_layer_h();
+        layAny = M._viewer_movie_layer_any();
+        layers = [];
+        for (let L = 0; L < 5; L++) {
+          const p = lay.m >> L & 1 ? M._viewer_movie_layer_read(L, lay.pm ? 1 : 0) : 0;
+          if (!p) { layers.push(null); continue; }
+          const px = M.HEAPU8.slice(p, p + w * h * 4).buffer;
+          layers.push({ w, h, px }); tr.push(px);
+        }
+      }
+      engPost({ ev: 'ret', id: d.id, frame: f, vf, fb: fbs, or: ors, boxes: st.boxes, inputs: st.inputs, sfx: session.sfxQueue.splice(0),
+                layOk: lay ? layOk : undefined, layAny, layers }, tr);
+    } else if (d.cmd === 'fights') {  // (the timeline's fight starts, which the page's view of it does not carry: clipFix, live clip links)
+      const t = session && session.tl;
+      engPost({ ev: 'ret', id: d.id, fights: t ? t.fights.slice() : [], simMax: t ? t.simMax | 0 : 0, end: t && t.end != null ? t.end : null });
     } else if (d.cmd === 'movieVoid') {
       const M = session && session.M;
       if (M) M.__labVoid = M.__movieVoid = d.on | 0;
@@ -3980,6 +4000,11 @@ const engCmd = async e => {
       }
       const fights = s && s.tl ? s.tl.fights.slice() : [];
       engPost({ ev: 'ret', id: d.id, T, why, fights }, T ? [T.rep.buffer, ...(T.lt ? [T.lt.buffer] : [])] : []);
+    } else if (d.cmd === 'sbPad') {  // (the Movie Maker's sandbox: the page's pads now, ENG_NOW; sbCmd below)
+      if (SB) SB.live = d.w | 0;
+    } else if (d.cmd === 'sb') {
+      const r = await sbCmd(d);
+      engPost({ ev: 'ret', id: d.id, ...r }, r.rep ? [r.rep.buffer] : []);
     } else if (d.cmd === 'call') {
       const r = session ? session.M.ccall(d.f, 'number', d.a.map(() => 'number'), d.a) : 0; if (d.id) engPost({ ev: 'ret', id: d.id, r });
     }
@@ -4015,3 +4040,112 @@ slogAdd = (ev, d = '') => { slogAdd0(ev, d); engPost({ ev: 'slog', e: ev, d: Str
 // worker): the same names the page engine has)
 self.__mbaaSession = () => session;
 self.__mbaaSeek = T => requestSeek(T);
+
+// ---- the Movie Maker's sandbox ("play from here": web/shell/movie/sandbox.js through viewer.js __mbaaMovie.sandbox) ----
+// From frame f0 of a replay in battle the game is played on with the page's pads (keyboard / gamepads) and records a new
+// tape (web/host/browser/main_browser.cpp sandbox_switch: record mode from f0, the tape cut there). The take (one packed
+// word per frame from f0: P1 | P2 << 16, each dir (numpad) | A B C D E held << 4) lives here, not in the module's memory:
+// a keyframe restore puts all of that back, and the re-simulation after it (a rewind, a seek) gets the take again from
+// the module's hook (Module.mbaaSandbox, asked before each frame: -1 = not ours, the replay's own inputs).
+// Modes: 'live': frames stepped by play / step take the pads now (a frame stepped again after a rewind overwrites the
+// take from there: its later keyframes, marks and end dropped); a seek's re-simulation replays the take. 'replay': the
+// take is played as recorded (reviewing it), the pads only past its end. stop: the take is frozen (played as recorded,
+// neutral past its end); start again on the same session resumes it from the frame shown.
+ENG_NOW.add('sbPad');
+const SB_NEUTRAL = 0x50005;
+let SB = null;  // {s, f0, log: [words], live, mode, frozen, dirty: first frame whose later states are stale | null}
+function sbHook(f) {
+  const S = SB;
+  if (!S || session !== S.s || f < S.f0) return -1;
+  const s = S.s, i = f - S.f0;
+  if (i < S.log.length && (s.seeking || S.mode === 'replay' || S.frozen)) return S.log[i];
+  if (S.frozen) return SB_NEUTRAL;
+  // (after the match: the result screens take no sandbox input, so no menu is ever driven)
+  const w = i > 0 && s.M.HEAP32[0x54EEE8 >> 2] !== 1 ? SB_NEUTRAL : S.live;
+  if (i < S.log.length) { S.log.length = i; S.dirty = S.dirty === null ? f : Math.min(S.dirty, f); }
+  while (S.log.length < i) S.log.push(SB_NEUTRAL);  // (never: frames come one after another from f0)
+  S.log.push(w);
+  return w;
+}
+// the timeline past frame f made by another take (or by the original replay): its keyframes (the incremental one in
+// progress too), round marks, fight starts and end dropped, so seeks and the next keyframes follow the take
+function sbDropAfter(s, f) {
+  const t = s.tl;
+  if (!t) return;
+  const drop = k => { for (const p of k.pages) pageRef(t, p, -1); kfTexDrop(t, k); };
+  if (t.inc) {
+    if (t.inc.kf) { const at = t.kfs.indexOf(t.inc.kf); if (at >= 0) { t.kfs.splice(at, 1); drop(t.inc.kf); } }
+    t.inc = null;
+  }
+  for (let i = t.kfs.length - 1; i >= 0 && t.kfs[i].frame > f; i--) { const [k] = t.kfs.splice(i, 1); drop(k); }
+  t.lastKf = t.kfs.length ? t.kfs[t.kfs.length - 1].frame : -1;
+  if (t.simMax > f) t.simMax = f;
+  t.marks = t.marks.filter(m => m[0] <= f);
+  t.fights = t.fights.filter(x => x <= f);
+  if (t.end !== null && t.end > f) t.end = null;
+}
+const SB_WHY = { 0: 'not in a round: pick a frame of the battle', '-1': 'not a replay played back (or the sandbox of an earlier start: open the replay again)',
+                 '-2': 'a live clip (its live forcing) cannot be played on', '-3': 'the replay has no round here' };
+function sbInfo() {
+  const S = SB, s = session, M = s && s.M;
+  if (!M) return { on: false };
+  const st = M._viewer_sandbox_state ? M._viewer_sandbox_state() : -9;
+  return { on: !!(S && S.s === s), f0: S && S.s === s ? S.f0 : null, len: S && S.s === s ? S.log.length : 0, mode: S ? S.mode : null,
+           frozen: !!(S && S.frozen), state: st, frame: M._viewer_frame(), scene: M.HEAP32[0x54EEE8 >> 2], round: M.HEAP32[0x77BFA4 >> 2],
+           ended: M._viewer_ended(), seeking: !!s.seeking, kfs: s.tl ? s.tl.kfs.map(k => k.frame) : [] };
+}
+async function sbCmd(d) {
+  const s = session, M = s && s.M;
+  if (!M || !s.tl) return { err: 'no replay open' };
+  if (!M._viewer_sandbox_state) return { err: 'this engine build has no sandbox (rebuild mbaa.wasm)' };
+  const op = d.op;
+  if (op === 'info') return sbInfo();
+  if (op === 'start') {
+    if (s.liveSrc) return { err: 'a live match cannot be played on: open its tape as a replay' };
+    const st = M._viewer_sandbox_state(), f = M._viewer_frame();
+    if (st === 2) {  // (this session is a sandbox already: its take resumed from the frame shown)
+      if (!SB || SB.s !== s) return { err: SB_WHY['-1'] };
+      if (f < SB.f0) return { err: `the take starts at frame ${SB.f0}: seek there or later` };
+      SB.frozen = false; SB.mode = d.mode === 'replay' ? 'replay' : 'live';
+      return sbInfo();
+    }
+    if (st !== 1) return { err: SB_WHY[st] || `cannot start here (${st})` };
+    if (s.scan) { s.scan.onmessage = null; s.scan.terminate(); s.scan = null; }  // (the pre-scan plays the original on)
+    SB = { s, f0: f, log: [], live: SB_NEUTRAL, mode: d.mode === 'replay' ? 'replay' : 'live', frozen: false, dirty: null };
+    sbDropAfter(s, f);
+    if (M.mbaaFrame && !M.mbaaFrame.sb) {
+      const inner = M.mbaaFrame;
+      M.mbaaFrame = g => { const S = SB; if (S && S.s === s && S.dirty !== null) { sbDropAfter(s, S.dirty); S.dirty = null; } inner(g); };
+      M.mbaaFrame.sb = true;
+    }
+    M.mbaaSandbox = sbHook;
+    return sbInfo();
+  }
+  if (!SB || SB.s !== s) return { err: 'no sandbox on this replay' };
+  if (op === 'mode') { SB.mode = d.mode === 'replay' ? 'replay' : 'live'; return sbInfo(); }
+  if (op === 'stop') { SB.frozen = true; SB.live = SB_NEUTRAL; return sbInfo(); }
+  if (op === 'script') {
+    // a typed / scripted stretch of the take (tests, an input script): words from frame `from` on, the take cut there.
+    // The state shown is not re-simulated here: seek after
+    const i = Math.max(0, (d.from | 0) - SB.f0);
+    if (i > SB.log.length) return { err: `the take has ${SB.log.length} frames: script from frame ${SB.f0 + SB.log.length} or before` };
+    SB.log.length = i;
+    for (const w of d.words || []) SB.log.push(w | 0);
+    sbDropAfter(s, SB.f0 + i);
+    return sbInfo();
+  }
+  if (op === 'log') return { f0: SB.f0, log: SB.log.slice() };
+  if (op === 'take') {
+    // the tape now (the game's writer) -> a .rep that plays this game: the original's header and inputs to f0, the take
+    // after. The writer's heap traffic is undone by a seek to the same frame (a keyframe restore + the take re-simulated)
+    const f = M._viewer_frame();
+    if (M._viewer_sandbox_state() !== 2) return { err: 'nothing recorded yet: play at least one frame from the start frame' };
+    let rep = null;
+    try {
+      if (M._viewer_sandbox_tape()) { rep = M.FS.readFile('/lt/sandbox.rep'); M.FS.unlink('/lt/sandbox.rep'); }
+    } finally { await requestSeek(f); }
+    if (!rep) return { err: 'the tape was not written' };
+    return { rep, f0: SB.f0, frame: f, log: SB.log.slice(0, Math.max(0, f - SB.f0)), marks: s.tl.marks.slice(), fights: s.tl.fights.slice() };
+  }
+  return { err: `unknown sandbox op ${op}` };
+}
