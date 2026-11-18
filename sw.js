@@ -3,12 +3,10 @@
 // it is served from here with no network at all, and a deploy's new hash is simply a new entry (the older copies of
 // that file are dropped). The page itself and anything unversioned go to the network first (a deploy shows on the
 // next load), this copy only when offline. The game's data files have their own store (viewer.js fetchObject).
-// (renamed 2026-11-17 when the site became cross-origin isolated: copies kept before then lack the COEP header, and an
-// isolated page refuses a worker script without it)
-const SHELL = 'MBAACC page files 2';
+const SHELL = 'MBAACC page files';
 
 self.addEventListener('install', () => self.skipWaiting());
-self.addEventListener('activate', e => e.waitUntil(Promise.all(['mbaa-shell-v1', 'MBAACC page files'].map(k => caches.delete(k))).then(() => self.clients.claim())));  // (its older names)
+self.addEventListener('activate', e => e.waitUntil(caches.delete('mbaa-shell-v1').then(() => self.clients.claim())));  // (its first name)
 
 self.addEventListener('fetch', e => {
   const r = e.request;
@@ -21,8 +19,6 @@ self.addEventListener('fetch', e => {
   if (url.pathname.includes('/auth/')) return;
   // ("Name the tracks": the signed-in user's API answers are never kept on the device)
   if (url.pathname.includes('/tracks/api/')) return;
-  // (other sites' pictures and media through /px: the browser's own cache keeps them, not the page files' store)
-  if (url.pathname === '/px') return;
   e.respondWith(url.searchParams.has('v') ? versioned(r, url) : networkFirst(r));
 });
 
