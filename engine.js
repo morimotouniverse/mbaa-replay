@@ -29,17 +29,20 @@ let engHidden = false, engPip = false, engRafRelease = () => {};
   self.requestAnimationFrame = f => raf(t => { if (engHidden) { held.push(f); return; } run(f, t); });
   engRafRelease = () => { for (const f of held.splice(0)) raf(t => run(f, t)); };
 }
+// (an async engine task that fails: reported, as the page's own errors are (a worker's rejections reach no page error))
+self.addEventListener('unhandledrejection', e => console.error('engine: unhandled rejection:', String(e.reason && e.reason.stack || e.reason)));
+self.addEventListener('error', e => console.error('engine: error:', String(e.error && e.error.stack || e.message)));
 let engAfterRaf = null;
-// A game frame's keyframe work (viewer.js incTick: pre / commit / post), run at the start of this thread's next
-// animation callback, before anything there steps the game: memory is still at that frame. At 120 Hz that callback is
-// the refresh between two game frames (no step, no draw), so the work has the refresh to itself instead of adding to
-// the frame's sim + render. A seek / restore drops a pending one (engine_tail.js)
+// A game frame's keyframe (engine_core.js keyframe), run at the start of this thread's next animation callback, before
+// anything there steps the game: the match is still at that frame. At 120 Hz that callback is the refresh between two
+// game frames (no step, no draw), so the work has the refresh to itself instead of adding to the frame's sim + render.
+// A seek / restore drops a pending one (engine_tail.js)
 let engIncPend = null;
 function engIncRun() {
   const p = engIncPend; engIncPend = null;
-  if (!p || p[0] !== session || p[0].seeking) return;
+  if (!p || p[0] !== session || p[0].seeking || !p[0].M || p[0].M._viewer_frame() !== p[1]) return;
   const t0 = performance.now();
-  incTick(p[0], p[1]);
+  keyframe(p[0], p[1]);
   // (the tick's idle work gets what this refresh has left: main_browser.cpp viewer_idle_spent)
   const M = p[0].M; if (M && M._viewer_idle_spent) M._viewer_idle_spent(performance.now() - t0);
 }
@@ -92,6 +95,16 @@ self.document = {
   get baseURI() { return self.location.href; },
   head: { append: sc => setTimeout(() => { try { importScripts(sc.src); } catch (e) { if (sc.onerror) sc.onerror(e); return; } if (sc.onload) sc.onload(); }) },
 };
+// (mbaa.js is threaded (wasm pthreads, harness-design/engine_core/DESIGN.md phase 3): emscripten starts each thread's
+// worker from its own script's address, which in this worker is engine.js's; its threads start from mbaa_thread.js,
+// which runs mbaa.js)
+{
+  const W0 = self.Worker;
+  self.Worker = function (url, opts) {
+    if (opts && opts.name === 'em-pthread') url = new URL(`mbaa_thread.js${engWasmV ? `?${engWasmV}` : ''}`, self.location.href).href;
+    return new W0(url, opts);
+  };
+}
 // (the page's settings the engine code and extensions read: given at init)
 let engLS = {};
 self.localStorage = { getItem: k => (k in engLS ? engLS[k] : null), setItem: (k, v) => { engLS[k] = String(v); } };
@@ -107,9 +120,6 @@ const swMark = (k, first, id) => engPost({ ev: 'swMark', k, first: typeof first 
 const setPaused = p => { ui.paused = p; engPost({ ev: 'paused', p }); if (session) { session.mute = p || !!session.seeking; if (!session.seeking) uiApply(session); } };
 const toggleLoop = () => engPost({ ev: 'toggleLoop' });
 const startItem = i => engPost({ ev: 'startItem', i });
-// (a memory restore put the comment renderer back to the snapshot's (viewer.js ovRestored): set up again here, in the
-// restore's own task, from what the page last sent (engine_tail.js engOvReplay))
-self.mbaaChat = { ovRestored: () => engOvReplay(session && session.M) };
 // (the canvas: the one the page handed over; a context lost for good (glRecover) asks the page for a new one first, as
 // the page path's freshCanvas gives each new instance a new canvas element)
 const freshCanvas = () => engOff;
@@ -242,19 +252,15 @@ const HASH = Q.get('hash') === '1', PERF = Q.get('perf') === 'pace', CAPTURE = Q
 // viewer.js:242
 const KF_EVERY = Math.max(10, +(Q.get('kf') || 300));  // playback keyframe interval (frames)
 const KF_NEAR = 30;  // a seek that re-simulates further than 3x this keyframes about KF_NEAR frames before its target
-// viewer.js:243
-const PAGE = Math.min(65536, Math.max(16384, +(Q.get('page') || 16384)));  // keyframe page size (bytes)
 const FREE_FILES = Q.get('free') !== '0';  // (low memory: a match's files freed once it has loaded; ?free=0: kept, tests)
-const KZ = Q.get('kz') !== '0';  // keyframe pages zlib-compressed (?kz=0: zero-word packing only)
-const KF_VERIFY = Q.get('kfverify') === '1';  // checks: a commit's reused pre-pass copies compared word for word with the page at the commit (window.__kfVerify)
 const KF_BUDGET = +(Q.get('kfmb') || (LOWMEM ? 40 : 450)) * 1e6;
 // the store textures the kept keyframes pin (kfTexBytes) have a budget of their own: over it, keyframes thin as over KF_BUDGET
 // (low memory: beyond the newest keyframe's own textures, kfTexBytes)
 const KF_TEX_BUDGET = +(Q.get('kftexmb') || (LOWMEM ? 32 : 256)) * 1e6;
 const STORE_GC = Q.get('storegc') !== '0';  // texture store eviction (storeGc; ?storegc=0: off, every sealed texture kept for the match)
-// viewer.js:385
+// viewer.js:397
 const SLOG_MAX = 800, slog = [], slogT0 = performance.now();
-// viewer.js:388
+// viewer.js:400
 function slogAdd(ev, d = '') {
   slog.push([Math.round(performance.now() - slogT0), new Date().toISOString().slice(11, 23), ev, String(d).slice(0, 300)]);
   if (slog.length > SLOG_MAX) slog.splice(0, slog.length - SLOG_MAX);
@@ -278,7 +284,7 @@ function slogWatch(s) {
     w.sent = true; slogAdd('stall', `no frame for ${Math.round((now - w.fAt) / 1000)} s at frame ${f}`); slogSend(s, 'stall');
   }
 }
-// viewer.js:462
+// viewer.js:474
 function repKeys(rep) {
   const v = new DataView(rep.buffer, rep.byteOffset, rep.byteLength), i = o => v.getInt32(o, true);
   const magic = new TextDecoder().decode(rep.slice(0, 14));
@@ -310,10 +316,10 @@ function repEstimate(rep) {
     return sum + 1200 + 450 * n;
   } catch (e) { return 0; }
 }
-// viewer.js:468
+// viewer.js:480
 const fmt = (t, c, m) => t.replace(/\{(\w):02d\}/g, (_, k) => String(k === 'c' ? c : m).padStart(2, '0'))
                           .replace(/\{(\w)\}/g, (_, k) => String(k === 'c' ? c : m));
-// viewer.js:470
+// viewer.js:482
 function planFiles(man, keys) {
   const p = man.plan, out = new Set([...p.boot, ...p.common]);
   if (keys.stage !== null) {
@@ -330,7 +336,7 @@ function planFiles(man, keys) {
   }
   return withSiblings(man, out);
 }
-// viewer.js:487
+// viewer.js:499
 function withSiblings(man, paths) {
   const out = new Set();
   for (const f of paths) {
@@ -344,7 +350,7 @@ function withSiblings(man, paths) {
   }
   return out;
 }
-// viewer.js:502
+// viewer.js:514
 const cache = new Map();  // game path -> Uint8Array
 function mkdirs(FS, path) {
   let cur = '';
@@ -400,13 +406,13 @@ function fsPut(FS, path, d) {
   const st = FS.open(path, 'w');
   try { FS.write(st, d, 0, d.length, 0, true); } finally { FS.close(st); }
 }
-// viewer.js:575
+// viewer.js:587
 let actx, master, outGain, musicGain, sfxGain;
-// viewer.js:861
+// viewer.js:873
 const bgmDecoded = new Map(), bgmParsedMap = new Map();
-// viewer.js:862
+// viewer.js:874
 let bgmStreamReady = false;
-// viewer.js:890
+// viewer.js:902
 function bgmDecode(p) {
   if (!bgmDecoded.has(p)) {
     const d = cache.get(p);
@@ -415,13 +421,13 @@ function bgmDecode(p) {
   }
   return bgmDecoded.get(p);
 }
-// viewer.js:914
+// viewer.js:926
 let session = null;
-// viewer.js:915
+// viewer.js:927
 const pl = { items: [], i: -1 };  // playlist: {name, file, url?} (see startItem)
-// viewer.js:916
+// viewer.js:928
 let man = null;
-// viewer.js:917
+// viewer.js:929
 const misses = new Set();  // bundle files the game looked up that the page had not fetched
 // a WebGPU instance's device lost (the GPU process restarted, a driver reset, device.destroy()): as a lost GL context, the
 // session started again on a new instance (its own device) at the same frame. The page path and the engine worker both
@@ -449,11 +455,11 @@ async function glRecover() {
   if (s.liveSrc) return startLive(s.liveSrc.id, s.liveSrc.info.match);
   return play(s.rep, s.name, curFrame(), s.want ? new Set([...s.want, ...want]) : null, null, s.select || null);
 }
-// viewer.js:1099
+// viewer.js:1111
 const frameBus = new Set();
-// viewer.js:1100
+// viewer.js:1112
 let frameBusAt = -1e9;
-// viewer.js:1101
+// viewer.js:1113
 function frameBusRun(now) {
   frameBusAt = now;
   for (const f of frameBus) { try { f(now); } catch (e) { console.warn('frame:', e); } }
@@ -464,55 +470,27 @@ function frameBusRun(now) {
 // instance (the allocator takes fresh sbrk memory as zero); the restore's new GL generation deletes the last match's
 // textures.
 function bootSnapshot(M) {
-  kzM = M;
-  const top = M._viewer_mem_top(), W = PAGE >> 2, H = new Int32Array(M.HEAPU8.buffer), n = Math.ceil(top / PAGE);
-  const pages = new Array(n);
-  // (each page's hash, as a keyframe's, taken before packing (zlib's scratch changes as pages are packed): a kept live
-  // match's keyframe (liveKeepTake) takes the boot page for one the game has not changed since boot, so only its changed
-  // pages cost memory. None for the hash output and the zlib scratch: their content is not what was hashed)
-  const hs = Array.from(pageHashes(M, n * PAGE));
-  const x0 = Math.floor(M._viewer_page_hash_area(0) / PAGE), x1 = Math.ceil(M._viewer_page_hash_area(1) / PAGE);
-  const z0 = M._viewer_kz_base ? Math.floor(M._viewer_kz_base() / PAGE) : -1, z1 = M._viewer_kz_base ? Math.ceil((M._viewer_kz_base() + M._viewer_kz_size()) / PAGE) : -1;
-  let bytes = 0;
-  for (let i = 0; i < n; i++) { pages[i] = packPage(H, i * W, W); pages[i].bootPage = 1; bytes += pages[i].bytes; }
-  // (and only where the page hashes the same after packing: the pages zlib's calls wrote meanwhile (its C stack frames,
-  // its arena counter) were packed with content other than what was hashed)
-  const h2 = pageHashes(M, n * PAGE);
-  for (let i = 0; i < n; i++) {
-    const j = 4 * i;
-    if ((i >= x0 && i < x1) || (i >= z0 && i < z1) || hs[j] !== h2[j] || hs[j + 1] !== h2[j + 1] || hs[j + 2] !== h2[j + 2] || hs[j + 3] !== h2[j + 3]) continue;
-    pages[i].h = [hs[j], hs[j + 1], hs[j + 2], hs[j + 3]];
-  }
-  // (?bootcheck=1, the checks: each page's hash, to compare a prewarmed boot with play()'s own)
-  if (Q.get('bootcheck') === '1') window.__mbaaBootImg = M.HEAPU8.slice(0x400000, 0x800000);
-  if (Q.get('bootcheck') === '1') window.__mbaaBootPages = pages.map(q => (q.h ? q.h.map(x => (x >>> 0).toString(16)).join('') : 'x'));
-  return { top: n * PAGE, pages, bytes };
-}
-// The picture's comment renderer (overlay_gl.cpp) keeps its fonts, glyph / emoji caches, registered comments and switches
-// in the wasm memory too: a restore (the boot snapshot of a live switch / reused session, a keyframe) put them back to the
-// snapshot's (before the fonts were sent: nothing drawn until a reload, user 2026-11-01). The page sets it up again.
-function ovRestored(s) {
-  s.M.mbaaMemGen = (s.M.mbaaMemGen || 0) + 1;
-  if (s.M._viewer_ov_restored) s.M._viewer_ov_restored();
-  try { if (window.mbaaChat && window.mbaaChat.ovRestored) window.mbaaChat.ovRestored(); } catch (e) { console.warn('overlay restore:', e); }
+  // (the boot's state as the engine's keyframe -1: a new match on this instance starts from it, and every match
+  // keyframe shares the pages the match has not changed since)
+  const t0 = performance.now(), bytes = M._viewer_kf_take(-1);
+  if (bytes < 0) throw new Error('boot keyframe: not taken');
+  return { bytes, ms: performance.now() - t0 };
 }
 function restoreBoot(s) {
-  const M = s.M, snap = s.boot, W = PAGE >> 2;
+  const M = s.M;
   call(s, 'viewer_restore_begin');
   for (const st of M.FS.streams) if (st && st.fd > 2) { try { M.FS.close(st); } catch (e) {} }
-  const top = M._viewer_mem_top(), H = new Int32Array(M.HEAPU8.buffer);
-  snap.pages.forEach((q, i) => unpackPage(q, H, i * W, W));
-  if (top > snap.top) M.HEAPU8.fill(0, snap.top, top);
+  M._viewer_kf_clear();  // (the last match's keyframes; a kept live match's stay: liveKeepTake)
+  if (!M._viewer_kf_restore(-1)) throw new Error('boot keyframe: not restored');
   call(s, 'viewer_restore_end', ++s.gen);
   // (the host's banner state (names on/off, the names, the tuning) lives in the restored memory: it went back to the
   // snapshot's, from before the page set it (the boot, an early keyframe). Set it again: was "CHALLENGER" in place of
   // both names after a catch-up jump or a seek for the rest of the session, user 2026-11-01)
   s.bannerKey = null;
-  ovRestored(s);
   liveKeptStale(M);  // (a kept live match's textures survive the reset: liveKeepTake)
   M._viewer_tex_store_reset();  // the last match's sealed textures (the boot ones stay)
 }
-// viewer.js:1186
+// viewer.js:1198
 const PREWARM = !HASH && !CAPTURE && Q.get('reuse') !== '0' && !Q.get('files');
 let warmP = null;
 function engineWarm() {
@@ -644,7 +622,7 @@ function fillSession(s, want, had) {
   if (!HASH && !bgmStreamReady) for (const p of s.want) if (/^bgm\/.*\.opus$/.test(p) && cache.has(p)) bgmDecode(p);
   return s;
 }
-// viewer.js:1187
+// viewer.js:1199
 const call = (s, f, ...a) => s.M.ccall(f, 'number', a.map(() => 'number'), a);
 // play from the start; with catchUp = k, step to frame k first (no pacing) and continue from there
 // select: a live session that starts at a character select, {last: each player's last pick {chara, moon, color} or
@@ -777,11 +755,11 @@ async function hashRun(s) {
   h.done = true;
   hashDone(s.name, h);
 }
-// viewer.js:1206
+// viewer.js:1218
 const ui = { paused: false, speed: 1, boxes: false, inputs: false, skipIntro: false, hud: true, music: true, hitstun: true };
-// viewer.js:1213
+// viewer.js:1225
 const HS_STYLE = Q.get('hitstunStyle');  // (the bar's look while it is designed: 0 ETM, 1 ETM+, 2 UNI, 3 UNI + bounce diamonds)
-// viewer.js:1214
+// viewer.js:1226
 const hitstunApply = s => {  // (an engine without it: nothing)
   if (s.M._viewer_hitstun_style && HS_STYLE != null) call(s, 'viewer_hitstun_style', +HS_STYLE);
   if (s.M._viewer_hitstun_bar) call(s, 'viewer_hitstun_bar', ui.hitstun ? 1 : 0);
@@ -795,7 +773,6 @@ function uiApply(s) {
 }
 function timelineInit(s) {
   const M = s.M;
-  kzM = M;
   const t = s.tl = { kfs: [], simMax: 0, end: null, marks: [], fights: [], intro: -1, bytes: 0, lastKf: -1, seekMs: [],
                      want: null, running: false, round: -1, scene: -1, est: repEstimate(s.rep), M };
   M.mbaaTexKfRef = new Map();  // (a reused instance: the last match's keyframes are gone with its timeline)
@@ -828,11 +805,10 @@ function timelineInit(s) {
       }
     } else if (s.liveSrc) { liveCssWatch(s); liveRematchHold(s); liveBanner(s); liveStreak(s); slogWatch(s); }
     else if (TUNE) liveBanner(s);
-    if (!s.seeking) { if (incDefer) incDefer(s, f); else incTick(s, f); }
-    // (a live catch-up: a keyframe every CU_KF_EVERY frames, every KF_EVERY in its last CU_KF_TAIL; low memory: none,
-    // CU_KF_LOW, s.cuNoKf: also not in its last drawn frames, ~2 s at 4x against the frame-0 keyframe; the first is the
-    // incremental one after the landing, incTick's slices)
-    else if (!s.cuNoKf && f >= t.lastKf + (cu && f < cu.T - CU_KF_TAIL ? CU_KF_EVERY : KF_EVERY) && f >= t.simMax && !M._viewer_files_open() && !(LOWMEM && !t.marks.length)) keyframe(s, f);  // phones: none in the intro (incTick)
+    // (a keyframe every KF_EVERY frames; a live catch-up: every CU_KF_EVERY frames, every KF_EVERY in its last
+    // CU_KF_TAIL; low memory: none, CU_KF_LOW, s.cuNoKf: also not in its last drawn frames, ~2 s at 4x against the
+    // frame-0 keyframe)
+    if (!s.cuNoKf && f >= t.lastKf + (cu && f < cu.T - CU_KF_TAIL ? CU_KF_EVERY : KF_EVERY) && f >= t.simMax && !M._viewer_files_open() && !(LOWMEM && !t.marks.length)) { if (kfDefer && !s.seeking) kfDefer(s, f); else keyframe(s, f); }  // phones: none in the intro
     // (the page's frame, once per tick: a tick stepping two game frames runs it once)
     if (!s.seeking && !cu && session === s) { const now = performance.now(); if (now - frameBusAt > 4) frameBusRun(now); }
   };
@@ -861,115 +837,9 @@ function startScan(s) {
   w.onerror = e => { console.warn('pre-scan failed:', e.message); w.terminate(); };
   w.postMessage({ files: [...s.want].filter(p => cache.has(p)).map(p => [p, cache.get(p)]), probe: (man.plan && man.plan.probe) || [], rep: s.rep, v, lt: s.lt || null });
 }
-const pageRef = (t, p, d) => {
-  if (!p || p.bootPage) return;  // (a boot snapshot page shared by a keyframe: the snapshot holds it, not counted here)
-  p.n = (p.n || 0) + d;
-  if (p.n <= 0) t.bytes -= p.bytes;
-};
-// A stored page: zero words packed out (most changed pages are mostly zero): m = bitmask of the nonzero words, v = those
-// words in order; a page with few zeros is kept raw (r).
-// Pages with content are stored zlib-compressed (z) when the module that made them can (viewer_kz_*: ~4x on game
-// memory; zlib works in a scratch area keyframes exclude); kzM is the current instance. A zero page stays {m, v: []} (the keyframe code treats those as free heap).
-let kzM = null;
-function kzPack(H, o) {
-  const M = kzM;
-  if (!M || !M._viewer_kz_pack || PAGE !== 16384) return null;
-  const B = M._viewer_kz_base(), U = M.HEAPU8;
-  if (H.buffer === U.buffer && o * 4 + 16384 > B && o * 4 < B + M._viewer_kz_size()) return null;  // the scratch's own pages (the boot snapshot covers them)
-  // always through the scratch: a page of the wasm C stack would change under zlib's own frames while it runs
-  new Int32Array(U.buffer, B, 4096).set(H.subarray(o, o + 4096));
-  const n = M._viewer_kz_pack(B);
-  if (!n) return null;
-  return M.HEAPU8.slice(B + 20480, B + 20480 + n);
-}
-function kzUnpack(z, H, o) {
-  const M = kzM, U = M.HEAPU8, B = M._viewer_kz_base();
-  U.set(z, B + 20480);
-  // inflated into the scratch, then copied: inflating straight into a page of the wasm C stack overwrote zlib's own
-  // live frame (the restore hung), and page 0 is a null output pointer to zlib
-  const ok = M._viewer_kz_unpack(B, z.length) && (H.buffer === U.buffer ? U.copyWithin(o * 4, B, B + 16384) : H.set(new Int32Array(U.buffer, B, 4096), o), 1);
-  if (!ok) throw new Error(`kz: page at ${o * 4} (${z.length} bytes) did not decompress`);
-}
-function packPage(H, o, W) {
-  let nz = 0;
-  for (let j = 0; j < W; j++) if (H[o + j] !== 0) nz++;
-  if (nz > 0 && KZ) {
-    const z = kzPack(H, o);
-    if (z && z.length < Math.min(W * 4, (W >> 5) * 4 + nz * 4)) return { z, bytes: z.length };
-  }
-  if (nz > W * 0.7) return { r: H.slice(o, o + W), bytes: W * 4 };
-  const m = new Int32Array(W >> 5), v = new Int32Array(nz);
-  for (let j = 0, k = 0; j < W; j++) { const x = H[o + j]; if (x !== 0) { m[j >> 5] |= 1 << (j & 31); v[k++] = x; } }
-  return { m, v, bytes: (m.length + nz) * 4 };
-}
-// The live keyframes' pages packed in a worker (renderer GOAL C: zlib on the main thread took up to PACK_MS of a display
-// frame while a keyframe packed, the game tick's p95). The same choice as packPage (zlib when smaller than the mask
-// form, raw when mostly nonzero, else mask + nonzero words), zlib by the browser's CompressionStream ('deflate': a zlib
-// stream, its 32 KB window inflated by viewer_kz_unpack). A page stays raw (q.r, usable by a restore) until its result
-// comes back; a result for a page no longer held (n <= 0) or re-stored meanwhile is dropped.
-const PACK_WORKER_SRC = `
-onmessage = async e => {
-  const { id, buf, n, W } = e.data, M32 = W >> 5, out = [];
-  for (let p = 0; p < n; p++) {
-    const r = buf.subarray(p * W, (p + 1) * W);
-    let nz = 0;
-    for (let j = 0; j < W; j++) if (r[j] !== 0) nz++;
-    if (nz > 0) {
-      const z = new Uint8Array(await new Response(new Blob([r]).stream().pipeThrough(new CompressionStream('deflate'))).arrayBuffer());
-      if (z.length < Math.min(W * 4, M32 * 4 + nz * 4)) { out.push({ z }); continue; }
-    }
-    if (nz > W * 0.7) { out.push({ raw: 1 }); continue; }
-    const m = new Int32Array(M32), v = new Int32Array(nz);
-    for (let j = 0, k = 0; j < W; j++) { const x = r[j]; if (x !== 0) { m[j >> 5] |= 1 << (j & 31); v[k++] = x; } }
-    out.push({ m, v });
-  }
-  postMessage({ id, out }, out.flatMap(o => o.z ? [o.z.buffer] : o.m ? [o.m.buffer, o.v.buffer] : []));
-};`;
-let packW = null, packId = 0;
-const packJobs = new Map();
-function packSend(t, list) {
-  if (!packW) {
-    packW = new Worker(URL.createObjectURL(new Blob([PACK_WORKER_SRC], { type: 'text/javascript' })));
-    packW.onmessage = e => {
-      const job = packJobs.get(e.data.id);
-      packJobs.delete(e.data.id);
-      if (!job) return;
-      e.data.out.forEach((pk, k) => {
-        const q = job.qs[k];
-        if (q.r !== job.rs[k] || !(q.n > 0)) return;  // (dropped, or stored again since)
-        if (pk.raw) { if (q.r.byteLength !== q.r.buffer.byteLength) q.r = q.r.slice(); return; }  // (its own copy: not a run's buffer kept)
-        const bytes = pk.z ? pk.z.length : (pk.m.length + pk.v.length) * 4;
-        if (pk.z) q.z = pk.z; else { q.m = pk.m; q.v = pk.v; }
-        delete q.r;
-        job.t.bytes += bytes - q.bytes; q.bytes = bytes;
-      });
-    };
-  }
-  // (the batch's pages into one buffer, transferred: each page's own copy was cloned on the way, and views of a run's
-  // or the commit buffer's pages would clone the whole buffer)
-  const id = ++packId, W = PAGE >> 2, buf = new Int32Array(list.length * W);
-  list.forEach((q, k) => buf.set(q.r, k * W));
-  // (a page in the commit buffer keeps a copy of its own until packed: that buffer is reused by the next commit)
-  for (const q of list) if (t.commitBuf && q.r.buffer === t.commitBuf.buffer) q.r = q.r.slice();
-  packJobs.set(id, { t, qs: list, rs: list.map(q => q.r) });
-  packW.postMessage({ id, buf, n: list.length, W }, [buf.buffer]);
-}
-function unpackPage(q, H, o, W) {
-  if (q.r) { H.set(q.r, o); return; }
-  if (q.z) { kzUnpack(q.z, H, o); return; }
-  const m = q.m, v = q.v;
-  let k = 0;
-  for (let w = 0; w < m.length; w++) {
-    const bits = m[w], a = o + (w << 5);
-    if (bits === 0) { H.fill(0, a, a + 32); continue; }
-    for (let j = 0; j < 32; j++) H[a + j] = (bits >>> j) & 1 ? v[k++] : 0;
-  }
-}
-// 128-bit hash of every page below top (wasm viewer_page_hashes: one pass at memory speed), 4 int32 per page
-function pageHashes(M, top) {
-  const n = Math.ceil(top / PAGE), p = M._viewer_page_hashes(top, PAGE);
-  return new Int32Array(M.HEAPU8.buffer, p, n * 4);
-}
+// Keyframes (harness-design/engine_core/DESIGN.md phase 3 step 5): the match's state (its CE block, heap arena and the
+// engine thread's TLS block) kept by the engine (main_browser.cpp viewer_kf_*: 4 KB pages, those the previous keyframe
+// has unchanged shared, changed ones zlib-coded); here the timeline's list (frame, the store keys it pins, its cost).
 // The GPU texture store keeps an entry while a live texture or a kept keyframe names it (web/host/browser/d3d9_gl.cpp
 // js_store_gc): each keyframe records the store keys sealed when it is taken (kf.tex: k0, k1, fmt triples) and counts
 // them per key while it is kept (M.mbaaTexKfRef); after a keyframe is added or dropped the entries neither names go.
@@ -1013,37 +883,30 @@ function kfTexBytes(t) {
 function storeGc(t) {
   if (STORE_GC && t.M && t.M._viewer_tex_store_gc && session && session.tl === t) t.storeGcN = (t.storeGcN || 0) + t.M._viewer_tex_store_gc();
 }
-// Keyframe: every page of the used memory [0, sbrk). A page whose hash equals the previous keyframe's is shared with
-// it, so a keyframe stores only its changed pages (packed, packPage; h = the page's hash). The hash output array is
-// scratch (null pages: never stored, never restored).
+function kfBytes(t) { t.bytes = t.M._viewer_kf_bytes(); }
+let kfDefer = null;  // (the engine worker's: a playback keyframe taken in the next refresh, engine_tail.js)
 function keyframe(s, f) {
   const t = s.tl, M = s.M, t0 = performance.now();
-  const top = M._viewer_mem_top(), n = Math.ceil(top / PAGE), W = PAGE >> 2;
-  const hs = pageHashes(M, top), H = new Int32Array(M.HEAPU8.buffer);
-  let at = t.kfs.length;  // sorted by frame; pages are shared with the nearest earlier keyframe
+  let at = t.kfs.length;  // sorted by frame
   while (at > 0 && t.kfs[at - 1].frame > f) at--;
   if (at > 0 && t.kfs[at - 1].frame === f) return;
-  // (the first keyframe: shared with the boot snapshot (same instance), so the pages the match has not changed since the
-  // boot (~most of the exe's data and the boot files' heap) are not packed again: at 4x the first keyframe after a
-  // live join took ~350 ms. Only those with a hash (the hash output and the zlib scratch have none)).
-  const prev = at > 0 ? t.kfs[at - 1].pages : (s.boot ? s.boot.pages : []);
-  const x0 = Math.floor(M._viewer_page_hash_area(0) / PAGE), x1 = Math.ceil(M._viewer_page_hash_area(1) / PAGE);
-  const pages = new Array(n);
-  let fresh = 0;
-  for (let i = 0; i < n; i++) {
-    if (i >= x0 && i < x1) { pages[i] = null; continue; }
-    const q = prev[i], j = i * 4;
-    if (q && q.h && q.h[0] === hs[j] && q.h[1] === hs[j + 1] && q.h[2] === hs[j + 2] && q.h[3] === hs[j + 3]) pages[i] = q;
-    else { pages[i] = packPage(H, i * W, W); pages[i].h = [hs[j], hs[j + 1], hs[j + 2], hs[j + 3]]; t.bytes += pages[i].bytes; fresh++; }
-    pageRef(t, pages[i], +1);
-  }
-  const kf = { frame: f, pages, ms: performance.now() - t0, fresh };
+  const fresh = M._viewer_kf_take(f);
+  if (fresh < 0) { console.warn(`keyframe ${f}: not taken`); return; }
+  const kf = { frame: f, ms: performance.now() - t0, fresh };
   kfTexAdd(t, kf);
   t.kfs.splice(at, 0, kf);
   t.lastKf = t.kfs[t.kfs.length - 1].frame;
   t.kfNewFrame = f;
+  kfBytes(t);
   thin(t);
   storeGc(t);
+}
+// a keyframe out of the timeline (the engine's copy dropped with it)
+function kfDrop(t, k) {
+  const at = t.kfs.indexOf(k);
+  if (at >= 0) t.kfs.splice(at, 1);
+  t.M._viewer_kf_drop(k.frame);
+  kfTexDrop(t, k);
 }
 // The first keyframe after the match's load (its first round start; low memory: the round start the freed files were
 // freed after, t.safeFrom): restoring it re-simulates no load, so it is never thinned. Without it a phone's back seek
@@ -1055,9 +918,9 @@ function kfPinned(t) {
 }
 // Over the memory budget (keyframe pages, or the store textures they pin): keyframes dropped one at a time, each time
 // the one whose neighbours are closest (the spacing stays even: a back seek's re-simulation stays short everywhere),
-// never the first, the last, a pending one, the pinned post-load one or the one just made (a seek's refinement keyframe
-// near its target). Was: every second one dropped at once, so a phone kept a power-of-two spread and a back seek
-// re-simulated up to 1,700 frames (perf_plan R1)
+// never the first, the last, the pinned post-load one or the one just made (a seek's refinement keyframe near its
+// target). Was: every second one dropped at once, so a phone kept a power-of-two spread and a back seek re-simulated up
+// to 1,700 frames (perf_plan R1)
 const kfOver = t => t.bytes > KF_BUDGET || (STORE_GC && kfTexBytes(t) > KF_TEX_BUDGET);
 function thin(t) {
   let dropped = 0;
@@ -1066,314 +929,31 @@ function thin(t) {
     let best = -1, gap = Infinity;
     for (let i = 1; i < t.kfs.length - 1; i++) {
       const k = t.kfs[i];
-      if (k.pending || k === pin || k.frame === t.kfNewFrame) continue;
+      if (k === pin || k.frame === t.kfNewFrame || k.preSnap) continue;
       const g = t.kfs[i + 1].frame - t.kfs[i - 1].frame;
       if (g < gap) { gap = g; best = i; }
     }
     if (best < 0) break;
-    const [k] = t.kfs.splice(best, 1);
-    for (const p of k.pages) pageRef(t, p, -1);
-    kfTexDrop(t, k);
+    kfDrop(t, t.kfs[best]);
+    kfBytes(t);
     dropped++;
   }
   if (dropped) t.thinned = (t.thinned || 0) + dropped;
 }
-// Put a keyframe's memory back: only the pages whose hash differs from the keyframe's are copied.
-// Incremental keyframe (playback): a whole-memory hash pass at one frame would stall it for tens of ms, so the work
-// is spread over the KF_PHASE frames before and after the keyframe frame F, a slice per simulated frame:
-//   pre  (F - KF_PHASE .. F): hash the cold pages (unchanged in the recent keyframes) in slices; one that changed
-//        since the base keyframe becomes hot.
-//   F    hash the hot pages, the pages above the base's top and the ones the pre pass found changed: those are the
-//        pages that may differ from the base; changed ones are copied, the cold ones are taken from the base.
-//   post (F .. F + KF_PHASE): hash the cold pages again; if one differs from the base, it may have changed before F,
-//        so the keyframe is dropped (and the page becomes hot). Until the post pass ends the keyframe is pending (seeks
-//        do not use it).
-// A cold page counted as unchanged at F was unchanged at its pre hash and at its post hash, at most 2 x KF_PHASE frames
-// apart; and a page once seen changing stays hot. At F the changed pages are copied raw and packed during the post
-// pass. Seeks (no frames shown) keyframe in one pass.
-const KF_PHASE = 60;
-// (the engine worker runs a frame's keyframe work in its thread's next callback, before that one steps the game: at
-// 120 Hz the refresh between two game frames, memory still at this frame: engine_tail.js. null: in the frame)
-let incDefer = null;
 // (the timeline's diagnostics: per frame and per keyframe all a live session long, so the newest STAT_MAX of each)
 const STAT_MAX = 2000;
 function statPush(a, v) { a.push(v); if (a.length > STAT_MAX + 200) a.splice(0, a.length - STAT_MAX); }
-const POST_MS = 2.5;  // post pass: a tick checks (hash + copy) a commit's unhashed pages for ~POST_MS
-function hashRuns(M, idx) {  // hash the listed pages (sorted), one wasm call per run of consecutive pages
-  let p = 0;
-  for (let i = 0; i < idx.length;) {
-    let j = i + 1;
-    while (j < idx.length && idx[j] === idx[j - 1] + 1) j++;
-    p = M._viewer_page_hashes_range(idx[i], j - i, PAGE);
-    i = j;
-  }
-  return p;
-}
-const sameHash = (hs, i, q) => q && q.h[0] === hs[4 * i] && q.h[1] === hs[4 * i + 1] && q.h[2] === hs[4 * i + 2] && q.h[3] === hs[4 * i + 3];
-function hashView(M, n) { return new Int32Array(M.HEAPU8.buffer, M._viewer_page_hash_area(0), n * 4); }
-// The commit copies, in one tick, every page changed since the base keyframe: ~250 pages in play, but after a radio
-// stage swap ~3000 (50 MB: 35-50 ms desktop, 200+ ms on a phone, user 2026-11-02 "the stage change still hiccups"). The
-// pre pass copies changed pages ahead, a slice a tick (preCopy: a cold page found changed; preCopyHot: the hot pages,
-// ~1.5 ms a tick), each with its hash at the copy; the commit takes a copy whose page hashes the same then, so only
-// pages changed again since are copied in the commit's tick. (The keyframe is the same: equal hash, equal page.)
-// (the listed pages, sorted: each run of neighbours copied with one slice, a view of it per page. A slice per page made
-// the first keyframe after a load (~4500 pages, the match's data) cost ~70 ms of the Moto G's engine thread plus its
-// GC, 16 KB allocated and zeroed at a time: phase4 prof_560_600)
-function preCopyList(M, c, list, hs) {
-  const W = PAGE >> 2, H = new Int32Array(M.HEAPU8.buffer), pre = c.pre || (c.pre = new Map());
-  for (let a = 0; a < list.length;) {
-    let b = a + 1;
-    while (b < list.length && list[b] === list[b - 1] + 1) b++;
-    const run = H.slice(list[a] * W, (list[b - 1] + 1) * W);
-    for (let k = a; k < b; k++) { const i = list[k]; pre.set(i, { r: run.subarray((k - a) * W, (k - a + 1) * W), h: [hs[4 * i], hs[4 * i + 1], hs[4 * i + 2], hs[4 * i + 3]] }); }
-    a = b;
-  }
-}
-function preCopyHot(M, c) {
-  if (!c.hot) {
-    const n = Math.ceil(M._viewer_mem_top() / PAGE), cold = new Uint8Array(n);
-    const x0 = Math.floor(M._viewer_page_hash_area(0) / PAGE), x1 = Math.ceil(M._viewer_page_hash_area(1) / PAGE);
-    for (const i of c.cold) if (i < n) cold[i] = 1;
-    c.hot = []; c.hcur = 0;
-    for (let i = 0; i < n; i++) if (!cold[i] && !(i >= x0 && i < x1)) c.hot.push(i);
-  }
-  const t0 = performance.now();
-  while (c.hcur < c.hot.length && performance.now() - t0 < 1.5) {
-    const part = c.hot.slice(c.hcur, c.hcur + 64);
-    c.hcur += part.length;
-    hashRuns(M, part);
-    const hs = hashView(M, part[part.length - 1] + 1);
-    preCopyList(M, c, part.filter(i => !sameHash(hs, i, c.base.pages[i]) && !(c.pre && c.pre.has(i))), hs);
-  }
-}
-function incTick(s, f) {
-  const t = s.tl, M = s.M;
-  // (a live match being left for another (liveWant: the tap's match) keeps playing until the new one's first frame, ~3 s
-  // on a phone while the new match's files decode; its keyframe slices ran on through that: 0.45-0.65 s of the Moto G's
-  // main thread per switch (join_phone_nokf_1107 profiles, deflate under incTick from the tap to the files mark).
-  // Paused while another match is wanted; a want back to this one resumes them)
-  if (s.liveSrc && liveWant && liveWant !== s.liveSrc.id) return;
-  let c = t.inc;
-  if (!c) {
-    const base = t.kfs[t.kfs.length - 1];
-    if (!base || base.pending || f < base.frame + KF_EVERY - KF_PHASE || f < t.simMax) return;
-    // phones: none before round 1. The intro's frames hold the match's files as the game reads them (a keyframe there
-    // kept ~95 MB of them); a seek into the intro simulates from frame 0
-    if (LOWMEM && !t.marks.length) return;
-    const hot = t.hotAt || (t.hotAt = new Map());
-    const cold = [], top = Math.ceil(M._viewer_mem_top() / PAGE);
-    const x0 = Math.floor(M._viewer_page_hash_area(0) / PAGE), x1 = Math.ceil(M._viewer_page_hash_area(1) / PAGE);
-    // (a zero page (free heap) is cold too: ~4000 of them (64 MB) hashed at every commit cost ~6 ms of it on the Moto G;
-    // one an allocation writes in the window drops that keyframe and is hot from then on. So is a page above the base's
-    // heap top: the ~4500 a match load adds were hashed at every commit, 8 ms of a 12-22 ms tick, phase4 akiha_load)
-    for (let i = 0; i < top; i++) if (!hot.has(i) && !(i >= x0 && i < x1)) cold.push(i);
-    // (F at least a pre pass ahead: a commit dropped late, or one started past its frame, had no pre pass, so it hashed
-    // and copied every changed page in one tick: after a radio stage swap, several 40-50 ms ticks in a row)
-    c = t.inc = { F: Math.max(base.frame + KF_EVERY, f + KF_PHASE), base, cold, cur: 0, changed: [], kf: null, t0: 0, ms: 0 };
-  }
-  const t0 = performance.now(), phase = c.kf ? 'post' : f >= c.F ? 'commit' : 'pre';
-  const slice = Math.ceil(c.cold.length / KF_PHASE);
-  if (!c.kf) {  // pre pass
-    // The scan, in the first half of the window at twice the share, finds the pages changed since the base and keeps
-    // their hashes (c.seen), no copy: the commit takes them unhashed and the post pass copies each one whose hash is
-    // still the same (its content then = at F). The second half checks them again: one changed since is hot (hashed and
-    // copied at the commit). (Copying them ahead allocated the load's ~70 MB per attempt: GC, 27 -> 78 misses, akiha_top)
-    const n = Math.min(c.cold.length, c.cur + (f >= c.F ? c.cold.length : 2 * slice));
-    if (n > c.cur) {
-      const part = c.cold.slice(c.cur, n);
-      hashRuns(M, part);
-      const hs = hashView(M, part[part.length - 1] + 1);
-      const seen = c.seen || (c.seen = new Map());
-      for (const i of part) if (!sameHash(hs, i, c.base.pages[i])) { c.changed.push(i); seen.set(i, [hs[4 * i], hs[4 * i + 1], hs[4 * i + 2], hs[4 * i + 3]]); }
-      c.cur = n;
-    }
-    else if (f < c.F && c.seen) {  // the check again: a page changed since is hot from now on
-      const r = c.ref || (c.ref = { list: [...c.seen.keys()], cur: 0 });
-      const m = Math.min(r.list.length, r.cur + Math.ceil((r.list.length - r.cur) / Math.max(1, c.F - f)));
-      if (m > r.cur) {
-        const part = r.list.slice(r.cur, m);
-        hashRuns(M, part);
-        const hs = hashView(M, part[part.length - 1] + 1);
-        for (const i of part) if (!sameHash(hs, i, { h: c.seen.get(i) })) { t.hotAt.set(i, t.kfs.length); c.seen.delete(i); }
-        r.cur = m;
-      }
-    }
-    if (f < c.F) preCopyHot(M, c);
-    if (f >= c.F && c.cur === c.cold.length && !M._viewer_files_open() && !t.kfs.some(k => k.frame === f)) incCommit(s, f, c);
-  } else {  // post pass
-    // packed against wall time, not a share per game frame: a catch-up tick runs several game frames, and a share each
-    // (zlib on the VS screen's ~2 MB of changed pages: ~40 ms) made a slow tick slower, so one stall fed the next
-    // (one budget for the tick: packing up to half of POST_MS (one batch at least), the check the rest; packing on its
-    // own window (PACK_MS 3) plus the check made 6-18 ms ticks on the Moto G, akiha_lazy3/4)
-    for (let b = 0; !c.bad && c.raw.length && (b === 0 || performance.now() - t0 < POST_MS / 2); b++) packSend(t, c.raw.splice(0, 16));
-    // (soon after F: a page that changed after F is taken for one changed around it, so the longer the check the more
-    // keyframes it drops for nothing: over 60 frames the drops were found 11-47 frames after F, phase4 dbg_drops)
-    // (and by time: 64 pages at a time while under POST_MS of the callback, so a tick's hash + copy of the load's pages
-    // stays inside the refresh: a share per frame was 7-15 ms ticks on the Moto G, akiha_lazy1)
-    let n = c.cur;
-    while (n < c.tentative.length && (n === c.cur || performance.now() - t0 < POST_MS)) {
-    const part = c.tentative.slice(n, Math.min(c.tentative.length, n + 64));
-    n += part.length;
-    {
-      hashRuns(M, part);
-      const hs = hashView(M, part[part.length - 1] + 1);
-      const lazy = [];
-      for (const i of part) {
-        const q = c.kf.pages[i];
-        if (!sameHash(hs, i, q)) {
-          c.bad = true; t.hotAt.set(i, t.kfs.length);
-          statPush(t.incStat.dropPages, [i * PAGE, q.lazy ? 'lazy' : q.r ? 'raw' : q.z ? 'z' : q.v.length, c.kf.frame, f]);
-        } else if (q.lazy && !c.bad) lazy.push(i);
-      }
-      // (the same hash as at the scan and the check before F: its content now is its content at F; copied run by run)
-      const H = new Int32Array(M.HEAPU8.buffer), W = PAGE >> 2;
-      for (let a = 0; a < lazy.length;) {
-        let b = a + 1;
-        while (b < lazy.length && lazy[b] === lazy[b - 1] + 1) b++;
-        const run = H.slice(lazy[a] * W, (lazy[b - 1] + 1) * W);
-        for (let k = a; k < b; k++) {
-          const q = c.kf.pages[lazy[k]];
-          q.r = run.subarray((k - a) * W, (k - a + 1) * W); q.lazy = 0; c.raw.push(q);
-          if (q.vr) { const V = self.__kfVerify || (self.__kfVerify = { reused: 0, bad: 0, late: 0 }); for (let j = 0; j < W; j++) if (q.r[j] !== q.vr[j]) { V.tentBad = (V.tentBad || 0) + 1; c.vbad = (c.vbad || 0) + 1; (c.vbadAt || (c.vbadAt = [])).push([lazy[k] * PAGE, j * 4, q.vr[j], q.r[j]]); break; } q.vr = null; }
-        }
-        a = b;
-      }
-    }
-    }
-    c.cur = n;
-    // (a dropped keyframe still checks the rest of its pages, unpacked: each one that changed is hot from then on, so the
-    // next attempt hashes them all at its commit and holds; stopping at the first made every attempt find a few more,
-    // 21 dropped in a row on a phone-memory run, a big commit each)
-    if (n === c.tentative.length && (c.bad || !c.raw.length)) {
-      if (c.bad) {  // a cold page changed around F: its content at F is unknown
-        const at = t.kfs.indexOf(c.kf);
-        if (at >= 0) { t.kfs.splice(at, 1); for (const p of c.kf.pages) pageRef(t, p, -1); kfTexDrop(t, c.kf); }
-        t.lastKf = t.kfs.length ? t.kfs[t.kfs.length - 1].frame : -1;
-        t.incDropped = (t.incDropped || 0) + 1;
-      } else {
-        if (c.vbad && self.__kfVerify) self.__kfVerify.keptBad = (self.__kfVerify.keptBad || 0) + c.vbad; if (c.vbadAt && self.__kfVerify) (self.__kfVerify.keptBadAt || (self.__kfVerify.keptBadAt = [])).push(...c.vbadAt.slice(0, 8));  // (kfverify: a kept keyframe holding a stale copy)
-        c.kf.pending = false; c.kf.ms = c.ms; t.kfNewFrame = c.kf.frame; thin(t);
-      }
-      t.inc = null;
-      storeGc(t);
-      // every raw page has been packed or copied out: a commit buffer grown by a big commit (the one after the match
-      // loads copies ~60 MB) is not kept for the rest of the match
-      if (t.commitBuf && t.commitBuf.length > (4 << 20)) t.commitBuf = null;
-    }
-  }
-  const dt = performance.now() - t0;
-  c.ms = Math.max(c.ms, dt);
-  const st = t.incStat || (t.incStat = { pre: [], commit: [], post: [], dropPages: [] });
-  statPush(st[phase], Math.round(dt * 10) / 10);
-}
-function incCommit(s, f, c) {
-  const t = s.tl, M = s.M, W = PAGE >> 2, TS = performance.now();
-  const top = M._viewer_mem_top(), n = Math.ceil(top / PAGE);
-  const x0 = Math.floor(M._viewer_page_hash_area(0) / PAGE), x1 = Math.ceil(M._viewer_page_hash_area(1) / PAGE);
-  // isCold: 1 = the same as the base in the pre pass, 2 = changed then, the same at its check again, not hot (c.seen).
-  // Both are taken without a hash now and checked in the post pass (its hash then = the one taken; else the keyframe is
-  // dropped and the page is hot); a 2 is copied there. Hashing the pages a load changed at the commit was 8-9 ms of a
-  // 13-23 ms tick on the Moto G (~4900 pages in the commits after a match loads, phase4 akiha_enc2)
-  const isCold = new Uint8Array(n);
-  for (const i of c.cold) if (i < n) isCold[i] = 1;
-  for (const i of c.changed) {
-    if (c.seen && c.seen.has(i) && !t.hotAt.has(i)) { isCold[i] = 2; continue; }
-    isCold[i] = 0; t.hotAt.set(i, t.kfs.length);
-  }
-  const now = [];
-  for (let i = 0; i < n; i++) if (!isCold[i] && !(i >= x0 && i < x1)) now.push(i);
-  const T0 = performance.now();
-  if (self.__tlCount) { self.__tlCount('commitPages', now.length); self.__tlCount('c_preMs', T0 - TS); }
-  hashRuns(M, now);
-  const T1 = performance.now();
-  const hs = hashView(M, n), H = new Int32Array(M.HEAPU8.buffer);
-  const pages = new Array(n), tentative = [], changed = [], raw = [];
-  let lazyN = 0;
-  for (let i = 0; i < n; i++) {
-    if (i >= x0 && i < x1) { pages[i] = null; continue; }
-    const q = c.base.pages[i];
-    if (isCold[i] === 1) { pages[i] = q; tentative.push(i); }
-    else if (isCold[i] === 2) {
-      pages[i] = { r: null, bytes: PAGE, h: c.seen.get(i), lazy: 1 }; tentative.push(i); lazyN++;
-      if (KF_VERIFY) pages[i].vr = H.slice(i * W, i * W + W);  // (kfverify: its content at F, against the post pass's copy)
-    }
-    else if (sameHash(hs, i, q)) {
-      pages[i] = q;
-      // (a hot page the same as the base, marked hot two keyframes ago or more: cold again. Pages that changed once (a
-      // round change, a load) stayed hot for good: 329 -> 1839 hashed at each commit over 40 s)
-      const h = t.hotAt.get(i);
-      if (h !== undefined && h <= t.kfs.length - 2) t.hotAt.delete(i);
-    }
-    else { changed.push(i); if (q) t.hotAt.set(i, t.kfs.length); }
-  }
-  // the changed pages copied ahead in the pre pass and the same since (its hash now = at the copy): that copy; the
-  // rest copied now into one buffer (one allocation, not one per page)
-  const late = [], TL0 = performance.now();
-  for (const i of changed) {
-    const p = c.pre && c.pre.get(i);
-    if (p && sameHash(hs, i, p)) {
-      if (KF_VERIFY) { const V = self.__kfVerify || (self.__kfVerify = { reused: 0, bad: 0, late: 0 }); V.reused++;
-        for (let j = 0, o = i * W; j < W; j++) if (p.r[j] !== H[o + j]) { V.bad++; break; } }
-      pages[i] = { r: p.r, bytes: PAGE, h: p.h }; raw.push(pages[i]);
-    }
-    else late.push(i);
-  }
-  c.pre = null;
-  if (late.length && (!t.commitBuf || t.commitBuf.length < late.length * W)) t.commitBuf = new Int32Array(Math.ceil(late.length * 1.5) * W);
-  const buf = t.commitBuf;  // reused: every raw page is packed or copied out during the post pass
-  late.forEach((i, k) => {
-    buf.set(H.subarray(i * W, i * W + W), k * W);
-    pages[i] = { r: buf.subarray(k * W, k * W + W), bytes: PAGE, h: [hs[4 * i], hs[4 * i + 1], hs[4 * i + 2], hs[4 * i + 3]] };
-    raw.push(pages[i]);
-  });
-  const TL1 = performance.now();
-  const fresh = raw.length + lazyN;  // (the changed pages and the ones the post pass copies)
-  t.bytes += fresh * PAGE;
-  for (let i = 0; i < n; i++) pageRef(t, pages[i], +1);
-  if (self.__tlCount) { self.__tlCount('c_lateMs', TL1 - TL0); self.__tlCount('c_late', late.length); self.__tlCount('c_refMs', performance.now() - TL1); self.__tlCount('c_scanMs', TL0 - T1); }
-  statPush(t.commitParts || (t.commitParts = []), [now.length, Math.round(T1 - T0), Math.round(performance.now() - T1), fresh]);
-  const TT = performance.now();
-  c.kf = { frame: f, pages, ms: 0, fresh, pending: true, inc: true };
-  kfTexAdd(t, c.kf);
-  t.kfs.push(c.kf);
-  t.lastKf = f;
-  if (self.__tlCount) self.__tlCount('c_tailMs', performance.now() - TT);
-  c.tentative = tentative; c.raw = raw; c.rawTotal = raw.length; c.cur = 0;
-}
 function restore(s, kf) {
   const M = s.M;
   call(s, 'viewer_restore_begin');
   // files the game has open now: their streams are closed (a keyframe is only taken with none open)
   for (const st of M.FS.streams) if (st && st.fd > 2) { try { M.FS.close(st); } catch (e) {} }
-  const top = M._viewer_mem_top();
-  const hs = pageHashes(M, Math.max(top, kf.pages.length * PAGE)), H = new Int32Array(M.HEAPU8.buffer), W = PAGE >> 2;
-  let copied = 0;
-  for (let i = 0; i < kf.pages.length; i++) {
-    const q = kf.pages[i], j = i * 4;
-    if (!q || (q.h[0] === hs[j] && q.h[1] === hs[j + 1] && q.h[2] === hs[j + 2] && q.h[3] === hs[j + 3])) continue;
-    unpackPage(q, H, i * W, W);
-    copied++;
-  }
-  // zlib's calls (kzUnpack) use the wasm C stack and its arena counter: the pages holding those were written again by
-  // each later call. Those few are inflated once more into JS copies and written last, with no wasm call after them.
-  if (kf.pages.some(q => q && q.z)) {
-    const h1 = pageHashes(M, kf.pages.length * PAGE), late = [];
-    for (let i = 0; i < kf.pages.length; i++) {
-      const q = kf.pages[i], j = i * 4;
-      if (!q || (q.h[0] === h1[j] && q.h[1] === h1[j + 1] && q.h[2] === h1[j + 2] && q.h[3] === h1[j + 3])) continue;
-      const tmp = new Int32Array(W);
-      unpackPage(q, tmp, 0, W);
-      late.push([i, tmp]);
-    }
-    for (const [i, tmp] of late) H.set(tmp, i * W);
-  }
-  s.tl.lastCopied = copied;
+  if (!M._viewer_kf_restore(kf.frame)) throw new Error(`keyframe ${kf.frame}: not restored`);
   call(s, 'viewer_restore_end', ++s.gen);
   // (the host's own settings live in the restored memory too, back to the keyframe's: the banner (names) is set again
   // (liveBanner, by its key), the live pacing (1.05x trim / 2x catch-up) from 1x (the next poll sets what it wants).
   // Was: "CHALLENGER" in place of both names for the rest of a session after a catch-up jump, user 2026-11-01)
   s.bannerKey = null;
-  ovRestored(s);
   if (s.liveSrc) { s.liveTrim = false; s.liveFF = false; call(s, 'viewer_rate', 1); call(s, 'viewer_speed', ui.speed); }
   if (s.liveSrc) {
     liveRefeed(s);  // (the stream received since the keyframe)
@@ -1442,11 +1022,6 @@ async function seekTo(s, T) {
       kf = pin;
     } else if (!await filesBack(s)) return;
   }
-  if (t.inc) {  // an incremental keyframe in progress: its passes assume the timeline goes on from here
-    if (t.inc.kf) { const at = t.kfs.indexOf(t.inc.kf); if (at >= 0) { t.kfs.splice(at, 1); for (const p of t.inc.kf.pages) pageRef(t, p, -1); kfTexDrop(t, t.inc.kf); } }
-    t.inc = null;
-    t.lastKf = t.kfs.length ? t.kfs[t.kfs.length - 1].frame : -1;
-  }
   s.seeking = true; s.mute = true;
   s.stopSes(); s.bgmHalt();
   uiApply(s);
@@ -1482,12 +1057,12 @@ async function seekTo(s, T) {
   if (!ui.paused) s.bgmSync(M._viewer_frame());
   const r1 = x => Math.round(x * 10) / 10;
   statPush(t.seekMs, { from: cur, to: T, ms: r1(performance.now() - t0), restoreMs: restored ? r1(t1 - t0) : 0,
-                  copied: restored ? t.lastCopied : 0, sim: T - f1,
+                  sim: T - f1,
                   simMs: r1(t2 - t1), drawMs: r1(t3 - t2) });
   overlayDirty = true;
   if (!s.endShown) status(ui.paused ? 'paused' : 'playing');
 }
-// viewer.js:1250
+// viewer.js:1262
 const SCENE_VS = 8, SCENE_WIN = 5;  // the VS screen and the win screen (g_CurrentSceneId 0x54EEE8)
 async function skipIntro(s) {
   const t = s.tl, M = s.M;
@@ -1513,29 +1088,29 @@ async function skipIntro(s) {
 }
 const LIVE_BEHIND = 240;  // frames kept buffered (4 s)
 const LIVE_WIN = 8;  // polls (~8 s) the catch-up decisions look back over (a round end's burst and pause: ~5 s)
-// viewer.js:1269
+// viewer.js:1281
 let liveSrc = null;  // {id, info, since}
-// viewer.js:1279
+// viewer.js:1291
 const wClock = { w: null, n: 0, cb: new Map() };
-// viewer.js:1280
+// viewer.js:1292
 const wClear = t => { if (t < 0) wClock.cb.delete(-t); else clearTimeout(t); };
-// viewer.js:1293
+// viewer.js:1305
 const liveNet = { fails: 0, troubleAt: -1e9, notice: '',
   delay: () => liveNet.fails ? Math.min(1000 * 2 ** (liveNet.fails - 1), 5000) : 1000,
   recent: () => performance.now() - liveNet.troubleAt < 60000 };
-// viewer.js:1337
+// viewer.js:1349
 const annDefault = { files: null, p: null, src: '', voice: null };
-// viewer.js:1458
+// viewer.js:1470
 let liveWant = null, liveCss = null;
-// viewer.js:1468
+// viewer.js:1480
 let liveResume = null;
-// viewer.js:1487
+// viewer.js:1499
 const liveOurs = (m, L) => !!m && !!L && m.id === L.id && (!m.match || !(L.info && L.info.match) || m.match === L.info.match);
-// viewer.js:1491
+// viewer.js:1503
 const LIVE_IDLE = 300, liveIdle = m => m.age > LIVE_IDLE, liveGone = m => m.silent > 8 || liveIdle(m);
-// viewer.js:1496
+// viewer.js:1508
 let sw = null;
-// viewer.js:1546
+// viewer.js:1558
 let liveListLast = null;  // {at, l}: the newest list read (an entry from it is fresh for LIVE_FRESH ms)
 // ---- the server snapshot join (artifacts/xz_check/perf_plan/snapjoin): the bridge's native sim server (tools/server_sim/sim_server.cpp)
 // makes a snapshot of a live game when a join asks (web/host/snapshot.cpp: the delta against the game's start of PC's
@@ -1622,6 +1197,16 @@ async function liveSnapJoin(s) {
   J.result = r;
   if (r !== 1) {
     J.why = M.ccall('viewer_snap_why', 'string', [], []);
+    // (a switch back to a kept match: its keyframe is the state to go on from. The kept keyframe put back again (the
+    // refused load may have written part of the state) and the catch-up goes on by the records from there, which is
+    // what a switch back without the snapshot does. Was: the match started over, the kept match lost)
+    const back = s.swBack && t ? t.kfs.find(k => k.frame === s.swBack.frame) : null;
+    if (back) {
+      restore(s, back);
+      J.back = true;
+      console.warn(`live: snapshot not used on the switch back (${J.why}): the kept match catches up by its records`);
+      return false;
+    }
     // (refused, or loaded with a differing state hash: this session's state is not the game's; the match again, from a
     // fresh snapshot)
     const k = `${L.id}:${L.info.game}`, n = (snapBad.get(k) || 0) + 1;
@@ -1632,14 +1217,13 @@ async function liveSnapJoin(s) {
     return null;
   }
   // the timeline from here: the keyframes before the load are the joiner's own frames, not the game's. The newest stays
-  // only as the incremental keyframes' base (its pages shared; preSnap: never restored, seekTo / kfPinned); no keyframe is
-  // made here (a whole-memory one: ~1.5 s at phone speed), the first after the load comes KF_EVERY frames on (incTick).
-  // A rewind before it: refused (seekTo)
+  // only as the next keyframes' page base (preSnap: never restored, seekTo / kfPinned); the first after the load comes
+  // KF_EVERY frames on. A rewind before it: refused (seekTo)
   if (t) {
-    const keep = t.kfs.filter(k => !k.pending).pop();
-    for (const k of t.kfs.splice(0)) if (k !== keep) { for (const q of k.pages) pageRef(t, q, -1); kfTexDrop(t, k); }
-    if (keep) { keep.preSnap = true; t.kfs.push(keep); }
-    t.inc = null;
+    const keep = t.kfs[t.kfs.length - 1];
+    for (const k of t.kfs.slice()) if (k !== keep) kfDrop(t, k);
+    if (keep) keep.preSnap = true;
+    kfBytes(t);
     t.lastKf = keep ? keep.frame : -1;
     t.safeFrom = f + 1;
     t.marks = t.marks.filter(m => m[0] > f);
@@ -1773,24 +1357,22 @@ function cuDone(s, f0, t0, drawn) {
     for (let i = 0; i < s.cuRows.length; i++) h = Math.imul(h ^ s.cuRows.charCodeAt(i), 0x01000193);
     const lines = s.cuRows.split('\n').filter(l => l && !l.startsWith('k,'));
     Object.assign(r, { rowsHash: (h >>> 0).toString(16), rows: lines.length, lastRow: lines[lines.length - 1] || '' });
-    const top = M._viewer_mem_top(), hs = pageHashes(M, top);
-    const x0 = Math.floor(M._viewer_page_hash_area(0) / PAGE), x1 = Math.ceil(M._viewer_page_hash_area(1) / PAGE);
-    const pages = [];
-    for (let i = 0; i * 4 < hs.length; i++) pages.push(i >= x0 && i < x1 ? '' : [0, 1, 2, 3].map(j => (hs[i * 4 + j] >>> 0).toString(16)).join(''));
-    r.pages = pages; r.top = top;
+    // (the match's state page by page: CE block, arena, TLS block: viewer_state_hashes)
+    const n = M._viewer_state_hashes(), hs = new BigUint64Array(M.HEAPU8.buffer, M._viewer_state_hashes_data(), n);
+    r.pages = Array.from(hs, h => h.toString(16)); r.top = M._viewer_arena_used();
   }
   (window.__mbaaCatchUp = window.__mbaaCatchUp || []).push(r);
   swMark('cuEnd'); swMark('live');
   if (s.cssBgGo) s.cssBgGo();
   console.log(`live: caught up ${r.frames} frames in ${Math.round(ms)} ms (${Math.round(r.fps)} frames/s, ${drawn} drawn)`);
 }
-// viewer.js:2608
+// viewer.js:2620
 let stagePanel = null, stageKey = '', radio = null, oldRadio = null, radioGame = 'aacc';
-// viewer.js:2759
+// viewer.js:2771
 let xfStagePending = false;  // (a pick's stage swap to crossfade: radioStageSync)
-// viewer.js:2760
+// viewer.js:2772
 let xfYieldPending = false;  // (a pick's or a clear's swap with a live extension's page-drawn stage, to fade: radioStageSync)
-// viewer.js:2809
+// viewer.js:2821
 let radioStageFollow = true;
 // The stage: the pick's stage file into MEMFS (sharing the fetched buffer; a stage file MBAACC also ships is bg/bgNN.dat,
 // whose MEMFS copy may be the 1-byte probe placeholder) and sent to the game, which swaps stages between frames. Sent
@@ -1809,7 +1391,7 @@ function radioPut(s, p) {
   return true;
 }
 let radioOwnFetch = null;
-// viewer.js:2912
+// viewer.js:2924
 function radioStageFiles(id) {
   const p = man.plan;
   if (!p || !p.stage) return [];
@@ -1838,9 +1420,9 @@ function radioFilesIn(s, id) {
   for (const p of files) radioPut(s, p);
   return true;
 }
-// viewer.js:2921
+// viewer.js:2933
 const stageFollows = () => radioStageFollow || !!(radio && radio.chip);
-// viewer.js:2922
+// viewer.js:2934
 const radioPickHasStage = () => !!(radio && stageFollows() && !HASH && (radio.dat || (radio.stages && radio.stages.length)));
 function radioStageSync(s) {
   const M = s && s.M;
@@ -1891,7 +1473,7 @@ function radioStageSync(s) {
   if (st) st.lights.forEach(([pos, power], i) => M._viewer_radio_stage_light(i, pos, power));
   M.ccall('viewer_radio_stage_want', null, ['string', 'number', 'number'], [st ? st.dat : '', want, st ? st.lights.length : 0]);
 }
-// viewer.js:3345
+// viewer.js:3357
 function liveKeep(L, b) {
   const dv = new DataView(b.buffer, b.byteOffset, b.byteLength);
   for (let o = 0; o + 244 <= b.length;) {
@@ -1907,7 +1489,7 @@ function liveFeed(s, b) {
   call(s, 'viewer_spectate_feed', p, b.length);
   s.M._free(p);
 }
-// viewer.js:3360
+// viewer.js:3372
 function liveCssFiles(man) {
   const out = new Set();
   for (const p of Object.keys(man.files))
@@ -1915,7 +1497,7 @@ function liveCssFiles(man) {
         /^story\/battle\/[^/]+_table\.txt$/.test(p)) out.add(p);
   return withSiblings(man, out);
 }
-// viewer.js:3372
+// viewer.js:3384
 const CSS_SCENE = 20, CSS_OBJ = 0x773158, CSS_SLOT = 0x74D8E8, BATTLE_SLOT = 0x74D838, STAGE_ID = 0x74FD98;
 function liveCssWatch(s) {
   const H = s.M.HEAP32, g = a => H[a >> 2];
@@ -2004,15 +1586,15 @@ const bootSetup = rep => {  // boot.rep's header (cc_live.mjs bootRep): the stag
   const dv = new DataView(rep.buffer, rep.byteOffset, rep.byteLength), i = o => dv.getInt32(o, true);
   return { stage: i(0x28), chara: [i(0x40), i(0x50)], moon: [i(0x44), i(0x54)], color: [i(0x48), i(0x58)] };
 };
-// viewer.js:3378
+// viewer.js:3390
 const stageOk = id => id === 0 || !man || !man.files || !!man.files[`bg/bg${String(id).padStart(2, '0')}.dat`];
-// viewer.js:3379
+// viewer.js:3391
 function stageStandIn(id) {
   const ok = Object.keys(man.files).map(f => /^bg\/bg(\d\d)\.dat$/.exec(f)).filter(Boolean).map(m => +m[1])
     .filter(n => n > 0 && n !== 57 && n !== 58).sort((a, b) => a - b);  // (not the two giant stages: wider)
   return ok.length ? ok[id % ok.length] : 1;
 }
-// viewer.js:3384
+// viewer.js:3396
 function repStageFix(rep) {  // a .rep / boot tape's header stage (0x28), in place
   const dv = new DataView(rep.buffer, rep.byteOffset, rep.byteLength), id = dv.getInt32(0x28, true);
   if (stageOk(id)) return;
@@ -2119,12 +1701,12 @@ async function liveLateCheck(s, game) {
   console.log(`live: game ${game}'s setup came after our load: ${same ? 'the same' : 'different: switching'}`);
   if (!same) liveSwitch(s, p);
 }
-// viewer.js:3408
+// viewer.js:3420
 const STREAK = [0x76FC14, 0x770EB4];  // g_P1ConsecutiveWinStreak, g_P2ConsecutiveWinStreak (the player records', +0x4A0)
 const asciiName = n => /^[\x20-\x7e]*$/.test(n);
-// viewer.js:3410
+// viewer.js:3422
 const TUNE = Q.get('tune') === '1';
-// viewer.js:3411
+// viewer.js:3423
 const bannerTune = { nameGap: -1, nameSize: 16, nameDy: 0, winsGap: -1, winsSize: 11, winsDy: -11, maxPx: 216, scrollSpeed: 40,
   lapGap: 24, streak: -1, pageFont: 13, testP1: '', testP2: '' };
 function liveBanner(s) {
@@ -2260,11 +1842,11 @@ function liveRefeed(s) {  // restore(): after the keyframe is back
   for (const x of parts) all.set(x, o), o += x.length;
   liveFeed(s, all);
 }
-// viewer.js:3481
+// viewer.js:3493
 const KEEP_MS = +(Q.get('keepms') || 300000);
-// viewer.js:3482
+// viewer.js:3494
 let liveKept = null, liveResumeK = null, liveClickAt = null;
-// viewer.js:3485
+// viewer.js:3497
 const texKey = (a, i) => a[i] + ':' + a[i + 1] + ':' + a[i + 2];
 // the store entries a kept keyframe names: counted in M.mbaaTexHold, and in the timeline's reference map (store eviction
 // skips them; timelineInit seeds a new session's map from the hold)
@@ -2291,11 +1873,11 @@ function liveKeptDrop(why) {
   if (!K) return;
   liveKept = null;
   wClear(K.timer);
-  try { liveHoldTex(K.M, K.kf.tex, -1); } catch (e) {}
+  try { liveHoldTex(K.M, K.kf.tex, -1); K.M._viewer_kf_drop(K.key); } catch (e) {}
   console.log(`live: the kept match is dropped (${why})`);
   if (session && session.tl && session.M === K.M) storeGc(session.tl);
 }
-// viewer.js:3487
+// viewer.js:3499
 function liveKeptStat(K) {
   const S = K.M.mbaaTexStore, seen = new Set(), cur = session && session.want;
   let tex = 0, texOnly = 0, files = 0, recs = 0;
@@ -2307,53 +1889,43 @@ function liveKeptStat(K) {
   for (const p of K.want) if (!(cur && cur.has(p))) { const d = cache.get(p); if (d) files += d.length; }
   for (const b of K.recs.values()) recs += b.length;
   const r1 = x => Math.round(x / 1e5) / 10;
-  return { frame: K.kf.frame, game: K.game, pagesMB: r1(K.bytes), pagesOwn: K.own, pagesBoot: K.shared, texMB: r1(tex),
+  return { frame: K.kf.frame, game: K.game, texMB: r1(tex),
            texOnlyMB: r1(texOnly), filesOnlyMB: r1(files), recsKB: Math.round(recs / 1e3), awayS: Math.round((Date.now() - K.at) / 100) / 10,
            polls: K.polls, takeMs: Math.round(K.ms * 10) / 10 };
 }
+// (a kept live match's keyframe, in the engine: a key of its own below the boot's -1, never cleared by a new session. Its
+// own: a switch back keeps the match being left before the one gone back to is restored, so two are kept for a moment;
+// one shared key restored the match left in place of the one gone back to)
+let keptKeyNext = -2;
 // the session being left for another live match (startLive, just before the new one starts): kept
 function liveKeepTake(s) {
   if (!SW_KEEP || !s || !s.liveSrc || !s.tl || !s.boot || !s.M || session !== s) return;
   const L = s.liveSrc, M = s.M, t = s.tl, t0 = performance.now();
   if (L.moved || L.next || L.backEnded || s.cssHeld || s.loadHeld || call(s, 'viewer_ended')) return;
   if (liveMemTight()) { console.log('live: the match left is not kept (memory pressure)'); return; }
-  // (an incremental keyframe in progress: dropped, as a seek does: its pages are not all packed yet)
-  if (t.inc) {
-    if (t.inc.kf) { const at = t.kfs.indexOf(t.inc.kf); if (at >= 0) { t.kfs.splice(at, 1); for (const p of t.inc.kf.pages) pageRef(t, p, -1); kfTexDrop(t, t.inc.kf); } }
-    t.inc = null;
-    t.lastKf = t.kfs.length ? t.kfs[t.kfs.length - 1].frame : -1;
-  }
   const f = M._viewer_frame();
   if (!M._viewer_files_open()) keyframe(s, f);
   let kf = null;
-  for (const k of t.kfs) if (k.frame <= f && !k.pending) kf = k;
+  for (const k of t.kfs) if (k.frame <= f && !k.preSnap) kf = k;
   if (!kf || kf.frame < f - 600) { console.log('live: the match left is not kept (no keyframe near its frame)'); return; }
-  const B = s.boot.pages;
-  let bytes = 0, shared = 0, own = 0;
-  const pages = kf.pages.map((q, i) => {
-    if (!q) return null;
-    const b = B[i];
-    if (b && b.h && q.h && b.h[0] === q.h[0] && b.h[1] === q.h[1] && b.h[2] === q.h[2] && b.h[3] === q.h[3]) { shared++; return { boot: b }; }
-    own++; bytes += q.bytes;
-    const c = { bytes: q.bytes, h: q.h };
-    if (q.r) c.r = q.r; else if (q.z) c.z = q.z; else { c.m = q.m; c.v = q.v; }
-    return c;
-  });
   const g0 = call(s, 'viewer_spectate_game');
   liveKeptDrop('another match kept');
   const K = liveKept = {
     M, id: L.id, match: L.info.match || null, info: L.info, game: g0 >= 0 ? g0 : L.info.game, rep: s.rep, name: s.name,
-    want: new Set([...s.want].filter(p => !s.freed.has(p))), kf: { frame: kf.frame, pages, tex: kf.tex ? Int32Array.from(kf.tex) : new Int32Array(0) },
+    want: new Set([...s.want].filter(p => !s.freed.has(p))), kf: { frame: kf.frame, tex: kf.tex ? Int32Array.from(kf.tex) : new Int32Array(0) },
     recs: L.recs, since: L.since, tapes: L.tapes, firstGame: L.firstGame, marks: t.marks.slice(), fights: t.fights.slice(),
     // (the game's music requests up to the keyframe: the track playing there started before it, in this session; without
     // them a switch back played no music until the next game, a live extension's music none either: user 2026-11-07)
     bgm: (s.bgmLog || []).filter(e => e[0] <= kf.frame),
-    streakKnown: s.streakKnown, at: Date.now(), bytes, shared, own, polls: 0, ms: 0, timer: 0 };
+    streakKnown: s.streakKnown, at: Date.now(), polls: 0, ms: 0, timer: 0 };
+  // (the engine's copy under K.key: the next session's viewer_kf_clear leaves it; its pages the boot's where unchanged)
+  K.key = keptKeyNext--;
+  if (!M._viewer_kf_rekey(kf.frame, K.key)) { liveKept = null; console.log('live: the match left is not kept (keyframe gone)'); return; }
+  t.kfs.splice(t.kfs.indexOf(kf), 1);
   liveHoldTex(M, K.kf.tex, +1);
   K.ms = performance.now() - t0;
   K.timer = wTimeout(() => liveKeptPoll(K), 1000);
-  console.log(`live: the match left is kept for a switch back (frame ${kf.frame}, ${(bytes / 1e6).toFixed(1)} MB of its own pages, ` +
-              `${shared} pages the boot snapshot's, ${K.ms.toFixed(1)} ms)`);
+  console.log(`live: the match left is kept for a switch back (frame ${kf.frame}, ${K.ms.toFixed(1)} ms)`);
 }
 // while away: the kept match's records, read on as the session would (not counted as a viewer: no v=), kept only
 async function liveKeptPoll(K) {
@@ -2374,7 +1946,7 @@ async function liveKeptPoll(K) {
   } catch (e) {}
   if (liveKept === K) K.timer = wTimeout(() => liveKeptPoll(K), 1000);
 }
-// viewer.js:3507
+// viewer.js:3519
 function liveBackTake(K, prev, click) {
   liveKept = null; wClear(K.timer);  // (its texture hold stays until the restore takes it over: liveResumeApply)
   const B = window.__mbaaSwitchBack = { click, start: performance.now(), awayS: (Date.now() - K.at) / 1000, kept: liveKeptStat(K) };
@@ -2389,15 +1961,16 @@ function liveResumeApply(s) {
   const K = s.liveResumeK, t = s.tl, M = s.M, t0 = performance.now(), B = window.__mbaaSwitchBack || (window.__mbaaSwitchBack = {});
   s.liveResumeK = null;
   // (pages of its own for this timeline's counts; a boot page counts no bytes: the boot snapshot holds it anyway)
-  const kf = { frame: K.kf.frame, ms: 0, fresh: 0, pages: K.kf.pages.map(q => !q ? null : q.boot ? { ...q.boot, n: 0, bytes: 0 } : { ...q, n: 0 }) };
-  for (const q of kf.pages) if (q) { t.bytes += q.bytes; pageRef(t, q, +1); }
+  const kf = { frame: K.kf.frame, ms: 0, fresh: 0 };
+  let at = t.kfs.length;
+  while (at > 0 && t.kfs[at - 1].frame > kf.frame) at--;
+  if (at > 0 && t.kfs[at - 1].frame === kf.frame) { kfDrop(t, t.kfs[at - 1]); at--; }
+  if (!M._viewer_kf_rekey(K.key, kf.frame)) throw new Error('live: the kept keyframe is gone');
   liveHoldTex(M, K.kf.tex, -1);  // (the hold, from here the timeline's own reference)
   kf.tex = K.kf.tex;
   for (let i = 0; i + 2 < kf.tex.length; i += 3) { const k = texKey(kf.tex, i); M.mbaaTexKfRef.set(k, (M.mbaaTexKfRef.get(k) || 0) + 1); }
-  let at = t.kfs.length;
-  while (at > 0 && t.kfs[at - 1].frame > kf.frame) at--;
-  if (at > 0 && t.kfs[at - 1].frame === kf.frame) { const o = t.kfs.splice(at - 1, 1)[0]; for (const p of o.pages) pageRef(t, p, -1); kfTexDrop(t, o); at--; }
   t.kfs.splice(at, 0, kf);
+  kfBytes(t);
   t.lastKf = t.kfs[t.kfs.length - 1].frame;
   t.marks = K.marks; t.fights = K.fights; s.bgmLog = K.bgm;  // (later requests come again as the catch-up steps past kf)
   restore(s, kf);
@@ -2406,7 +1979,7 @@ function liveResumeApply(s) {
   s.liveHeldSeen = call(s, 'viewer_spectate_held');
   s.liveJoined = false;  // (the first poll's jump threshold: as at a join)
   s.swBack = B;
-  B.restored = performance.now(); B.restoreMs = Math.round((B.restored - t0) * 10) / 10; B.frame = kf.frame; B.copied = t.lastCopied;
+  B.restored = performance.now(); B.restoreMs = Math.round((B.restored - t0) * 10) / 10; B.frame = kf.frame;
   if (Q.get('swhash') === '1') {  // (test: the state rows of the 30 frames after the restored one, live_switch_back_check.py)
     const wt = M.HEAP32[0x55D1D4 >> 2];
     M.ccall('viewer_hash_enable', null, [], []);
@@ -2422,11 +1995,11 @@ function liveResumeApply(s) {
     if (n > 30 && !s.seeking) await liveCatchUp(s, n);
     if (session !== s) return;
     B.caught = performance.now();
-    console.log(`live: back at the kept match's live point: restore ${B.restoreMs} ms (${B.copied} pages), ${n} frames caught up, ` +
+    console.log(`live: back at the kept match's live point: restore ${B.restoreMs} ms, ${n} frames caught up, ` +
                 `${Math.round(B.caught - (B.click ?? B.start))} ms from the click`);
   }, 0);
 }
-// viewer.js:3526
+// viewer.js:3539
 function liveStateNow() {
   const s = session;
   if (!s || !s.liveSrc || !s.M) return null;
@@ -2435,7 +2008,7 @@ function liveStateNow() {
            wt: s.M.HEAP32[0x55D1D4 >> 2],  // (g_WorldTimer: the game's own frame; a session's frame numbers are its own)
            kfs: s.tl ? s.tl.kfs.length : 0, tlMB: s.tl ? Math.round(s.tl.bytes / 1e5) / 10 : 0, heapMB: Math.round(s.M.HEAPU8.length / 1e5) / 10 };
 }
-// viewer.js:3534
+// viewer.js:3547
 async function stateRowsTake(k, n) {
   const s = session;
   if (!s) return null;
@@ -2444,6 +2017,170 @@ async function stateRowsTake(k, n) {
   s.M.ccall('viewer_hash_enable', null, [], []);
   call(s, 'viewer_suppress', 1); call(s, 'viewer_step', n); call(s, 'viewer_suppress', 0); call(s, 'viewer_represent');
   return { from: f0, wt, csv: s.M.ccall('viewer_hash_take', 'string', [], []) };
+}
+// viewer.js:3559
+function ctxRowsTake(n, mb) {
+  const s = session, M = s && s.M;
+  if (!M || !M._viewer_ctx_new) return { err: 'no session' };
+  const t0 = performance.now(), f0 = M._viewer_frame(), hooks = ['mbaaFrame', 'mbaaSandbox', 'mbaaAssetMiss'], held = hooks.map(h => M[h]);
+  const id = M._viewer_ctx_new(mb);
+  if (id < 0) return { err: 'ctx_new' };
+  const r = { id, mb };
+  hooks.forEach(h => { M[h] = null; });
+  try {
+    M._viewer_ctx_enter(id);
+    M._viewer_stage_anim(Q.get('stageAnim') !== null ? +(Q.get('stageAnim') !== '0') : 1);
+    if (!M._viewer_boot()) return Object.assign(r, { err: 'boot' });
+    r.bootMs = performance.now() - t0;
+    M.FS.writeFile('/game/replay.rep', s.rep);
+    if (!M._viewer_load()) return Object.assign(r, { err: 'load' });
+    M.ccall('viewer_hash_enable', null, [], []);
+    M._viewer_suppress(1);
+    M._viewer_play(0);
+    const t1 = performance.now();
+    M._viewer_step(n);
+    r.stepMs = performance.now() - t1;
+    r.frame = M._viewer_frame(); r.arenaMB = M._viewer_arena_used() / 1048576;
+    r.csv = M.ccall('viewer_hash_take', 'string', [], []);
+  } finally {
+    M._viewer_ctx_leave();
+    hooks.forEach((h, i) => { M[h] = held[i]; });
+    M._viewer_ctx_delete(id);
+  }
+  r.mainFrame = M._viewer_frame(); r.mainFrame0 = f0;
+  return r;
+}
+// viewer.js:3596
+async function ctxTilesTake(items, turn = 0) {
+  const s = session, M = s && s.M;
+  if (!M || !M._viewer_ctx_new) return { err: 'no session' };
+  const hooks = ['mbaaFrame', 'mbaaSandbox', 'mbaaAssetMiss'], held = hooks.map(h => M[h]), ids = [], out = [];
+  const sha = async b => [...new Uint8Array(await crypto.subtle.digest('SHA-256', b))].map(x => x.toString(16).padStart(2, '0')).join('');
+  const inCtx = (id, f) => { M._viewer_ctx_enter(id); try { return f(); } finally { M._viewer_ctx_leave(); } };
+  hooks.forEach(h => { M[h] = null; });
+  try {
+    const t0 = performance.now(), ks = items.map(it => Array.isArray(it) ? it[1] : it);
+    for (const [i, it] of items.entries()) {
+      const k = ks[i], rep = Array.isArray(it) ? await ctxRepGet(M, it[0]) : s.rep;   // (an [url, k]: that replay)
+      const id = M._viewer_ctx_new(128);
+      if (id < 0) return { err: 'ctx_new' };
+      ids.push(id);
+      const e = inCtx(id, () => {
+        M._viewer_stage_anim(0);
+        M._viewer_tiled(1);   // (from the boot on: none of its frames to the canvas)
+        if (!M._viewer_boot()) return 'boot';
+        M.FS.writeFile('/game/replay.rep', rep);
+        if (!M._viewer_load()) return 'load';
+        M._viewer_play(0);
+        M._viewer_capture_at(k);
+        return null;
+      });
+      if (e) return { err: e };
+    }
+    // (frame k's first present is in the step to k + 1, as the capture command)
+    const left = id => inCtx(id, () => M._viewer_frame() <= ks[ids.indexOf(id)] && !M._viewer_capture_ready());
+    for (let busy = true; busy;) {
+      busy = false;
+      for (const [i, id] of ids.entries()) {
+        if (!left(id)) continue;
+        busy = true;
+        inCtx(id, () => M._viewer_step(Math.min(turn || 1e9, 60, ks[i] + 1 - M._viewer_frame())));
+      }
+    }
+    for (const [i, id] of ids.entries()) {
+      // (WebGPU: the copy lands later, viewer_capture_landed puts it in its context; waited for outside it)
+      for (let t = 0; t < 2400 && !inCtx(id, () => M._viewer_capture_ready()); t++) await new Promise(r => setTimeout(r, 25));   // (SwiftShader: the queued frames first, 60 s)
+      const b = new Uint8Array(640 * 480 * 4), p = M._malloc(b.length);
+      const [ready, frame] = inCtx(id, () => {
+        const ok = M._viewer_capture_ready();
+        if (ok) { M._viewer_capture_read(p); b.set(M.HEAPU8.subarray(p, p + b.length)); }
+        return [ok, M._viewer_frame()];
+      });
+      M._free(p);
+      out.push({ id, k: ks[i], frame, ready, h: await sha(b), ms: performance.now() - t0 });
+    }
+    // the canvas: 2 x 2, the session's match top left (stepped to frame 200 first, drawn as a tile too)
+    M._viewer_tiled(1);
+    if (M._viewer_frame() < 200) M._viewer_step(200 - M._viewer_frame());
+    M._viewer_tiled(0);
+    const W = 1280, H = 960, cv = M.canvas;
+    if (cv) { cv.width = W; cv.height = H; }
+    const tiles = [0, ...ids].slice(0, 4).map((id, i) => [id, (i % 2) * W / 2, (i >> 1) * H / 2, (i % 2 + 1) * W / 2, ((i >> 1) + 1) * H / 2]).flat();
+    const tp = M._malloc(tiles.length * 4);
+    M.HEAP32.set(tiles, tp >> 2);
+    M._viewer_tiles_present(tp, tiles.length / 5);
+    M._free(tp);
+    // (the composite read back: WebGPU copies the canvas texture (same task); WebGL2 reads the canvas, rows bottom-up)
+    let canvas;
+    if (M.__wg) { const c = await M.__wg.canvasCopy(); canvas = c && c.px; }
+    else {
+      const px = M._malloc(W * H * 4);
+      M._viewer_gl_read_canvas(px);
+      canvas = new Uint8Array(W * H * 4);
+      for (let y = 0; y < H; y++) canvas.set(M.HEAPU8.subarray(px + (H - 1 - y) * W * 4, px + (H - y) * W * 4), y * W * 4);
+      M._free(px);
+    }
+    return { tiles: out, W, H, canvas };
+  } finally {
+    hooks.forEach((h, i) => { M[h] = held[i]; });
+    for (const id of ids) M._viewer_ctx_delete(id);
+    M.FS.writeFile('/game/replay.rep', s.rep);   // (the session's own again)
+  }
+}
+// viewer.js:3676
+let gridIds = [];
+// viewer.js:3678
+async function ctxRepGet(M, u) {
+  const rep = new Uint8Array(await (await fetch(u)).arrayBuffer()), want = wantFor(rep);
+  if (want) {
+    await fetchAll(man, [...want].filter(p => !cache.has(p)), 'fetching a match\'s files', true);
+    // (a file the page's match did not need is its boot placeholder in MEMFS (a stage's 1-byte .dat): written over)
+    for (const p of want) {
+      const d = cache.get(p), f = '/game/' + p, a = d && M.FS.analyzePath(f);
+      if (d && (!a.exists || a.object.usedBytes !== d.length)) fsPut(M.FS, f, d);
+    }
+  }
+  repStageFix(rep);
+  return rep;
+}
+// viewer.js:3691
+async function gridStart(urls, cols) {
+  const s = session, M = s && s.M;
+  if (!M || !M._viewer_grid_set) return { err: 'no session' };
+  gridStop();
+  const t0 = performance.now(), made = [];
+  for (const u of urls) {
+    const rep = await ctxRepGet(M, u);
+    const id = M._viewer_ctx_new(128);   // (a match's arena holds 23-37 MB once loaded; nine of them in wasm's 4 GB)
+    if (id < 0) { made.push({ u, err: 'no room' }); continue; }
+    M._viewer_ctx_enter(id);
+    let ok = false;
+    try {
+      M._viewer_tiled(1);
+      M._viewer_stage_anim(Q.get('stageAnim') === '0' ? 0 : 1);
+      if (M._viewer_boot()) {
+        M.FS.writeFile('/game/replay.rep', rep);
+        ok = !!M._viewer_load();
+        if (ok) { M._viewer_hud(ui.hud ? 1 : 0); M._viewer_play(0); }
+      }
+    } finally { M._viewer_ctx_leave(); }
+    if (!ok) { M._viewer_ctx_delete(id); made.push({ u, err: 'boot / load' }); continue; }
+    gridIds.push(id); made.push({ u, id });
+  }
+  M.FS.writeFile('/game/replay.rep', s.rep);   // (the session's own again)
+  const ids = [0, ...gridIds], p = M._malloc(ids.length * 4);
+  M.HEAP32.set(ids, p >> 2);
+  M._viewer_grid_set(p, ids.length, cols || Math.ceil(Math.sqrt(ids.length)));
+  M._free(p);
+  return { made, ms: performance.now() - t0 };
+}
+// viewer.js:3721
+function gridStop() {
+  const M = session && session.M;
+  if (!M || !M._viewer_grid_set) return;
+  M._viewer_grid_set(0, 0, 1);
+  for (const id of gridIds) M._viewer_ctx_delete(id);
+  gridIds = [];
 }
 function liveFollow(s, on) {
   s.liveFollow = on;
@@ -2785,11 +2522,11 @@ function liveBegin(s) {  // play(): after viewer_play
   };
   poll();
 }
-// viewer.js:3626
+// viewer.js:3811
 const nextCard = { s: null, id: null, at: 0, timer: 0, raf: 0, stay: null, why: null };
-// viewer.js:3627
+// viewer.js:3812
 const liveName = m => m.matchup || (m.names || []).map(n => (n || '').trim()).join(' vs ');
-// viewer.js:3930
+// viewer.js:4115
 const curFrame = () => session ? (session.tl && session.tl.want !== null ? session.tl.want : session.M._viewer_frame()) : 0;
 function stepBy(n, pause = true) {
   if (!session || !session.tl) return Promise.resolve();
@@ -2802,26 +2539,26 @@ function stepBy(n, pause = true) {
   }
   return requestSeek(curFrame() + n);
 }
-// viewer.js:4005
+// viewer.js:4190
 const FB_CAP = 1024, FB_PER = 20, FB_N = 2 * FB_PER + 7, FB_CELLS = 75, FB_MEM = 400, FB_INTERVAL = 20;
-// viewer.js:4008
+// viewer.js:4193
 const FBC = { INACT: 1, JUMP: 2, HITSTUN: 3, BLOCK: 4, ACTIVE: 5, FREE: 6, ADV: 7, NEUTRAL: 8, FREEZE: 9, THROWN: 11,
               HITSTOP: 12, SHIELD: 13, THROW: 14 };
-// viewer.js:4012
+// viewer.js:4197
 const fb = { on: false, s: null, raw: null, tag: null, last: -1, procF: -1, rebuild: false, dirty: false, m: null, cv: null, place: true };
-// viewer.js:4013
+// viewer.js:4198
 function fbMachine() {
   const P = () => ({ main: new Uint8Array(FB_MEM), sub: new Uint8Array(FB_MEM), air: new Uint8Array(FB_MEM), proj: new Uint8Array(FB_MEM),
                      lastBusy: 0, lastActive: 0, lastProj: 0, firstActive: 0, firstCounter: 0, gotFirst: false, total: 0 });
   return { p: [P(), P()], counter: 0, interval: 0, intervalMax: FB_CELLS, isReset: false, doReset: false, doAdv: false,
            shared: 0, lastFc: 0, lastTrue: -1, clock: 0, inEx: false, freeAt: [-1, -1], adv: 0, advCell: -1, any: false };
 }
-// viewer.js:4019
+// viewer.js:4204
 function fbResetBars(m) {
   m.isReset = true; m.counter = 0; m.advCell = -1; m.interval = 0; m.doReset = false; m.intervalMax = FB_CELLS;
   for (const P of m.p) { P.main.fill(0); P.sub.fill(0); P.air.fill(0); P.proj.fill(0); }
 }
-// viewer.js:4024
+// viewer.js:4209
 function fbStep(m, R, o) {
   const g = o + 2 * FB_PER, X = [o, o + FB_PER];
   if (R[g + 3] !== 1) return;  // (not in a battle)
@@ -2866,7 +2603,7 @@ function fbStep(m, R, o) {
   }
   m.lastFc = fc; m.lastTrue = trueF;
 }
-// viewer.js:4069
+// viewer.js:4254
 function fbCell(m, P, R, x, g) {
   const first = () => { if (!P.gotFirst) { P.firstActive = P.firstCounter; P.gotFirst = true; } };
   let c;
@@ -2890,7 +2627,7 @@ function fbCell(m, P, R, x, g) {
   const k = m.counter % FB_MEM;
   P.main[k] = c; P.sub[k] = R[x + 12]; P.air[k] = R[x + 9] === 1 ? (R[x + 11] ? 2 : 1) : 0; P.proj[k] = R[x + 14] ? 1 : 0;
 }
-// viewer.js:4092
+// viewer.js:4277
 function fbClear(s) {
   fb.s = s; fb.last = -1; fb.procF = -1; fb.rebuild = false; fb.m = fbMachine(); fb.dirty = true;
   if (!fb.raw) { fb.raw = new Int32Array(FB_CAP * FB_N); fb.tag = new Int32Array(FB_CAP); }
@@ -2904,7 +2641,7 @@ function fbSample(s, f) {
   const p = M._viewer_framebar_sample() >> 2;
   fbPut(s, f, M.HEAP32.subarray(p, p + FB_N));
 }
-// viewer.js:4098
+// viewer.js:4283
 function fbPut(s, f, R) {
   if (fb.s !== s) fbClear(s);
   const i = f % FB_CAP;
@@ -2922,11 +2659,11 @@ function fbSeekBack(T) {
   for (let f = Math.max(0, T - FB_BACK); f < T; f++) if (fb.tag[f % FB_CAP] !== f) return FB_BACK;
   return 0;
 }
-// viewer.js:4197
+// viewer.js:4382
 let overlayDirty = true, lastDrawnFrame = -1;
-// viewer.js:4290
+// viewer.js:4475
 let seekDragging = false, marksKey = '';
-// viewer.js:4697
+// viewer.js:4882
 function perfProfiler(host) {
   const WAIT = Q.get('perfwait') || 'battle', GPU_MODE = /^(fence|off)$/.test(Q.get('perfgpu') || '') ? Q.get('perfgpu') : 'sync';
   const GPU_N = Math.max(5, +(Q.get('perfgpuN') || 30));
@@ -3199,7 +2936,7 @@ function perfProfiler(host) {
   if (WAIT !== 'manual') host.panel(WAIT === '0' ? 'perf: waiting for the game' : 'perf: waiting for a battle', P);
   return P;
 }
-// viewer.js:5028
+// viewer.js:5213
 function wantFor(rep) {
   if (!man.plan) return null;
   let want = planFiles(man, repKeys(rep));
@@ -3207,18 +2944,18 @@ function wantFor(rep) {
   if (Q.get('planDrop')) { const re = new RegExp(Q.get('planDrop')); want = new Set([...want].filter(f => !re.test(f))); }
   return want;
 }
-// viewer.js:5039
+// viewer.js:5224
 const MOVIE = 'dat/dat_m_vs.vsmv';
-// viewer.js:5044
+// viewer.js:5229
 let movieBytes = null, movieH264 = null, movieLoading = null, movieHook = null;
-// viewer.js:5080
+// viewer.js:5265
 function movieConfig(b) {
   if (!b.length) return { codec: 'avc1.640020', codedWidth: 640, codedHeight: 480 };
   const dv = new DataView(b.buffer, b.byteOffset, b.byteLength), u = i => dv.getUint32(i, true), dl = u(24), cl = u(28);
   return { codec: new TextDecoder().decode(b.subarray(32, 32 + cl)), codedWidth: u(8), codedHeight: u(12),
            description: b.slice(32 + cl, 32 + cl + dl), optimizeForLatency: true };
 }
-// viewer.js:5090
+// viewer.js:5275
 function movieVideo(b) {
   const dv = new DataView(b.buffer, b.byteOffset, b.byteLength), u = i => dv.getUint32(i, true);
   const cfg = movieConfig(b), n = u(16), key = u(20), tab = 32 + u(28) + u(24), off = i => u(tab + 4 * i);
@@ -3256,7 +2993,7 @@ function movieVideo(b) {
     },
   };
 }
-// viewer.js:5156
+// viewer.js:5341
 let xf = null, xfRuns = 0;
 // (live) the select screen's files in the background; until they are in MEMFS the game is held on reaching the result
 // screen (scene 5) or the retry menu, where the next select may follow (a match lasts minutes: in practice never held)
@@ -3273,11 +3010,11 @@ function liveCssBg(s, paths) {
     .catch(e => { console.warn('live: select screen files:', e); if (session === s) { s.cssBgP = null; s.cssBgHeld = false; liveHoldApply(s); } });
   if (s.livePic) s.cssBgGo(); else setTimeout(s.cssBgGo, 20000);
 }
-// viewer.js:5375
+// viewer.js:5560
 let loopOn = false;
-// viewer.js:5472
+// viewer.js:5657
 let clipPanel = false, clipPanelKey = '', clipDrag = null;
-// viewer.js:5663
+// viewer.js:5848
 function liveTapes(s) {
   const L = s.liveSrc;
   if (!L || !s.M) return;
@@ -3304,17 +3041,17 @@ function liveTapes(s) {
   const can = liveClipCan();
   if (can !== L.clipCan) { L.clipCan = can; clipPanelKey = ''; marksKey = ''; }
 }
-// viewer.js:5946
+// viewer.js:6131
 let clipLt = null;  // {name, bytes} or null
-// viewer.js:7227
+// viewer.js:7412
 let labCfg = null, labOn = null;
-// viewer.js:7228
+// viewer.js:7413
 function labApply(c) {
   labCfg = c || null;
   self.__mbaaLabSet = c && c.set ? c.set : null;
   labAttach();
 }
-// viewer.js:7233
+// viewer.js:7418
 function labAttach() {
   const m = session && session.M;
   if (labOn && labOn !== m) { try { delete labOn.__labSync; labOn.__labVoid = 0; labOn.mbaaRadioDefer = labOn.__labDefer; delete labOn.__labDefer; } catch (e) {} labOn = null; }
@@ -3326,7 +3063,7 @@ function labAttach() {
     m.__labVoid = labCfg.void ? 1 : 0; labOn = m;
   } else if (labOn === m) { delete m.__labSync; m.__labVoid = 0; m.mbaaRadioDefer = m.__labDefer; delete m.__labDefer; labOn = null; }
 }
-// viewer.js:7246
+// viewer.js:7431
 function labInfo() {
   const m = session && session.M, objs = [];
   if (m && m.HEAPU8 && !m.__remote) {
@@ -3388,7 +3125,7 @@ function engStateNow() {
   let tick = 0; try { tick = M._viewer_tick_ms ? M._viewer_tick_ms() : 0; } catch (e) {}
   return {
     frame: M._viewer_frame(), ended: M.ccall('viewer_ended', 'number', [], []), name: s.name, seeking: !!s.seeking, cu: !!s.cu,
-    scene: M.HEAP32[0x54EEE8 >> 2], tick, backend: M._viewer_render_backend ? M._viewer_render_backend() : 0, memGen: M.mbaaMemGen || 0,
+    scene: M.HEAP32[0x54EEE8 >> 2], tick, backend: M._viewer_render_backend ? M._viewer_render_backend() : 0,
     ovf: M._viewer_ov_has ? M._viewer_ov_has(0x41) : 1,
     ovn: M._viewer_ov_count ? M._viewer_ov_count() : 0, q: engCur, hb: ++engHb, cvw: engOff.width, cvh: engOff.height,
     rsi: M._viewer_radio_stage_in ? M._viewer_radio_stage_in() : 0, rsp: M._viewer_radio_stage_phase ? M._viewer_radio_stage_phase() : 0,
@@ -3399,7 +3136,9 @@ function engStateNow() {
     live: s.liveSrc ? { follow: !!s.liveFollow, synced: !!s.liveSynced, cardLive: !!s.cardLive, streakKnown: !!s.streakKnown, next: !!s.liveSrc.next,
                         held: !!s.liveHeld, ff: !!s.liveFF, game: M.ccall('viewer_spectate_game', 'number', [], []), ahead: M.ccall('viewer_spectate_buffered', 'number', [], []),
                         switchTimes: self.__mbaaSwitchTimes || null, snapJoin: self.__mbaaSnapJoin || null,
-                        switchBack: self.__mbaaSwitchBack || null } : null,
+                        switchBack: self.__mbaaSwitchBack || null,
+                        // (the catch-up records, tests: live_catchup_check; sent when one is added)
+                        cu: self.__mbaaCatchUp && self.__mbaaCatchUp.length !== engCuSent ? (engCuSent = self.__mbaaCatchUp.length, self.__mbaaCatchUp) : null } : null,
     ...(engSwHash ? { lstate: liveStateNow(), kept: liveKept ? liveKeptStat(liveKept) : null } : null),
     boxes: M._viewer_box_count ? M.HEAP32.slice(M._viewer_boxes() >> 2, (M._viewer_boxes() >> 2) + M._viewer_box_count() * 5) : null,
     inputs: M._viewer_input_count ? M.HEAP32.slice(M._viewer_inputs() >> 2, (M._viewer_inputs() >> 2) + M._viewer_input_count() * 5) : null,
@@ -3431,11 +3170,11 @@ function engRecTick(again) {
   const vf = new VideoFrame(engOff, { timestamp: 0, alpha: 'discard' }), st = engStateNow();
   engPost({ ev: 'recFrame', f, vf, boxes: st.boxes, inputs: st.inputs }, [vf]);
 }
+let engCuSent = 0;
 engAfterRaf = () => { if (engRec) try { engRecTick(false); } catch (e) { engPost({ ev: 'error', cmd: 'rec', msg: String(e && e.stack || e) }); } };
-// (keyframe work off the stepped frame: engine_head.js engIncPend)
-// (a callback that steps twice: the first frame's work is not run on the second's memory; this frame's runs here, in
-// its frame, as before the deferral)
-incDefer = (s, f) => { if (engIncPend) { engIncPend = null; incTick(s, f); return; } engIncPend = [s, f]; };
+// (a playback keyframe off the stepped frame: engine_head.js engIncPend; a later frame's ask replaces it (a callback that
+// stepped twice, a long step): the one taken is the frame the game is at when the refresh comes)
+kfDefer = (s, f) => { engIncPend = [s, f]; };
 { const r0 = restore; restore = function (...a) { engIncPend = null; return r0.apply(this, a); }; }
 // Jill's art switched in place (viewer.js jillApply; user 2026-11-12: no reload, the running game too). The game's
 // textures made from a switched file are made again from its new bytes and put on the same records (web/host
@@ -3642,38 +3381,6 @@ const engOvHooks = {
   },
 };
 function engOvInstall(M) { if (M && M.mbaaOvEmoji !== engOvHooks.mbaaOvEmoji) Object.assign(M, engOvHooks); }
-// The comment renderer's setup as the page last made it, kept here and put back inside a memory restore (viewer.js
-// ovRestored: a keyframe seek / boot snapshot rolls the renderer back): in the page path the chat sets it up again in
-// that same task, so the seek's own frames draw the comments ("behind the fighters" draws them inside the game frame, a
-// re-present cannot add them); from the worker the chat would hear of it only after the seek drew. The fonts, the
-// switches, and each comment's add (with its code points) and later style / face / motion calls; a removed comment
-// dropped, wall-clock ones dropped once long gone (the renderer drops them too)
-const engOvJ = { faces: new Map(), set: new Map(), cm: new Map(), cps: null };
-const ENG_OV_ONE = new Set(['_viewer_ov_canvas', '_viewer_ov_behind', '_viewer_ov_on', '_viewer_ov_clock', '_viewer_ov_wall_pin']);
-const ENG_OV_MORE = new Set(['_viewer_ov_style', '_viewer_ov_shadow', '_viewer_ov_face', '_viewer_ov_fx', '_viewer_ov_move']);
-function engOvRecord(f, a) {
-  const J = engOvJ;
-  if (f === '_viewer_ov_font_face' && engMem.has(a[1])) J.faces.set(a[0], engMem.get(a[1]).b);
-  else if (f === '_viewer_ov_font' && engMem.has(a[0])) J.faces.set(0, engMem.get(a[0]).b);
-  else if (ENG_OV_ONE.has(f)) J.set.set(f, a);
-  else if (f === '_viewer_ov_show') J.set.set(`${f}:${a[0]}`, a);
-  else if (f === '_viewer_ov_add') {
-    J.cm.set(a[0], [[f, a, J.cps]]);
-    if (J.cm.size > 300) { const now = performance.now() / 1000; for (const [id, c] of J.cm) { const x = c[0][1]; if (!x[2] && now > x[3] + x[8] + 10) J.cm.delete(id); } }
-  } else if (ENG_OV_MORE.has(f)) { const c = J.cm.get(a[0]); if (c) c.push([f, a]); }
-  else if (f === '_viewer_ov_remove') J.cm.delete(a[0]);
-  else if (f === '_viewer_ov_clear') { for (const [id, c] of J.cm) if (a[0] < 0 || (c[0][1][2] ? 1 : 0) === a[0]) J.cm.delete(id); }
-}
-function engOvReplay(M) {
-  if (!M || !M._viewer_ov_add) return;
-  engOvInstall(M);
-  for (const [f, b] of engOvJ.faces) { const p = M._malloc(b.length); M.HEAPU8.set(b, p); M._viewer_ov_font_face(f, p, b.length); M._free(p); }
-  for (const [k, a] of engOvJ.set) M[k.split(':')[0]](...a);
-  for (const c of engOvJ.cm.values()) for (const [f, a, cps] of c) {
-    if (cps) { const p = M._viewer_ov_buf(cps.length); M.HEAP32.set(new Int32Array(cps.buffer, cps.byteOffset, cps.length), p >> 2); }
-    M[f](...a);
-  }
-}
 // (memory the page staged: its pretend pointers to this module's)
 const engMem = new Map();
 async function engFont(name, bytes, desc) {
@@ -3801,7 +3508,7 @@ const engCmd = async e => {
         const parts = [...K.recs.keys()].sort((x, y) => x - y).map(i => K.recs.get(i));
         const recs = new Uint8Array(parts.reduce((n, b) => n + b.length, 0));
         let o = 0; for (const b of parts) { recs.set(b, o); o += b.length; }
-        liveBackTake(K, session, d.click); engKeptPost(); engPost({ ev: 'ret', id: d.id, ok: true, recs, firstGame: K.firstGame });
+        liveBackTake(K, session, d.click); engKeptPost(); engPost({ ev: 'ret', id: d.id, ok: true, recs, firstGame: K.firstGame, moved: K.recs.size > 0 && Math.max(...K.recs.keys()) > K.game });
       }
     } else if (d.cmd === 'tl') {  // (tests: the frame timeline on (reset) / off (its records back))
       const M = session && session.M;
@@ -3811,7 +3518,7 @@ const engCmd = async e => {
         if (!self.__engTlW) {
           self.__engTlW = 1;
           const T = (name, f) => function (...a) { if (!engTL) return f.apply(this, a); const t0 = performance.now(); try { return f.apply(this, a); } finally { engTlPart[name] = (engTlPart[name] || 0) + performance.now() - t0; } };
-          incTick = T('incTick', incTick); hashRuns = T('hashRuns', hashRuns); preCopyHot = T('preCopyHot', preCopyHot); incCommit = T('incCommit', incCommit); kfTexAdd = T('kfTexAdd', kfTexAdd); storeGc = T('storeGc', storeGc); thin = T('thin', thin); packSend = T('packSend', packSend);
+          keyframe = T('keyframe', keyframe); kfTexAdd = T('kfTexAdd', kfTexAdd); storeGc = T('storeGc', storeGc); thin = T('thin', thin);
           if (typeof fbSample === 'function') fbSample = T('fbSample', fbSample);
         }
         if (M && !M.__tlW) { M.__tlW = 1; const h = M.mbaaFrame; M.mbaaFrame = function (f) { if (!engTL) return h(f); const t0 = performance.now(); try { return h(f); } finally { engTlPart.hook = (engTlPart.hook || 0) + performance.now() - t0; } }; }
@@ -3820,6 +3527,13 @@ const engCmd = async e => {
       } else { const r = engTL || [], cmds = engTlCmds, timers = engTlTimers; engTL = null; engTlCmds = {}; engTlTimers = {}; if (M && M._viewer_prof_on && !self.__mbaaProfOn) M._viewer_prof_on(0); engPost({ ev: 'ret', id: d.id, tl: r, cmds, timers, kfv: self.__kfVerify || null, kfs: session && session.tl ? session.tl.kfs.map(k => [k.frame, k.pending ? 1 : 0]) : null, drops: session && session.tl ? session.tl.incDropped || 0 : 0, dropPages: session && session.tl && session.tl.incStat ? session.tl.incStat.dropPages.slice() : null }); }
     } else if (d.cmd === 'stateRows') {  // (?swhash=1 tests: __mbaaStateRows)
       engPost({ ev: 'ret', id: d.id, v: await stateRowsTake(d.k, d.n) });
+    } else if (d.cmd === 'ctxRows') {  // (?swhash=1 tests: __mbaaCtxRows)
+      engPost({ ev: 'ret', id: d.id, v: ctxRowsTake(d.n, d.mb || 384) });
+    } else if (d.cmd === 'grid') {  // (?swhash=1 tests: __mbaaGrid; urls empty: off)
+      engPost({ ev: 'ret', id: d.id, v: d.urls.length ? await gridStart(d.urls, d.cols) : (gridStop(), {}) });
+    } else if (d.cmd === 'ctxTiles') {  // (?swhash=1 tests: __mbaaCtxTiles)
+      const v = await ctxTilesTake(d.ks, d.turn || 0);
+      engPost({ ev: 'ret', id: d.id, v }, v && v.canvas ? [v.canvas.buffer] : undefined);
     } else if (d.cmd === 'eval') {  // (tests, tools/stage3d/s3d_render_ab.py: a function's source run here with the module)
       let v, err = null;
       try { v = await (0, eval)('(' + d.src + ')')(session && session.M, d.arg); } catch (e) { err = String(e && e.stack || e); }
@@ -3861,14 +3575,13 @@ const engCmd = async e => {
       if (M) engOvInstall(M);
       if (d.f === '_viewer_ov_font_face' && engMem.has(d.a[1])) engFont(`MbaaOv${d.a[0]}`, engMem.get(d.a[1]).b.slice().buffer);
       if (d.f === '_viewer_represent') engRepresent = 4;
-      else if (M && M[d.f]) { M[d.f](...d.a.map(x => (engMem.has(x) ? engMem.get(x).p : x))); if (d.f.startsWith('_viewer_ov_')) engOvRecord(d.f, d.a); }
+      else if (M && M[d.f]) { M[d.f](...d.a.map(x => (engMem.has(x) ? engMem.get(x).p : x))); }
     } else if (d.cmd === 'mem') {
-      const M = session.M, p = M._malloc(d.b.length); M.HEAPU8.set(d.b, p); engMem.set(d.p, { p, b: d.b });
+      const M = session.M, p = M._viewer_heap_malloc(d.b.length); M.HEAPU8.set(d.b, p); engMem.set(d.p, { p, b: d.b });  // (process heap: kept across restores)
     } else if (d.cmd === 'memFree') {
-      const m = engMem.get(d.p); engMem.delete(d.p); if (m && session) session.M._free(m.p);
+      const m = engMem.get(d.p); engMem.delete(d.p); if (m && session) session.M._viewer_heap_free(m.p);
     } else if (d.cmd === 'ovbuf') {
       const M = session.M, p = M._viewer_ov_buf(d.cps.length); M.HEAP32.set(new Int32Array(d.cps.buffer, d.cps.byteOffset, d.cps.length), p >> 2);
-      engOvJ.cps = d.cps;
     } else if (d.cmd === 'ovLists') {
       if (d.reset) { engOv.emo = [null]; engOv.run = [null]; engOv.runW.clear(); engOv.sans = d.sans; engOv.serif = d.serif; }
       if (d.flags && d.flags.src && !engOv.fonts++) engFont('MbaaFlags', d.flags.src, d.flags.range ? { unicodeRange: d.flags.range } : {});
@@ -4072,12 +3785,8 @@ function sbHook(f) {
 function sbDropAfter(s, f) {
   const t = s.tl;
   if (!t) return;
-  const drop = k => { for (const p of k.pages) pageRef(t, p, -1); kfTexDrop(t, k); };
-  if (t.inc) {
-    if (t.inc.kf) { const at = t.kfs.indexOf(t.inc.kf); if (at >= 0) { t.kfs.splice(at, 1); drop(t.inc.kf); } }
-    t.inc = null;
-  }
-  for (let i = t.kfs.length - 1; i >= 0 && t.kfs[i].frame > f; i--) { const [k] = t.kfs.splice(i, 1); drop(k); }
+  for (let i = t.kfs.length - 1; i >= 0 && t.kfs[i].frame > f; i--) kfDrop(t, t.kfs[i]);
+  kfBytes(t);
   t.lastKf = t.kfs.length ? t.kfs[t.kfs.length - 1].frame : -1;
   if (t.simMax > f) t.simMax = f;
   t.marks = t.marks.filter(m => m[0] <= f);
