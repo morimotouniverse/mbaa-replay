@@ -3604,7 +3604,7 @@ async function ctxTilesTake(items, turn = 0) {
     const t0 = performance.now(), ks = items.map(it => Array.isArray(it) ? it[1] : it);
     for (const [i, it] of items.entries()) {
       const k = ks[i], rep = Array.isArray(it) ? await ctxRepGet(M, it[0]) : s.rep;   // (an [url, k]: that replay)
-      const id = M._viewer_ctx_new(128);
+      const id = M._viewer_ctx_new(CTX_ARENA_MB);
       if (id < 0) return { err: 'ctx_new' };
       ids.push(id);
       const e = inCtx(id, () => {
@@ -3696,7 +3696,7 @@ async function gridStart(urls, cols) {
   const t0 = performance.now(), made = [];
   for (const u of urls) {
     const rep = await ctxRepGet(M, u);
-    const id = M._viewer_ctx_new(128);   // (a match's arena holds 23-37 MB once loaded; nine of them in wasm's 4 GB)
+    const id = M._viewer_ctx_new(CTX_ARENA_MB);
     if (id < 0) { made.push({ u, err: 'no room' }); continue; }
     M._viewer_ctx_enter(id);
     let ok = false;
@@ -3726,6 +3726,9 @@ function gridStop() {
 }
 // the tiles shown: the session's match, the replay contexts, the live tiles that have joined (tileIds); cols: as asked,
 // else the smallest square that holds them
+// a match context's arena (MB): its peak is a character's sprite load, the whole pixel buffer at once (Archetype:Earth:
+// 63 MB on 81 MB in use, a trap at 128; ~52 MB once loaded); with the engine's own 768 MB, eleven in wasm's 4 GB
+const CTX_ARENA_MB = 256;
 let gridCols = 0, gridTileIds = [];  // (gridTileIds: the page's, the live ids of tiles 1.. (null: a replay tile))
 function gridApply(M) {
   const ids = [0, ...gridIds, ...(typeof tileIds === 'function' ? tileIds() : [])].slice(0, 16);

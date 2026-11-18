@@ -2072,7 +2072,7 @@ async function ctxTilesTake(items, turn = 0) {
     const t0 = performance.now(), ks = items.map(it => Array.isArray(it) ? it[1] : it);
     for (const [i, it] of items.entries()) {
       const k = ks[i], rep = Array.isArray(it) ? await ctxRepGet(M, it[0]) : s.rep;   // (an [url, k]: that replay)
-      const id = M._viewer_ctx_new(128);
+      const id = M._viewer_ctx_new(CTX_ARENA_MB);
       if (id < 0) return { err: 'ctx_new' };
       ids.push(id);
       const e = inCtx(id, () => {
@@ -2161,7 +2161,7 @@ async function gridStart(urls, cols) {
   const t0 = performance.now(), made = [];
   for (const u of urls) {
     const rep = await ctxRepGet(M, u);
-    const id = M._viewer_ctx_new(128);   // (a match's arena holds 23-37 MB once loaded; nine of them in wasm's 4 GB)
+    const id = M._viewer_ctx_new(CTX_ARENA_MB);
     if (id < 0) { made.push({ u, err: 'no room' }); continue; }
     M._viewer_ctx_enter(id);
     let ok = false;
@@ -2190,9 +2190,11 @@ function gridStop() {
   for (const id of gridIds) M._viewer_ctx_delete(id);
   gridIds = [];
 }
-// viewer.js:3729
+// viewer.js:3731
+const CTX_ARENA_MB = 256;
+// viewer.js:3732
 let gridCols = 0, gridTileIds = [];  // (gridTileIds: the page's, the live ids of tiles 1.. (null: a replay tile))
-// viewer.js:3730
+// viewer.js:3733
 function gridApply(M) {
   const ids = [0, ...gridIds, ...(typeof tileIds === 'function' ? tileIds() : [])].slice(0, 16);
   if (ids.length < 2) { M._viewer_grid_set(0, 0, 1); return; }
@@ -2254,7 +2256,7 @@ async function tileStart(m) {
     const rep = await ctxRepGet(M, new Uint8Array(await r.arrayBuffer()));
     const first = await tileRec(T);
     alive();
-    const id = M._viewer_ctx_new(128);
+    const id = M._viewer_ctx_new(CTX_ARENA_MB);
     if (id < 0) throw new Error('no room');
     T.ctx = id;
     let ok = false;
@@ -2699,11 +2701,11 @@ function liveBegin(s) {  // play(): after viewer_play
   };
   poll();
 }
-// viewer.js:3821
+// viewer.js:3824
 const nextCard = { s: null, id: null, at: 0, timer: 0, raf: 0, stay: null, why: null };
-// viewer.js:3822
+// viewer.js:3825
 const liveName = m => m.matchup || (m.names || []).map(n => (n || '').trim()).join(' vs ');
-// viewer.js:4125
+// viewer.js:4128
 const curFrame = () => session ? (session.tl && session.tl.want !== null ? session.tl.want : session.M._viewer_frame()) : 0;
 function stepBy(n, pause = true) {
   if (!session || !session.tl) return Promise.resolve();
@@ -2716,26 +2718,26 @@ function stepBy(n, pause = true) {
   }
   return requestSeek(curFrame() + n);
 }
-// viewer.js:4200
-const FB_CAP = 1024, FB_PER = 20, FB_N = 2 * FB_PER + 7, FB_CELLS = 75, FB_MEM = 400, FB_INTERVAL = 20;
 // viewer.js:4203
+const FB_CAP = 1024, FB_PER = 20, FB_N = 2 * FB_PER + 7, FB_CELLS = 75, FB_MEM = 400, FB_INTERVAL = 20;
+// viewer.js:4206
 const FBC = { INACT: 1, JUMP: 2, HITSTUN: 3, BLOCK: 4, ACTIVE: 5, FREE: 6, ADV: 7, NEUTRAL: 8, FREEZE: 9, THROWN: 11,
               HITSTOP: 12, SHIELD: 13, THROW: 14 };
-// viewer.js:4207
+// viewer.js:4210
 const fb = { on: false, s: null, raw: null, tag: null, last: -1, procF: -1, rebuild: false, dirty: false, m: null, cv: null, place: true };
-// viewer.js:4208
+// viewer.js:4211
 function fbMachine() {
   const P = () => ({ main: new Uint8Array(FB_MEM), sub: new Uint8Array(FB_MEM), air: new Uint8Array(FB_MEM), proj: new Uint8Array(FB_MEM),
                      lastBusy: 0, lastActive: 0, lastProj: 0, firstActive: 0, firstCounter: 0, gotFirst: false, total: 0 });
   return { p: [P(), P()], counter: 0, interval: 0, intervalMax: FB_CELLS, isReset: false, doReset: false, doAdv: false,
            shared: 0, lastFc: 0, lastTrue: -1, clock: 0, inEx: false, freeAt: [-1, -1], adv: 0, advCell: -1, any: false };
 }
-// viewer.js:4214
+// viewer.js:4217
 function fbResetBars(m) {
   m.isReset = true; m.counter = 0; m.advCell = -1; m.interval = 0; m.doReset = false; m.intervalMax = FB_CELLS;
   for (const P of m.p) { P.main.fill(0); P.sub.fill(0); P.air.fill(0); P.proj.fill(0); }
 }
-// viewer.js:4219
+// viewer.js:4222
 function fbStep(m, R, o) {
   const g = o + 2 * FB_PER, X = [o, o + FB_PER];
   if (R[g + 3] !== 1) return;  // (not in a battle)
@@ -2780,7 +2782,7 @@ function fbStep(m, R, o) {
   }
   m.lastFc = fc; m.lastTrue = trueF;
 }
-// viewer.js:4264
+// viewer.js:4267
 function fbCell(m, P, R, x, g) {
   const first = () => { if (!P.gotFirst) { P.firstActive = P.firstCounter; P.gotFirst = true; } };
   let c;
@@ -2804,7 +2806,7 @@ function fbCell(m, P, R, x, g) {
   const k = m.counter % FB_MEM;
   P.main[k] = c; P.sub[k] = R[x + 12]; P.air[k] = R[x + 9] === 1 ? (R[x + 11] ? 2 : 1) : 0; P.proj[k] = R[x + 14] ? 1 : 0;
 }
-// viewer.js:4287
+// viewer.js:4290
 function fbClear(s) {
   fb.s = s; fb.last = -1; fb.procF = -1; fb.rebuild = false; fb.m = fbMachine(); fb.dirty = true;
   if (!fb.raw) { fb.raw = new Int32Array(FB_CAP * FB_N); fb.tag = new Int32Array(FB_CAP); }
@@ -2818,7 +2820,7 @@ function fbSample(s, f) {
   const p = M._viewer_framebar_sample() >> 2;
   fbPut(s, f, M.HEAP32.subarray(p, p + FB_N));
 }
-// viewer.js:4293
+// viewer.js:4296
 function fbPut(s, f, R) {
   if (fb.s !== s) fbClear(s);
   const i = f % FB_CAP;
@@ -2836,11 +2838,11 @@ function fbSeekBack(T) {
   for (let f = Math.max(0, T - FB_BACK); f < T; f++) if (fb.tag[f % FB_CAP] !== f) return FB_BACK;
   return 0;
 }
-// viewer.js:4392
+// viewer.js:4395
 let overlayDirty = true, lastDrawnFrame = -1;
-// viewer.js:4485
+// viewer.js:4488
 let seekDragging = false, marksKey = '';
-// viewer.js:4892
+// viewer.js:4895
 function perfProfiler(host) {
   const WAIT = Q.get('perfwait') || 'battle', GPU_MODE = /^(fence|off)$/.test(Q.get('perfgpu') || '') ? Q.get('perfgpu') : 'sync';
   const GPU_N = Math.max(5, +(Q.get('perfgpuN') || 30));
@@ -3113,7 +3115,7 @@ function perfProfiler(host) {
   if (WAIT !== 'manual') host.panel(WAIT === '0' ? 'perf: waiting for the game' : 'perf: waiting for a battle', P);
   return P;
 }
-// viewer.js:5223
+// viewer.js:5226
 function wantFor(rep) {
   if (!man.plan) return null;
   let want = planFiles(man, repKeys(rep));
@@ -3121,18 +3123,18 @@ function wantFor(rep) {
   if (Q.get('planDrop')) { const re = new RegExp(Q.get('planDrop')); want = new Set([...want].filter(f => !re.test(f))); }
   return want;
 }
-// viewer.js:5234
+// viewer.js:5237
 const MOVIE = 'dat/dat_m_vs.vsmv';
-// viewer.js:5239
+// viewer.js:5242
 let movieBytes = null, movieH264 = null, movieLoading = null, movieHook = null;
-// viewer.js:5275
+// viewer.js:5278
 function movieConfig(b) {
   if (!b.length) return { codec: 'avc1.640020', codedWidth: 640, codedHeight: 480 };
   const dv = new DataView(b.buffer, b.byteOffset, b.byteLength), u = i => dv.getUint32(i, true), dl = u(24), cl = u(28);
   return { codec: new TextDecoder().decode(b.subarray(32, 32 + cl)), codedWidth: u(8), codedHeight: u(12),
            description: b.slice(32 + cl, 32 + cl + dl), optimizeForLatency: true };
 }
-// viewer.js:5285
+// viewer.js:5288
 function movieVideo(b) {
   const dv = new DataView(b.buffer, b.byteOffset, b.byteLength), u = i => dv.getUint32(i, true);
   const cfg = movieConfig(b), n = u(16), key = u(20), tab = 32 + u(28) + u(24), off = i => u(tab + 4 * i);
@@ -3170,7 +3172,7 @@ function movieVideo(b) {
     },
   };
 }
-// viewer.js:5351
+// viewer.js:5354
 let xf = null, xfRuns = 0;
 // (live) the select screen's files in the background; until they are in MEMFS the game is held on reaching the result
 // screen (scene 5) or the retry menu, where the next select may follow (a match lasts minutes: in practice never held)
@@ -3187,11 +3189,11 @@ function liveCssBg(s, paths) {
     .catch(e => { console.warn('live: select screen files:', e); if (session === s) { s.cssBgP = null; s.cssBgHeld = false; liveHoldApply(s); } });
   if (s.livePic) s.cssBgGo(); else setTimeout(s.cssBgGo, 20000);
 }
-// viewer.js:5570
+// viewer.js:5573
 let loopOn = false;
-// viewer.js:5667
+// viewer.js:5670
 let clipPanel = false, clipPanelKey = '', clipDrag = null;
-// viewer.js:5858
+// viewer.js:5861
 function liveTapes(s) {
   const L = s.liveSrc;
   if (!L || !s.M) return;
@@ -3218,17 +3220,17 @@ function liveTapes(s) {
   const can = liveClipCan();
   if (can !== L.clipCan) { L.clipCan = can; clipPanelKey = ''; marksKey = ''; }
 }
-// viewer.js:6141
+// viewer.js:6144
 let clipLt = null;  // {name, bytes} or null
-// viewer.js:7422
+// viewer.js:7425
 let labCfg = null, labOn = null;
-// viewer.js:7423
+// viewer.js:7426
 function labApply(c) {
   labCfg = c || null;
   self.__mbaaLabSet = c && c.set ? c.set : null;
   labAttach();
 }
-// viewer.js:7428
+// viewer.js:7431
 function labAttach() {
   const m = session && session.M;
   if (labOn && labOn !== m) { try { delete labOn.__labSync; labOn.__labVoid = 0; labOn.mbaaRadioDefer = labOn.__labDefer; delete labOn.__labDefer; } catch (e) {} labOn = null; }
@@ -3240,7 +3242,7 @@ function labAttach() {
     m.__labVoid = labCfg.void ? 1 : 0; labOn = m;
   } else if (labOn === m) { delete m.__labSync; m.__labVoid = 0; m.mbaaRadioDefer = m.__labDefer; delete m.__labDefer; labOn = null; }
 }
-// viewer.js:7441
+// viewer.js:7444
 function labInfo() {
   const m = session && session.M, objs = [];
   if (m && m.HEAPU8 && !m.__remote) {
