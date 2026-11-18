@@ -691,6 +691,9 @@
   body.mob #chatsec .cpk-hex { font-size: 16px; }
   #chatsec .moons canvas, #chatsec .cgrid canvas { cursor: pointer; border-radius: 4px; border: 2px solid transparent; }
   #chatsec .moons canvas.on, #chatsec .cgrid canvas.on { border-color: #fff; background: #ffffff18; }
+  #chatsec .moons .nomoon { height: 28px; padding: 0 8px; font-size: 11px; color: var(--faint); background: none; cursor: pointer;
+                            border: 2px solid var(--line); border-radius: 4px; vertical-align: top; }
+  #chatsec .moons .nomoon.on { color: #fff; border-color: #fff; background: #ffffff18; }
   #chatsec .cgrid { display: grid; grid-template-columns: repeat(auto-fill, 34px); grid-auto-rows: 44px; gap: 2px; max-height: 138px; overflow-y: auto; margin-top: 6px; }
   #chatsec .cform input#chatcmd { flex: 0 1 90px; font-size: 11px; color: var(--muted); }
   #chatsec:not(.adv) .cform input#chatcmd { display: none; }
@@ -2285,7 +2288,7 @@ onmessage = ({ data: m }) => {
   function profShow() {
     drawIcon($('.me'), prof.chara, prof.moon);
     $('.me').classList.toggle('unset', !validChara(prof.chara));
-    $('.phint').hidden = validChara(prof.chara) && prof.moon >= 0;
+    $('.phint').hidden = validChara(prof.chara) && (prof.moon >= 0 || prof.noMoon === 1);
     // (signed in, the name is the account's, never this device's guest nick: a colour / moon / character change drew
     // "viewer1234" here, users 2026-11-03 "your name gets changed to viewer-####")
     const n = $('.mynick'), mine = myShown(); n.textContent = mine === prof.nick ? mine : disp(mine); n.title = mine; inkSet(n, prof.color);
@@ -2293,6 +2296,7 @@ onmessage = ({ data: m }) => {
     $('#chatcolor').classList.toggle('on', !PRESETS.some(c => c.toLowerCase() === String(prof.color).toLowerCase()));
     sec.querySelectorAll('.sw').forEach(b => b.classList.toggle('on', b.dataset.c.toLowerCase() === prof.color.toLowerCase()));
     sec.querySelectorAll('.moons canvas').forEach((c, m) => c.classList.toggle('on', m === prof.moon));
+    sec.querySelector('.moons .nomoon').classList.toggle('on', prof.moon < 0 && prof.noMoon === 1);
     sec.querySelectorAll('.cgrid canvas').forEach(c => c.classList.toggle('on', +c.dataset.c === prof.chara));
     toolHook();
   }
@@ -2308,9 +2312,14 @@ onmessage = ({ data: m }) => {
     const cv = document.createElement('canvas'); cv.width = cv.height = 24; cv.title = MOON_NAME[m] ? MOON_NAME[m] + ' Moon' : '';
     cv.width = cv.height = 48; cv.style.width = cv.style.height = '24px';  // (2x: the SVG drawn sharp)
     whenMoons(() => moonDraw(cv.getContext('2d'), m, 0, 0, 48, 48));
-    cv.onclick = () => { prof.moon = m; saveProf(); profShow(); };
+    cv.onclick = () => { prof.moon = m; prof.noMoon = 0; saveProf(); profShow(); };
     $('.moons').append(cv);
   });
+  // (no moon: no mark on the icon and none sent; user 2026-11-14 "users cant disable moons on their character profile")
+  { const b = document.createElement('button');
+    b.type = 'button'; b.className = 'nomoon'; b.textContent = 'none'; b.title = 'no moon on your icon';
+    b.onclick = () => { prof.moon = -1; prof.noMoon = 1; saveProf(); profShow(); };
+    $('.moons').append(b); }
   for (const c of CHARAS) {
     const cv = iconCanvas('', 80, c, -1);  // (2x: sharp on high-DPI screens)
     cv.style.width = '30px'; cv.style.height = '40px';
@@ -2721,12 +2730,15 @@ onmessage = ({ data: m }) => {
     return songs.get(id);
   }
   let songAudio = null;  // (one preview plays at a time)
+  // another site's picture / video / sound through this origin (replay_worker.js /px): the page is cross-origin
+  // isolated (the engine's wasm threads) and loads nothing cross-origin that does not opt in
+  const px = src => /^https:\/\//.test(src || '') && !src.startsWith(location.origin + '/') ? `/px?u=${encodeURIComponent(src)}` : src;
   function extEmbed(u) {
     const x = extUrl(u);
     if (!x) return null;
     const a = document.createElement('a');
     a.className = 'xcard'; a.href = u; a.target = '_blank'; a.rel = 'noopener noreferrer nofollow'; a.title = u;
-    const img = src => { const i = document.createElement('img'); i.loading = 'lazy'; i.decoding = 'async'; i.alt = ''; i.referrerPolicy = 'no-referrer'; i.src = src;
+    const img = src => { const i = document.createElement('img'); i.loading = 'lazy'; i.decoding = 'async'; i.alt = ''; i.referrerPolicy = 'no-referrer'; i.src = px(src);
       // (a picture that does not load: the card shows the link instead of an empty box)
       i.onerror = () => { a.classList.add('noimg'); if (!a.querySelector('.xcap')) a.append(cap(x.hostname.replace(/^www\./, ''), cleanUrl(u))); }; return i; };
     const cap = (site, t) => { const d = document.createElement('span'); d.className = 'xcap'; const b = document.createElement('b'); b.textContent = site; d.append(b, ' ', t); return d; };
@@ -2788,7 +2800,7 @@ onmessage = ({ data: m }) => {
             e.preventDefault(); e.stopPropagation();
             if (songAudio && songAudio.__pb === pb) { songAudio.pause(); songAudio = null; pb.textContent = '▶'; return; }
             if (songAudio) { songAudio.pause(); songAudio.__pb.textContent = '▶'; }
-            const au = new Audio(t.preview); au.__pb = pb; au.volume = 0.6; songAudio = au;
+            const au = new Audio(px(t.preview)); au.__pb = pb; au.volume = 0.6; songAudio = au;
             au.onended = au.onerror = () => { if (songAudio === au) songAudio = null; pb.textContent = '▶'; };
             au.play().then(() => { if (songAudio === au) pb.textContent = '❚❚'; }, () => { if (songAudio === au) songAudio = null; });
           };
@@ -4064,9 +4076,9 @@ onmessage = ({ data: m }) => {
   function glovReady() {
     const M = glovSession();
     if (!M || !glovFont()) return null;
-    // (a new instance, or the same one after a memory restore (viewer.js ovRestored): set up again)
-    if (glov.M !== M || glov.gen !== (M.mbaaMemGen || 0)) {
-      glov.M = M; glov.gen = M.mbaaMemGen || 0;
+    // (a new instance: set up)
+    if (glov.M !== M) {
+      glov.M = M;
       for (let f = 0; f < GLOV_FILE.length; f++) glovFaceSend(M, f);
       M.mbaaOvEmoji = glovEmoji; M.mbaaOvRunW = glovRunW; M.mbaaOvRun = glovRun;
       M.mbaaOvEmoFrames = glovEmoFrames; M.mbaaOvEmoDur = glovEmoDur; M.mbaaOvEmoAr = glovEmoAr;
@@ -4808,7 +4820,7 @@ onmessage = ({ data: m }) => {
     if (prof.dirty && (!answer || (prof.mt || 0) > sync.sentAt)) { profPush(true); return; }
     const color = '#' + mm[1].toLowerCase(), chara = validChara(+mm[2]) ? +mm[2] : -1, moon = +mm[3];
     const changed = color !== String(prof.color).toLowerCase() || chara !== prof.chara || moon !== prof.moon;
-    Object.assign(prof, { color, chara, moon, dirty: 0 }); lookSaved = lookOf();
+    Object.assign(prof, { color, chara, moon, noMoon: moon < 0 ? 1 : 0, dirty: 0 }); lookSaved = lookOf();
     if (changed) prof.mt = Date.now();  // (own older messages in history do not undo it)
     store.set('mbaa-chat-profile', prof);
     if (changed) try { profShow(); } catch (e) {}
@@ -4918,7 +4930,7 @@ onmessage = ({ data: m }) => {
       let r = null, j = {};
       try { r = await fetch(`${AUTH_URL}/${what}`, { method: 'POST', credentials: 'same-origin', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name }) }); j = await r.json().catch(() => ({})); } catch (e2) {}
       if (!r || r.status !== 200) {
-        auth.err = { bad_name: 'that name is not allowed (letters, digits, a few symbols; not too long)', name_taken: 'that name is taken' }[j.error] || (j.detail || j.error || 'could not save the name');
+        auth.err = j.detail || { bad_name: 'that name is not allowed', name_taken: 'that name is taken' }[j.error] || j.error || 'could not save the name';  // (the account service's own reason when it gives one)
         authShow(); return;
       }
       auth.err = ''; auth.renaming = false;
