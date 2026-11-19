@@ -252,6 +252,9 @@ const HASH = Q.get('hash') === '1', PERF = Q.get('perf') === 'pace', CAPTURE = Q
 // viewer.js:242
 const KF_EVERY = Math.max(10, +(Q.get('kf') || 300));  // playback keyframe interval (frames)
 const KF_NEAR = 30;  // a seek that re-simulates further than 3x this keyframes about KF_NEAR frames before its target
+// (Movie Maker's engine: its own match (the source monitor) gets a clip context's arena, not the 768 MB default, so the
+// timeline's replays fit in the heap beside it)
+const MOVIE_ENGINE = Q.get('movie') === '1';
 const FREE_FILES = Q.get('free') !== '0';  // (low memory: a match's files freed once it has loaded; ?free=0: kept, tests)
 const KF_BUDGET = +(Q.get('kfmb') || (LOWMEM ? 40 : 450)) * 1e6;
 // the store textures the kept keyframes pin (kfTexBytes) have a budget of their own: over it, keyframes thin as over KF_BUDGET
@@ -503,7 +506,7 @@ function engineWarm() {
     const wasmV = ((document.querySelector('script[src^="mbaa.js"]') || {}).src || '').split('?')[1];
     const modP = (async () => {
       if (SPECTOR_P) await SPECTOR_P;
-      return MBAA({ print: t => console.log(t), printErr: t => console.warn(t), canvas: freshCanvas(), mbaaStoreKeep: !LOWMEM,
+      return MBAA({ print: t => console.log(t), printErr: t => console.warn(t), onRuntimeInitialized() { if (Q.get('memLog') === '1' && this._viewer_arena_big_log) this._viewer_arena_big_log(1); }, canvas: freshCanvas(), mbaaStoreKeep: !LOWMEM,
                     locateFile: p => (wasmV && p.endsWith('.wasm') ? `${p}?${wasmV}` : p) });
     })();
     await fetchAll(man, boot, '', true);
@@ -522,6 +525,7 @@ function engineWarm() {
     try { call(w, 'viewer_rate', 1); } catch (e) {}
     call(w, 'viewer_stage_anim', Q.get('stageAnim') !== null ? +(Q.get('stageAnim') !== '0') : 1);
     if (Q.get('seal') === '0') call(w, 'viewer_seal_off', 1);
+    if (MOVIE_ENGINE) call(w, 'viewer_match_arena', CTX_ARENA_MB);
     if (!call(w, 'viewer_boot')) return null;
     M._viewer_seal_boot();
     if (M._viewer_files_open()) return null;
@@ -570,7 +574,7 @@ async function newSession(rep, name, want) {
   // mbaaStoreKeep: the texture store keeps the last match's textures for the next one (web/host/browser/d3d9_gl.cpp)
   bootMark('moduleStart');
   if (SPECTOR_P) await SPECTOR_P;
-  const M = await MBAA({ print: t => console.log(t), printErr: t => console.warn(t), canvas: freshCanvas(), mbaaStoreKeep: !LOWMEM,
+  const M = await MBAA({ print: t => console.log(t), printErr: t => console.warn(t), onRuntimeInitialized() { if (Q.get('memLog') === '1' && this._viewer_arena_big_log) this._viewer_arena_big_log(1); }, canvas: freshCanvas(), mbaaStoreKeep: !LOWMEM,
                          locateFile: p => (wasmV && p.endsWith('.wasm') ? `${p}?${wasmV}` : p) });
   gpuLostHook(M);
   bootMark('module');
@@ -638,6 +642,7 @@ async function play(rep, name, catchUp = 0, want = null, liveId = null, select =
   call(s, 'viewer_stage_anim', Q.get('stageAnim') !== null ? +(Q.get('stageAnim') !== '0') : HASH ? 0 : 1);
   if (Q.get('seal') === '0') call(s, 'viewer_seal_off', 1);
   bootMark('session');
+  if (MOVIE_ENGINE) call(s, 'viewer_match_arena', CTX_ARENA_MB);
   if (!call(s, 'viewer_boot')) { window.__mbaaStarted = -1; loading(false); status('start failed (see console)'); return; }
   // boot textures to the GPU store first: the snapshot (and every keyframe) then holds no pixels
   bootMark('booted');
@@ -777,6 +782,7 @@ function timelineInit(s) {
                      want: null, running: false, round: -1, scene: -1, est: repEstimate(s.rep), M };
   M.mbaaTexKfRef = new Map();  // (a reused instance: the last match's keyframes are gone with its timeline)
   for (const [k, n] of M.mbaaTexHold || []) M.mbaaTexKfRef.set(k, n);  // (a kept live match's: liveKeepTake)
+  for (const [k, n] of M.mbaaTexClip || []) M.mbaaTexKfRef.set(k, (M.mbaaTexKfRef.get(k) || 0) + n);  // (the Movie Maker clips' keyframes: clipKf)
   M.mbaaFrame = f => {
     if (fb.on) fbSample(s, f);  // (the frame bar: every frame, a seek's re-simulation too)
     if (f > t.simMax) {
@@ -1191,7 +1197,7 @@ async function liveSnapJoin(s) {
   const t = s.tl;
   if (M._viewer_spectate_set_first_game) M._viewer_spectate_set_first_game(L.firstGame ?? L.info.game);   // (the snapshot's same-game check)
   const buf = M._malloc(sn.bytes.length);
-  M.HEAPU8.set(sn.bytes, buf);
+  M.kdMark(buf, sn.bytes.length); M.HEAPU8.set(sn.bytes, buf);
   const tl = performance.now(), r = M._viewer_snap_load(buf, sn.bytes.length);
   J.loadMs = performance.now() - tl;
   M._free(buf);
@@ -1495,7 +1501,7 @@ function liveKeep(L, b) {
 }
 function liveFeed(s, b) {
   const p = s.M._malloc(b.length);
-  s.M.HEAPU8.set(b, p);
+  s.M.kdMark(p, b.length); s.M.HEAPU8.set(b, p);
   call(s, 'viewer_spectate_feed', p, b.length);
   s.M._free(p);
 }
@@ -1663,6 +1669,8 @@ function liveSetupCheck(s, p) {
     console.log(`live: game ${p.game}: stage ${H[STAGE_ID >> 2]} -> ${S.stage}, palettes ${H[slot(0, 4)]},${H[slot(1, 4)]} -> ${S.color}`);
   // (the battle music: g_StageBgmId, the stage's own unless a pick set another (a replay's playback sets it to the
   // stage id): with the stage when it was our stage's, else our select left the bgm of a stage that isn't loaded)
+  // (kd_pre.js: the game globals written here marked, as every write into the memory)
+  s.M.kdMark(STAGE_BGM, 1); s.M.kdMark(STAGE_ID, 4); for (const q of [0, 1]) s.M.kdMark(slot(q, 4) << 2, 4);
   if ((s.M.HEAPU8[STAGE_BGM] << 24 >> 24) === H[STAGE_ID >> 2]) s.M.HEAPU8[STAGE_BGM] = S.stage & 255;
   H[STAGE_ID >> 2] = S.stage;
   for (const q of [0, 1]) H[slot(q, 4)] = S.color[q];
@@ -2117,7 +2125,7 @@ async function ctxTilesTake(items, turn = 0) {
     if (cv) { cv.width = W; cv.height = H; }
     const tiles = [0, ...ids].slice(0, 4).map((id, i) => [id, (i % 2) * W / 2, (i >> 1) * H / 2, (i % 2 + 1) * W / 2, ((i >> 1) + 1) * H / 2]).flat();
     const tp = M._malloc(tiles.length * 4);
-    M.HEAP32.set(tiles, tp >> 2);
+    M.kdMark(tp, tiles.length * 4); M.HEAP32.set(tiles, tp >> 2);
     M._viewer_tiles_present(tp, tiles.length / 5);
     M._free(tp);
     // (the composite read back: WebGPU copies the canvas texture (same task); WebGL2 reads the canvas, rows bottom-up)
@@ -2199,7 +2207,7 @@ function gridApply(M) {
   const ids = [0, ...gridIds, ...(typeof tileIds === 'function' ? tileIds() : [])].slice(0, 16);
   if (ids.length < 2) { M._viewer_grid_set(0, 0, 1); return; }
   const p = M._malloc(ids.length * 4);
-  M.HEAP32.set(ids, p >> 2);
+  M.kdMark(p, ids.length * 4); M.HEAP32.set(ids, p >> 2);
   M._viewer_grid_set(p, ids.length, gridCols || Math.ceil(Math.sqrt(ids.length)));
   M._free(p);
 }
@@ -2217,7 +2225,7 @@ const tilePost = () => engPost({ ev: 'tiles', ids: [...gridIds.map(() => null), 
 function tileIn(M, T, f) { M._viewer_ctx_enter(T.ctx); try { return f(); } finally { M._viewer_ctx_leave(); } }
 function tileFeed(M, T, b) {
   const p = M._malloc(b.length);
-  M.HEAPU8.set(b, p);
+  M.kdMark(p, b.length); M.HEAPU8.set(b, p);
   try { tileIn(M, T, () => M._viewer_spectate_feed(p, b.length)); } finally { M._free(p); }
 }
 // (no v=: a tile is not counted as a viewer of its match)
@@ -2296,7 +2304,7 @@ async function tileStart(m) {
     alive();
     if (!sn) throw new Error('no snapshot');
     const p = M._malloc(sn.bytes.length);
-    M.HEAPU8.set(sn.bytes, p);
+    M.kdMark(p, sn.bytes.length); M.HEAPU8.set(sn.bytes, p);
     let res, why = '';
     try {
       res = tileIn(M, T, () => {
@@ -3222,15 +3230,15 @@ function liveTapes(s) {
 }
 // viewer.js:6144
 let clipLt = null;  // {name, bytes} or null
-// viewer.js:7425
+// viewer.js:7439
 let labCfg = null, labOn = null;
-// viewer.js:7426
+// viewer.js:7440
 function labApply(c) {
   labCfg = c || null;
   self.__mbaaLabSet = c && c.set ? c.set : null;
   labAttach();
 }
-// viewer.js:7431
+// viewer.js:7445
 function labAttach() {
   const m = session && session.M;
   if (labOn && labOn !== m) { try { delete labOn.__labSync; labOn.__labVoid = 0; labOn.mbaaRadioDefer = labOn.__labDefer; delete labOn.__labDefer; } catch (e) {} labOn = null; }
@@ -3238,11 +3246,11 @@ function labAttach() {
   if (labCfg) {
     if (labOn !== m) { m.__labDefer = m.mbaaRadioDefer; m.mbaaRadioDefer = 0; }
     const w = labCfg.words;
-    m.__labSync = ptr => { if (w) m.HEAP32.set(w, ptr >> 2); };
+    m.__labSync = ptr => { if (w) { m.kdMark(ptr, w.length * 4); m.HEAP32.set(w, ptr >> 2); } };
     m.__labVoid = labCfg.void ? 1 : 0; labOn = m;
   } else if (labOn === m) { delete m.__labSync; m.__labVoid = 0; m.mbaaRadioDefer = m.__labDefer; delete m.__labDefer; labOn = null; }
 }
-// viewer.js:7444
+// viewer.js:7458
 function labInfo() {
   const m = session && session.M, objs = [];
   if (m && m.HEAPU8 && !m.__remote) {
@@ -3259,6 +3267,306 @@ function labInfo() {
     }
   }
   return { stage: self.__mbaaLabStage || null, objs };
+}
+
+// ---- Movie Maker game clips on the engine (harness-design/engine_core/DESIGN.md phase 8b; user 2026-11-18: two clips
+// from two replays on the timeline, play across / seek between them with no hitch). Every distinct replay on the
+// editor's timeline is a warm match context (clipOpen): loaded once, then a background builder simulates it to its
+// end in slices of CLIP_SLICE_MS (the worker stays free for frame requests) and keeps a keyframe every CLIP_KF_EVERY
+// frames, every frame inside the clips' ranges (clipDense). A frame request (clipFrame) restores the keyframe just
+// before it and steps once (or steps on from where the context is), so any frame of any clip costs one restore + one
+// step; the picture is the context's own back buffer, presented alone on the canvas and read as a VideoFrame; the
+// engine's own match is put back on the canvas after.
+const CLIP_KF_EVERY = 30, CLIP_SLICE_MS = 4, CLIP_PAUSE_MS = 300, CLIP_FULL = Q.get('clipFull') === '1', CLIP_DBG = Q.get('clipDbg') === '1', CLIP_DD = Q.get('clipDD') === '1';   // (clipDD: the pages a drawn frame leaves differing from its keyframe, learned + logged)   // (clipFull: whole restores, the check)
+const clips = new Map();   // key -> C {key, ctx, M, frame (where its state is), drawn (the frame its back buffer holds),
+                           // kfs (Set of keyframe frames), built (the builder's frontier), end (null: not yet), dense}
+let clipPx = null, clipLastReq = 0;   // (clipLastReq: the last frame request of any clip)
+function clipIn(C, f) { C.M._viewer_ctx_enter(C.ctx); try { return f(); } finally { C.M._viewer_ctx_leave(); } }
+// (past the clips' ranges a keyframe only every CLIP_KF_FAR frames: those serve a trim moved out there (its frames then
+// made keyframes from the nearest, clipDense), and each costs its page table + pages (the heap: 2 GB for every replay)
+const CLIP_KF_FAR = 300;
+const clipEvery = (C, f) => C.dense.some(([a, b]) => f <= b + CLIP_KF_EVERY) ? CLIP_KF_EVERY : CLIP_KF_FAR;
+const clipDenseAt = (C, f) => C.dense.some(([a, b]) => f >= a - 2 && f <= b + 1);
+// (the sealed textures a clip keyframe's state names are held in the shared store while it is kept: the store's gc (the
+// monitor's own keyframes) and a new match's reset keep them (M.mbaaTexClip, counted into M.mbaaTexKfRef as the
+// timeline's own keyframes are); without, a restore to it drew whatever took those layers since)
+function clipTexRef(M, keys, by) {
+  const clip = M.mbaaTexClip || (M.mbaaTexClip = new Map()), ref = M.mbaaTexKfRef || (M.mbaaTexKfRef = new Map());
+  for (let i = 0; i + 2 < keys.length; i += 3) {
+    const k = keys[i] + ':' + keys[i + 1] + ':' + keys[i + 2];
+    const c = (clip.get(k) || 0) + by, r = (ref.get(k) || 0) + by;
+    if (c > 0) clip.set(k, c); else clip.delete(k);
+    if (r > 0) ref.set(k, r); else ref.delete(k);
+  }
+}
+function clipKf(C, f) {
+  if (C.kfs.has(f)) return;
+  const t0 = performance.now();
+  if (C.M._viewer_kf_take(f) >= 0) {
+    C.kfs.add(f); C.at = f; C.dirty = false;
+    C.M._viewer_tex_mark_own();
+    const keys = Int32Array.from(C.M.mbaaTexMark || []);
+    C.M.mbaaTexMark = null;
+    (C.tex || (C.tex = new Map())).set(f, keys);
+    clipTexRef(C.M, keys, 1);
+  }
+  C.kfMs = (C.kfMs || 0) + performance.now() - t0; C.kfN = (C.kfN || 0) + 1; C.kfMax = Math.max(C.kfMax || 0, performance.now() - t0);
+}
+// one step of the context (in it): true when the game advanced
+// (the sound calls of the step being simulated: audio_web.cpp js_clip_sfx -> Module.mbaaClipSfx, kept per frame in
+// C.sfx: [kind 'play' | 'param' | 'stop', ch, path (play), vol, pan], the game's DirectSound units)
+let clipSfxEv = null;
+function clipSfxHook(M) {
+  if (M.mbaaClipSfx) return;
+  M.mbaaClipSfx = (k, ch, path, vol, pan) => { if (clipSfxEv) clipSfxEv.push(k === 0 ? ['play', ch, path, vol, pan] : k === 1 ? ['param', ch, vol, pan] : ['stop', ch]); };
+  M._viewer_clip_sfx(1);
+}
+function clipStep(C, draw) {
+  const M = C.M, k0 = M._viewer_frame();
+  M.ccall('viewer_suppress', 'number', ['number'], [draw ? 0 : 1]);
+  const ev = clipSfxEv = [];
+  try { M.ccall('viewer_step', 'number', ['number'], [1]); } finally { M.ccall('viewer_suppress', 'number', ['number'], [0]); clipSfxEv = null; }
+  const f = M._viewer_frame();
+  if (f === k0) return false;
+  // (the game is deterministic: a frame simulated again makes the same calls)
+  if (ev.length) C.sfx.set(f, ev); else C.sfx.delete(f);
+  C.frame = f; C.drawn = draw ? f : -1;
+  // (the state is keyframe f's when f has one and no frame was drawn since the last restore / keyframe: the game is
+  // deterministic, but the renderer's buffers live in the match's memory, so a drawn frame leaves it no keyframe's)
+  if (draw) C.dirty = true;
+  C.at = !C.dirty && C.kfs.has(f) ? f : null;
+  if (CLIP_DBG && C.at !== null) clipDiff(C, f, 'step');
+  return true;
+}
+// (?clipDbg=1) the live state against keyframe f: the pages that differ, logged
+function clipDiff(C, f, why) {
+  const p = C.M._viewer_kf_diff(f);
+  if (!p) return;
+  const v = [...new Uint32Array(C.M.HEAP32.buffer, p, 6)];
+  if (v[0] || v[1] || v[2] || v[3] !== v[4]) console.warn(`clipdiff ${C.key} ${f} (${why}): block ${v[0]}, arena ${v[1]} (first page ${v[5]}), tls ${v[2]}, arena len ${v[3]} vs ${v[4]}`);
+}
+function clipRestore(C, k) {
+  if (CLIP_DBG && C.at !== null && C.at !== undefined && !C.dirty) clipDiff(C, C.at, `before restore to ${k}`);
+  const M = C.M;
+  const b0 = performance.now();
+  M.ccall('viewer_restore_begin', 'number', [], []);
+  for (const st of M.FS.streams) if (st && st.fd > 2) { try { M.FS.close(st); } catch (e) {} }
+  const b1 = performance.now();
+  // (from the keyframe the state is now: only the pages that differ, a few hundred KB between near frames; after a drawn
+  // frame: the live pages hashed against k's, the differing ones written; ?clipFull=1: whole, the check)
+  const known = C.at !== null && C.at !== undefined && !C.dirty, r0 = performance.now();
+  const delta = !CLIP_FULL && (known ? M._viewer_kf_restore_from(k, C.at) : M._viewer_kf_restore_live(k));
+  if (!delta && !M._viewer_kf_restore(k)) throw new Error(`clip keyframe ${k}: not restored`);
+  const e0 = performance.now();
+  M.ccall('viewer_restore_end', 'number', ['number'], [++C.gen]);
+  const e1 = performance.now();
+  C.frame = k; C.drawn = -1; C.at = k; C.dirty = false;
+  if (CLIP_DBG) clipDiff(C, k, `after ${delta ? (known ? 'delta' : 'live') : 'full'} restore`);
+  if (C.cur) { const sp = new Float64Array(M.HEAP32.buffer, M._viewer_restore_split(), 8), x = v => +v.toFixed(1); C.cur.r = { kind: delta ? (known ? 'd' : 'l') : 'f', ms: x(performance.now() - b0), begin: x(b1 - b0), call: x(e0 - r0), cpp: x(sp[7]), hash: x(sp[0]), put: x(sp[1]), nPut: sp[2], nHash: sp[3], tls: x(sp[4]), tlsKB: sp[5] >> 10, tail: x(sp[6]), end: x(e1 - e0) }; }
+  C.nDelta = (C.nDelta || 0) + (delta && known ? 1 : 0); C.nLive = (C.nLive || 0) + (delta && !known ? 1 : 0); C.nFull = (C.nFull || 0) + (delta ? 0 : 1);
+}
+// the context to frame f (in it): from where it is when that is at most CLIP_KF_EVERY frames before f, else from the
+// newest keyframe at or before f - 1; the last step drawn (draw): the back buffer holds frame f
+function clipGo(C, f, draw) {
+  if (C.frame === f && (!draw || C.drawn === f)) return true;
+  clipLeave(C);
+  let best = -Infinity;
+  for (const k of C.kfs) if (k <= f - (draw ? 1 : 0) && k > best) best = k;
+  const fromHere = C.frame < f && C.frame >= best;
+  if (!fromHere) {
+    if (best === -Infinity) return false;
+    clipRestore(C, best);
+  }
+  if (f - C.frame > CLIP_KF_EVERY + 2) console.warn(`clip ${C.key}: ${f - C.frame} steps to ${f} from ${C.frame} (best keyframe ${best}, fromHere ${fromHere}, ${C.kfs.size} keyframes, built ${C.built})`);
+  const s0 = performance.now(), n0 = C.frame;
+  while (C.frame < f) if (!clipStep(C, draw && C.frame === f - 1)) return false;
+  if (C.cur) { C.cur.steps = C.frame - n0; C.cur.stepMs = +(performance.now() - s0).toFixed(1); }
+  if (draw && C.drawn !== f) return false;
+  return true;
+}
+// (before the state leaves the builder's frontier: a keyframe there, so the builder goes on from it exactly)
+function clipLeave(C) { if (C.frame === C.built && !C.kfs.has(C.built)) clipKf(C, C.built); }
+// the first frame of the clips' ranges (from a - 1: the step that draws a is from a - 1's state) simulated already
+// and without its keyframe
+function clipMiss(C) {
+  for (const [a, b] of C.dense) for (let f = Math.max(0, a - 1); f <= Math.min(b, C.built); f++) if (!C.kfs.has(f)) return f;
+  return -1;
+}
+// The context's one background loop: the clips' ranges' keyframes first, then on to the replay's end; slices of
+// CLIP_SLICE_MS; waits while the player asks it for frames (the last second)
+async function clipBuild(C) {
+  if (C.building) return;
+  C.building = true;
+  try {
+    let still = 0;
+    while (clips.get(C.key) === C) {
+      // (paused while the editor asks for frames of any clip (the last CLIP_PAUSE_MS): playing, the engine is the player's)
+      if (performance.now() - clipLastReq < CLIP_PAUSE_MS) { await new Promise(r => setTimeout(r, 50)); continue; }
+      const miss = clipMiss(C);
+      if (miss < 0 && C.end !== null) break;
+      const t0 = performance.now();
+      let moved = false;
+      clipIn(C, () => {
+        if (miss >= 0) {   // (a clip range: to its first missing frame, then a keyframe every frame)
+          clipLeave(C);
+          if (C.frame !== miss && !clipGo(C, miss, false)) return;
+          while (performance.now() - t0 < CLIP_SLICE_MS) {
+            if (clipDenseAt(C, C.frame)) clipKf(C, C.frame);
+            if (C.frame >= C.built || !C.dense.some(([a, b]) => C.frame + 1 >= a - 1 && C.frame + 1 <= b)) break;
+            if (!clipStep(C, false)) break;
+          }
+          moved = true;
+          return;
+        }
+        if (C.frame !== C.built) {   // (the frontier's keyframe: clipLeave; else the newest before it)
+          let best = -Infinity;
+          for (const k of C.kfs) if (k <= C.built && k > best) best = k;
+          clipRestore(C, best); C.built = best;
+        }
+        while (performance.now() - t0 < CLIP_SLICE_MS) {
+          if (!clipStep(C, false)) { if (C.M._viewer_ended()) C.end = C.frame; break; }
+          moved = true;
+          C.built = C.frame;
+          if (C.frame % clipEvery(C, C.frame) === 0 || clipDenseAt(C, C.frame)) clipKf(C, C.frame);
+        }
+      });
+      { const sl = performance.now() - t0; if (sl > 50) console.warn(`clip ${C.key}: builder slice ${sl.toFixed(0)} ms at ${C.frame} (miss ${miss})`); }
+      still = moved ? 0 : still + 1;
+      if (C.end === null && still > 200 && C.built > 600) C.end = C.built;   // (held 200 slices past the battle: the tape's end)
+      await new Promise(r => setTimeout(r, moved ? 0 : 25));
+    }
+    if (C.end !== null) console.log(`clip ${C.key}: built to frame ${C.end}, ${C.kfs.size} keyframes, ${Math.round(performance.now() - C.t0)} ms`);
+  } finally { C.building = false; }
+}
+async function clipOpen(d) {
+  const s = session, M = s && s.M;
+  if (!M || !M._viewer_ctx_new) throw new Error('no engine');
+  if (CLIP_DD && M._viewer_arena_big_log) M._viewer_arena_big_log(1);
+  clipSfxHook(M);
+  if (clips.has(d.key)) { const C = clips.get(d.key); if (d.dense) clipDense(C, d.dense); return { ctx: C.ctx, built: C.built, end: C.end }; }
+  // (its characters' and stage's files in MEMFS: the page's own match fetched only its own)
+  const rep = await ctxRepGet(M, new Uint8Array(d.rep));
+  if (clips.has(d.key)) return clipOpen(d);   // (opened while the files came)
+  if (session !== s) throw new Error('the engine changed match');
+  const id = M._viewer_ctx_new(CTX_ARENA_MB);
+  if (id < 0) throw new Error('no room for another replay');
+  const C = { key: d.key, ctx: id, M, frame: 0, drawn: -1, at: null, kfs: new Set(), built: 0, end: null, gen: 0, dense: [], sfx: new Map(), t0: performance.now() };
+  let ok = false;
+  clipIn(C, () => {
+    M._viewer_tiled(1);
+    M._viewer_stage_anim(1);
+    if (!M._viewer_boot()) return;
+    M.FS.writeFile('/game/replay.rep', rep);
+    ok = !!M._viewer_load();
+    if (!ok) return;
+    // (a live game's tape: played with its live forcing, as the live session showed it; engine_core.js start)
+    const lt = d.lt && d.lt.length ? new Uint8Array(d.lt) : null;
+    if (lt && !M.ccall('viewer_lt_set', 'number', ['array', 'number'], [lt, lt.length])) { ok = false; return; }
+    if (!lt) M.ccall('viewer_lt_clear', null, [], []);
+    M._viewer_hud(d.hud === 0 ? 0 : 1);
+    M._viewer_play(0);
+    C.frame = M._viewer_frame(); C.built = C.frame;
+    clipKf(C, C.frame);
+  });
+  if (s.rep) M.FS.writeFile('/game/replay.rep', s.rep);   // (the session's own again)
+  if (!ok) { M._viewer_ctx_delete(id); throw new Error('replay did not load'); }
+  clips.set(d.key, C);
+  if (d.dense) clipDense(C, d.dense);
+  clipBuild(C);
+  return { ctx: id, built: C.built, end: C.end };
+}
+// the clips' ranges [[a, b], ...] of this replay: every frame in them a keyframe (the ones already built taken now,
+// from the nearest earlier keyframe, in slices)
+function clipDense(C, ranges) {
+  C.dense = ranges.map(([a, b]) => [a | 0, b | 0]);
+  clipBuild(C);
+}
+// (a context left dirty by drawn frames (C.dirty: no keyframe's state) is put back on its keyframe at its frame once its
+// requests stop for CLIP_CLEAN_MS: the restore that hashes its memory (~10 ms) is paid while idle, and the next seek
+// restores only the pages that differ (~2 ms))
+const CLIP_CLEAN_MS = 40, CLIP_NOCLEAN = Q.get('clipNoClean') === '1';
+function clipCleanLater(C) {
+  if (CLIP_NOCLEAN) return;
+  clearTimeout(C.cleanT);
+  C.cleanT = setTimeout(() => {
+    if (clips.get(C.key) !== C || !C.dirty) return;
+    if (performance.now() - (C.lastReq || 0) < CLIP_CLEAN_MS) { clipCleanLater(C); return; }
+    let k = -Infinity;
+    for (const x of C.kfs) if (x <= C.frame && x > k) k = x;
+    if (k === -Infinity) return;
+    const t0 = performance.now();
+    clipIn(C, () => clipRestore(C, k));
+    C.cleanMs = (C.cleanMs || 0) + performance.now() - t0; C.nClean = (C.nClean || 0) + 1;
+  }, CLIP_CLEAN_MS);
+}
+// the sound calls of frames [a, b] of clip replay `key`: {built, ev: [[f, ...call]]} (frames past built: not simulated yet)
+function clipSfx(d) {
+  const C = clips.get(d.key);
+  if (!C) throw new Error('no such clip replay');
+  const ev = [];
+  for (let f = d.a | 0; f <= Math.min(d.b | 0, C.built); f++) { const e = C.sfx.get(f); if (e) for (const x of e) ev.push([f, ...x]); }
+  return { built: C.built, end: C.end, ev };
+}
+// frame f of clip `key`: its picture (VideoFrame), or null when the builder has not reached it yet
+function clipFrame(d) {
+  const C = clips.get(d.key);
+  if (!C) throw new Error('no such clip replay');
+  const M = C.M, f = d.f | 0, t0 = performance.now();
+  if (CLIP_DBG) console.log(`clipdbg begin ${C.key} ${f} (at ${C.frame}, built ${C.built})`);
+  if (f > C.built) return { f, ready: false, built: C.built, end: C.end };   // (the builder keeps going: it gets there)
+  C.lastReq = clipLastReq = t0;
+  let ok = false, restored = C.frame;
+  C.cur = { f, t: Math.round(t0), at: C.frame, gap: +(t0 - (C.lastReq0 || 0)).toFixed(0) }; C.lastReq0 = t0;
+  clipIn(C, () => { ok = clipGo(C, f, true); });
+  if (!ok) return { f, ready: false, built: C.built, end: C.end };
+  // (the picture: the context's back buffer read back, never drawn to the canvas: a clip frame presented on the visible
+  // canvas, two per request with the engine's own match put back, held the page's compositor up to a second)
+  if (CLIP_DD && C.kfs.has(f)) clipIn(C, () => {
+    const p = M._viewer_kf_diff_list(f); if (!p) return;
+    const n = M.HEAPU32 ? M.HEAPU32[p >> 2] : new Uint32Array(M.HEAP32.buffer, p, 1)[0], ids = new Uint32Array(M.HEAP32.buffer, p + 4, n);
+    const D = C.dd = C.dd || new Set(); let fresh = 0;
+    for (const x of ids) if (!D.has(x)) { D.add(x); fresh++; }
+    C.ddN = (C.ddN || 0) + 1; C.ddLast = n; C.ddFresh = (C.ddFresh || 0) + (fresh && C.ddN > 1 ? 1 : 0);
+    if (fresh && C.ddN > 1) console.log(`clipdd ${C.key.slice(2, 8)} f ${f} (from ${restored}): ${n} pages differ, ${fresh} new (set ${D.size}, draws ${C.ddN}): ${[...ids].filter(x => true).slice(0, 0)}`);
+  });
+  const t1 = performance.now();
+  let vf = null;
+  clipIn(C, () => {
+    const wh = M._viewer_bb_read_rgba(0), W = wh >>> 16, H = wh & 0xFFFF;
+    if (!W || !H) throw new Error('clip frames need the WebGL2 renderer');
+    // (in the process heap, never a match's arena: a restore would roll that back under it; kept for the next frame)
+    if (!clipPx || clipPx.n < W * H * 4) { if (clipPx) M._viewer_heap_free(clipPx.p); clipPx = { p: M._viewer_heap_malloc(W * H * 4), n: W * H * 4 }; }
+    M._viewer_bb_read_rgba(clipPx.p);
+    const px = new Uint8Array(W * H * 4);
+    px.set(new Uint8Array(M.HEAP32.buffer, clipPx.p, W * H * 4));
+    vf = new VideoFrame(px, { format: 'RGBX', codedWidth: W, codedHeight: H, timestamp: 0, transfer: [px.buffer] });
+  });
+  const t2 = performance.now(), t3 = t2, t4 = t2;
+  C.cur.go = +(t1 - t0).toFixed(1); C.cur.rb = +(t2 - t1).toFixed(1);
+  (C.reqLog = C.reqLog || []).push(C.cur); if (C.reqLog.length > 6000) C.reqLog.shift(); C.cur = null;
+  clipCleanLater(C);
+  if (CLIP_DBG) console.log(`clipdbg end ${C.key} ${f}: ${[t1 - t0, t2 - t1, t3 - t2, t4 - t3].map(v => v.toFixed(1))}`);
+  return { f, ready: true, vf, ms: t4 - t0, parts: [t1 - t0, t2 - t1, t3 - t2, t4 - t3], from: restored, built: C.built, end: C.end, nDelta: C.nDelta | 0, nLive: C.nLive | 0, nFull: C.nFull | 0 };
+}
+// the context put at frame f, drawn, ahead of its first request (the editor: the next clip's in point a moment before
+// the cut, so the cut itself costs one present)
+function clipPrep(d) {
+  const C = clips.get(d.key);
+  if (!C || (d.f | 0) > C.built) return { ok: false };
+  const t0 = performance.now();
+  let ok = false;
+  clipIn(C, () => { ok = clipGo(C, d.f | 0, true); });
+  C.lastReq = clipLastReq = performance.now();
+  return { ok, ms: performance.now() - t0 };
+}
+function clipClose(key) {
+  const C = clips.get(key);
+  if (!C) return;
+  clips.delete(key);
+  clearTimeout(C.cleanT);
+  for (const keys of (C.tex || new Map()).values()) clipTexRef(C.M, keys, -1);
+  C.tex = null;
+  C.M._viewer_ctx_delete(C.ctx);
 }
 
 // ---- the engine worker's messages (engine_head.js) ----
@@ -3367,7 +3675,7 @@ function swWatch(M) {
   const n = new Set();
   for (const k in man.jill) { if (man.jill[k].n) n.add(man.jill[k].n); const st = man.jillStock && man.jillStock[k]; if (st && st.n) n.add(st.n); }
   const l = [...n], ptr = M._malloc(4 * l.length || 4);
-  M.HEAP32.set(l, ptr >> 2); M._viewer_filetex_watch(ptr, l.length); M._free(ptr);
+  M.kdMark(ptr, 4 * l.length); M.HEAP32.set(l, ptr >> 2); M._viewer_filetex_watch(ptr, l.length); M._free(ptr);
 }
 function swNote(p, old, nu) {
   const e = swFiles.get(p) || { hashes: new Set() };
@@ -3382,7 +3690,7 @@ function swApply(M) {
     let ptr = 0;
     for (const h of e.hashes) {
       if (h === e.th) continue;
-      if (!ptr) { ptr = M._malloc(e.target.length); M.HEAPU8.set(e.target, ptr); }
+      if (!ptr) { ptr = M._malloc(e.target.length); M.kdMark(ptr, e.target.length); M.HEAPU8.set(e.target, ptr); }
       M._viewer_retex(h, ptr, e.target.length);
     }
     if (ptr) M._free(ptr);
@@ -3535,7 +3843,7 @@ const engOvHooks = {
       x.textAlign = 'center'; x.textBaseline = 'middle';
       x.fillText(g.g, box / 2, box / 2);
     }
-    M.HEAPU8.set(x.getImageData(0, 0, box, box).data, ptr);
+    M.kdMark(ptr, box * box * 4); M.HEAPU8.set(x.getImageData(0, 0, box, box).data, ptr);
     return 1;
   },
   mbaaOvRunW(id, px, f) {
@@ -3555,11 +3863,12 @@ const engOvHooks = {
     x.fillStyle = '#fff';
     x.fillText(r.t, x0, y0);
     const d = x.getImageData(0, 0, W, H).data, h = M.HEAPU8;
+    M.kdMark(ptr, W * H);
     for (let i = 0, j = 3; i < W * H; i++, j += 4) h[ptr + i] = d[j];
     return 1;
   },
 };
-function engOvInstall(M) { if (M && M.mbaaOvEmoji !== engOvHooks.mbaaOvEmoji) Object.assign(M, engOvHooks); }
+function engOvInstall(M) { if (M && M.mbaaOvEmoji !== engOvHooks.mbaaOvEmoji) Object.assign(M, engOvHooks); if (M && engOv.origin) M.__pageOrigin = engOv.origin; }
 // (memory the page staged: its pretend pointers to this module's)
 const engMem = new Map();
 async function engFont(name, bytes, desc) {
@@ -3567,7 +3876,7 @@ async function engFont(name, bytes, desc) {
 }
 // commands run one after another (a comment's calls after the play that made its session); the file / movie / setting
 // hand-offs an awaited command waits for run at once
-const ENG_NOW = new Set(['init', 'vis', 'offscreen', 'loseGl', 'files', 'movie', 'peek', 'fb', 'radio', 'extSeq', 'ext', 'extOff', 'ui', 'ovColors', 'perf', 'rsSub', 'liveFirst', 'liveSnap', 'page', 'liveFollow', 'rec', 'lab', 'tl']);
+const ENG_NOW = new Set(['init', 'vis', 'offscreen', 'loseGl', 'files', 'movie', 'peek', 'fb', 'radio', 'extSeq', 'ext', 'extOff', 'ui', 'ovColors', 'perf', 'rsSub', 'liveFirst', 'liveSnap', 'page', 'liveFollow', 'rec', 'lab', 'tl', 'clip']);
 let engQ = Promise.resolve();
 let engCur = '', engHb = 0;  // (the queued command running now: in the state, for a queue that stopped)
 // (a command that fails is reported and the queue goes on: a rejected link skipped every command after it for good)
@@ -3758,13 +4067,14 @@ const engCmd = async e => {
       if (d.f === '_viewer_represent') engRepresent = 4;
       else if (M && M[d.f]) { M[d.f](...d.a.map(x => (engMem.has(x) ? engMem.get(x).p : x))); }
     } else if (d.cmd === 'mem') {
-      const M = session.M, p = M._viewer_heap_malloc(d.b.length); M.HEAPU8.set(d.b, p); engMem.set(d.p, { p, b: d.b });  // (process heap: kept across restores)
+      const M = session.M, p = M._viewer_heap_malloc(d.b.length); M.kdMark(p, d.b.length); M.HEAPU8.set(d.b, p); engMem.set(d.p, { p, b: d.b });  // (process heap: kept across restores)
     } else if (d.cmd === 'memFree') {
       const m = engMem.get(d.p); engMem.delete(d.p); if (m && session) session.M._viewer_heap_free(m.p);
     } else if (d.cmd === 'ovbuf') {
-      const M = session.M, p = M._viewer_ov_buf(d.cps.length); M.HEAP32.set(new Int32Array(d.cps.buffer, d.cps.byteOffset, d.cps.length), p >> 2);
+      const M = session.M, p = M._viewer_ov_buf(d.cps.length); M.kdMark(p, 4 * d.cps.length); M.HEAP32.set(new Int32Array(d.cps.buffer, d.cps.byteOffset, d.cps.length), p >> 2);
     } else if (d.cmd === 'ovLists') {
       if (d.reset) { engOv.emo = [null]; engOv.run = [null]; engOv.runW.clear(); engOv.sans = d.sans; engOv.serif = d.serif; }
+      if (d.origin) engOv.origin = d.origin;   // (the page's time origin: the comments' wall clock is the page's, overlay_gl.cpp ov_wall)
       if (d.flags && d.flags.src && !engOv.fonts++) engFont('MbaaFlags', d.flags.src, d.flags.range ? { unicodeRange: d.flags.range } : {});
       for (const x of d.emo || []) {
         if (x.pix) x.pix = x.pix.map(b => {  // (frame mode: pixels, see viewer.js __ovLists)
@@ -3777,7 +4087,7 @@ const engCmd = async e => {
       for (const x of d.run || []) engOv.run[x.id] = x;
       if (session && session.M) engOvInstall(session.M);
     } else if (d.cmd === 'ovMeasure') {  // (tests: the renderer's own measure of code points, against the page's)
-      const M = session.M, p = M._viewer_ov_buf(d.cps.length); M.HEAP32.set(Int32Array.from(d.cps), p >> 2);
+      const M = session.M, p = M._viewer_ov_buf(d.cps.length); M.kdMark(p, 4 * d.cps.length); M.HEAP32.set(Int32Array.from(d.cps), p >> 2);
       engPost({ ev: 'ret', id: d.id, w: M._viewer_ov_measure_face(d.cps.length, d.px, d.f), has: d.cps.map(c => M._viewer_ov_has(c)) });
     } else if (d.cmd === 'ovProbe') {  // (tests: the renderer's overlay stats, and comment ids' first quads)
       const M = session.M, st = Array.from(new Float64Array(M.HEAPU8.buffer, M._viewer_ov_stats(), 22));
@@ -3809,6 +4119,21 @@ const engCmd = async e => {
       const f = M._viewer_frame(), st = engStateNow();
       const vf = f !== k0 ? new VideoFrame(engOff, { timestamp: 0, alpha: 'discard' }) : null;
       engPost({ ev: 'ret', id: d.id, frame: f, vf, boxes: st.boxes, inputs: st.inputs, sfx: session.sfxQueue.splice(0) }, vf ? [vf] : []);
+    } else if (d.cmd === 'clip') {  // (Movie Maker game clips: engine_core.js clipOpen / clipFrame / clipDense / clipClose)
+      if (d.op === 'open') {   // (async: the replay's files fetched first)
+        clipOpen(d).then(r => engPost({ ev: 'ret', id: d.id, ...r }), e => engPost({ ev: 'ret', id: d.id, err: String(e && e.message || e) }));
+        return;
+      }
+      try {
+        let r = {};
+        if (d.op === 'frame') r = clipFrame(d);
+        else if (d.op === 'dense') { const C = clips.get(d.key); if (C) clipDense(C, d.dense || []); }
+        else if (d.op === 'prep') r = clipPrep(d);
+        else if (d.op === 'close') clipClose(d.key);
+        else if (d.op === 'sfx') r = clipSfx(d);
+        else if (d.op === 'info') r = { clips: [...clips.values()].map(C => ({ key: C.key, built: C.built, end: C.end, kfs: C.kfs.size, nDelta: C.nDelta | 0, nLive: C.nLive | 0, nFull: C.nFull | 0, nClean: C.nClean | 0, cleanMs: +((C.cleanMs || 0) / (C.nClean || 1)).toFixed(1), kfAvg: +((C.kfMs || 0) / (C.kfN || 1)).toFixed(2), kfMax: +(C.kfMax || 0).toFixed(1), kfMB: +(clipIn(C, () => C.M._viewer_kf_bytes()) / 1048576).toFixed(1), kfTabMB: +(clipIn(C, () => C.M._viewer_kf_table_bytes()) / 1048576).toFixed(1), inUseMB: +(clipIn(C, () => C.M._viewer_arena_in_use()) / 1048576).toFixed(1), reqs: d.reqs ? (C.reqLog || []).slice(-d.reqs) : undefined, dd: C.dd ? { n: C.ddN, size: C.dd.size, last: C.ddLast, fresh: C.ddFresh, ids: [...C.dd].sort((a, b) => a - b) } : undefined })), heapMB: session && session.M ? Math.round(session.M.HEAP32.buffer.byteLength / 1048576) : 0, procInUseMB: session && session.M ? Math.round(session.M._viewer_mem_in_use() / 1048576) : 0, mainKfMB: session && session.M ? Math.round(session.M._viewer_kf_bytes() / 1048576) : 0, mainArenaMB: session && session.M && session.M._viewer_arena_in_use ? Math.round(session.M._viewer_arena_in_use() / 1048576) : 0 };
+        engPost({ ev: 'ret', id: d.id, ...r }, r.vf ? [r.vf] : []);
+      } catch (e) { engPost({ ev: 'ret', id: d.id, err: String(e && e.message || e) }); }
     } else if (d.cmd === 'movieStep') {
       // (the Movie Maker's ingest / export, web/shell/movie.js: n frames stepped, the last one's picture as a VideoFrame
       // (pic 0: none), and per stepped frame its frame bar sample (FB_N words, framebar.cpp) and the box list's origin

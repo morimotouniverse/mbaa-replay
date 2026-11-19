@@ -3649,7 +3649,7 @@ async function ctxTilesTake(items, turn = 0) {
     if (cv) { cv.width = W; cv.height = H; }
     const tiles = [0, ...ids].slice(0, 4).map((id, i) => [id, (i % 2) * W / 2, (i >> 1) * H / 2, (i % 2 + 1) * W / 2, ((i >> 1) + 1) * H / 2]).flat();
     const tp = M._malloc(tiles.length * 4);
-    M.HEAP32.set(tiles, tp >> 2);
+    M.kdMark(tp, tiles.length * 4); M.HEAP32.set(tiles, tp >> 2);
     M._viewer_tiles_present(tp, tiles.length / 5);
     M._free(tp);
     // (the composite read back: WebGPU copies the canvas texture (same task); WebGL2 reads the canvas, rows bottom-up)
@@ -3734,7 +3734,7 @@ function gridApply(M) {
   const ids = [0, ...gridIds, ...(typeof tileIds === 'function' ? tileIds() : [])].slice(0, 16);
   if (ids.length < 2) { M._viewer_grid_set(0, 0, 1); return; }
   const p = M._malloc(ids.length * 4);
-  M.HEAP32.set(ids, p >> 2);
+  M.kdMark(p, ids.length * 4); M.HEAP32.set(ids, p >> 2);
   M._viewer_grid_set(p, ids.length, gridCols || Math.ceil(Math.sqrt(ids.length)));
   M._free(p);
 }
@@ -7273,6 +7273,17 @@ if (MOVIE_HOST) {
       return { rep: T.rep.slice(), lt: T.lt ? T.lt.slice() : null, rec: T.rec, end: T.end, snap: !!T.snap,
                fights: fights || ((await window.__mbaaMovie.fights()) || {}).fights || [] };
     },
+    // ---- game clips on the engine (engine_core.js clipOpen ...): every replay on the editor's timeline a warm match
+    // context, any frame of it as a VideoFrame. clipOpen(key, bytes, {hud, dense: [[a, b]...]}) -> {ctx, built, end};
+    // clipFrame(key, f) -> {ready, vf, ms, built, end} (ready false: not simulated that far yet); clipDense(key, ranges);
+    // clipClose(key); clipInfo() -> {clips: [{key, built, end, kfs}]}
+    clipOpen: (key, bytes, o = {}) => E().cmd('clip', { op: 'open', key, rep: new Uint8Array(bytes).slice(), hud: o.hud === 0 || o.hud === false ? 0 : 1, lt: o.lt && o.lt.length ? new Uint8Array(o.lt).slice() : null, dense: o.dense || null }),
+    clipFrame: (key, f) => E().cmd('clip', { op: 'frame', key, f }),
+    clipDense: (key, dense) => E().cmd('clip', { op: 'dense', key, dense }),
+    clipPrep: (key, f) => E().cmd('clip', { op: 'prep', key, f }),
+    clipClose: key => E().cmd('clip', { op: 'close', key }),
+    clipSfx: (key, a, b) => E().cmd('clip', { op: 'sfx', key, a, b }),   // -> {built, end, ev: [[f, 'play', ch, path, vol, pan] | [f, 'param', ch, vol, pan] | [f, 'stop', ch]]}
+    clipInfo: (reqs = 0) => E().cmd('clip', { op: 'info', reqs }),
     repBattleAt: REP_BATTLE_AT,
     paused: () => ui.paused,
     pause: p => setPaused(!!p),
@@ -7296,10 +7307,13 @@ if (MOVIE_HOST) {
       try { paintOverlay(g, W, H, W / 960); } finally { ui.boxes = keep.b; ui.inputs = keep.i; }
     },
     // a sound file's bytes as the page plays it (the announcer's line from the chosen set)
-    soundBytes(path) {
+    // (a clip replay's sounds are in the engine's files, not the page's: fetched from the bundle then)
+    async soundBytes(path) {
       const al = annLine(path);
       if (al && al.bytes) return { key: al.key, bytes: al.bytes.slice() };
-      try { const s = session; return { key: path, bytes: (s.remote ? s.SM : s.M).FS.readFile(path).slice() }; } catch (e) { return null; }
+      try { const s = session; return { key: path, bytes: (s.remote ? s.SM : s.M).FS.readFile(path).slice() }; } catch (e) { /* not here */ }
+      const k = String(path).replace(/\\/g, '/').replace(/^\/game\//, '').replace(/^(\.\/)+/, '').toLowerCase();
+      try { if (!cache.has(k)) await fetchAll(man, [k], '', true); const b = cache.get(k); return b ? { key: path, bytes: b.slice() } : null; } catch (e) { return null; }
     },
     // a game file from the bundle (a BGM track for the song), fetched if not in yet
     async gameFile(p) { if (!cache.has(p)) await fetchAll(man, [p], '', true); return cache.get(p) ? cache.get(p).slice() : null; },
@@ -7435,7 +7449,7 @@ function labAttach() {
   if (labCfg) {
     if (labOn !== m) { m.__labDefer = m.mbaaRadioDefer; m.mbaaRadioDefer = 0; }
     const w = labCfg.words;
-    m.__labSync = ptr => { if (w) m.HEAP32.set(w, ptr >> 2); };
+    m.__labSync = ptr => { if (w) { m.kdMark(ptr, w.length * 4); m.HEAP32.set(w, ptr >> 2); } };
     m.__labVoid = labCfg.void ? 1 : 0; labOn = m;
   } else if (labOn === m) { delete m.__labSync; m.__labVoid = 0; m.mbaaRadioDefer = m.__labDefer; delete m.__labDefer; labOn = null; }
 }
@@ -7812,7 +7826,7 @@ window.__mbaaLab = { set: c => labApply(c), info: () => labInfo() };
           const c = new OffscreenCanvas(b.width, b.height), g = c.getContext('2d'); g.drawImage(b, 0, 0);
           return { width: b.width, height: b.height, px: g.getImageData(0, 0, b.width, b.height).data };
         });
-        E.w.postMessage({ cmd: 'ovLists', ...m });
+        E.w.postMessage({ cmd: 'ovLists', ...m, origin: performance.timeOrigin });  // (origin: the wall clock of its comments is this page's)
       },
       _viewer_box_count: () => (E.st && E.st.boxes ? E.st.boxes.length / 5 : 0), _viewer_boxes: () => BOXES,
       _viewer_input_count: () => (E.st && E.st.inputs ? E.st.inputs.length / 5 : 0), _viewer_inputs: () => INPUTS,
