@@ -1870,6 +1870,13 @@
 "w": 48,
 "h": 48,
 "animated": false
+},
+{
+"name": "agafat",
+"file": "agafat.webp",
+"w": 48,
+"h": 48,
+"animated": false
 }
 ]
 }
